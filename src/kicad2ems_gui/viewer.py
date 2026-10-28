@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QPixmap, QIcon
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QToolButton, QButtonGroup, QStackedWidget,
                                QSplitter, QTreeWidget, QTreeWidgetItem, QCheckBox, QLabel, QHeaderView, QSizePolicy)
-from kicad2ems import overlay as ov
+from kicad2ems.api.frontend import overlay as ov
 from .fieldtab import FieldsTab
 from .panels import ImagePanel
 from .planview import PlanView

@@ -74,7 +74,7 @@ def _em_rounds(base):
 def load_design(base):
     """What dfsynth wrote under <base>, or None: {'design': the design JSON, 'model': (f, S) of the line model,
     'em': [(round, {solver: (f, S)})], 'pcb', 'toml'}."""
-    from kicad2ems.touchstone import read_touchstone
+    from kicad2ems.api.frontend import read_touchstone
     path = base + '_design.json'
     if not os.path.exists(path):
         return None
@@ -132,7 +132,7 @@ COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2']
 def validation_solvers():
     """The Filter page's solver choices: each full-wave solver installed (kicad2ems's registry), then each with
     the line model."""
-    from kicad2ems.solvers import registry
+    from kicad2ems.api.frontend import registry
     full = [n for n, sv in registry().items() if sv.consumes == 'board']
     return full + [f"{n},lines" for n in full]
 

@@ -6,8 +6,8 @@ write_toml) is kicad2ems.runs, which the KiCad plugin uses too.
 """
 import os
 
-from kicad2ems import runs
-from kicad2ems.runs import Run, EventTail, stop_runs, find_results, toml_value   # noqa: F401
+from kicad2ems.api.frontend import write_toml as _write_toml
+from kicad2ems.api.frontend import Run, EventTail, stop_runs, find_results, toml_value # noqa: F401
 
 # the core option groups (options.Option.group) as the form's group boxes; a solver's under their own name, its
 # section ('FDTD/Mesh': the Mesh sub-section of the FDTD section)
@@ -20,7 +20,7 @@ def solver_sections(reg=None):
     """{section: [solver names]}, in registry order: the sections of the solvers' settings, each greyed while none
     of its solvers is ticked. A section several solvers list (the FDTD one: openEMS's and gfdtd's mesh and run
     settings) has them all."""
-    from kicad2ems.solvers import registry
+    from kicad2ems.api.frontend import registry
     out = {}
     for name, sv in (registry() if reg is None else reg).items():
         for o in sv.options:
@@ -33,7 +33,7 @@ def solver_sections(reg=None):
 def section_title(top, names):
     """A section's heading: its name, and the solvers sharing it unless it is one of theirs ('FDTD (openEMS,
     gfdtd)')."""
-    from kicad2ems.solvers import registry
+    from kicad2ems.api.frontend import registry
     if len(names) < 2 or top in names:
         return top
     return f"{top} ({', '.join(registry()[n].label.split(' (')[0] for n in names)})"
@@ -63,8 +63,8 @@ def make_fields():
     """The settings the GUI edits, in form order: (key, label, kind, group). Made from the options that have a GUI
     label (config.CORE, then each solver's) and a tick box per solver (key solver:<name>) heading the Solvers
     group; Board and Band first, Output last."""
-    from kicad2ems.config import all_options
-    from kicad2ems.solvers import registry, AUTO
+    from kicad2ems.api.frontend import all_options
+    from kicad2ems.api.frontend import registry, AUTO
     rows = [(o.key, o.gui, _kind(o), GUI_GROUPS.get(o.group, o.group)) for name, o in all_options() if o.gui]
     rows = [(TICK + AUTO, 'auto: fastest full-wave + line model', 'bool', 'Solvers')] + \
            [(TICK + n, sv.label, 'bool', 'Solvers') for n, sv in registry().items()] + rows
@@ -83,8 +83,8 @@ MANAGED = {k for k, *_ in FIELDS if not k.startswith(TICK)} | {'solvers', 'mom',
 def solver_ticks(vals):
     """{solver:<name>: ticked} for a settings dict: the solvers its plan runs (openEMS by default; solvers, mom =
     true and fast name the others; 'lines' as resolved here). solvers = [] ticks none."""
-    from kicad2ems.config import build_settings
-    from kicad2ems.solvers import registry, resolve_lines, LINES, AUTO
+    from kicad2ems.api.frontend import build_settings
+    from kicad2ems.api.frontend import registry, resolve_lines, LINES, AUTO
     if vals.get('solvers') == []:
         run = []
     else:
@@ -113,7 +113,7 @@ def solvers_from_form(vals):
 
 def write_toml(path, values):
     """A flat TOML file of the non-empty settings (kicad2ems.runs.write_toml), the solver tick boxes as solvers."""
-    runs.write_toml(path, solvers_from_form(values))
+    _write_toml(path, solvers_from_form(values))
 
 
 def _rel(path, base):
@@ -155,7 +155,7 @@ def save_config(path, values, template=None):
     is kept: comments, order and tables stay, each known key gets its new value in place (keeping a trailing
     comment), keys whose field was cleared are removed and new keys are added above the first table.
     Without a template, only the settings that differ from the defaults are written."""
-    from kicad2ems.config import Settings, PATH_KEYS
+    from kicad2ems.api.frontend import Settings, PATH_KEYS
     base = os.path.dirname(os.path.abspath(path))
     vals = {}
     for k, v in solvers_from_form(values).items():
@@ -242,7 +242,7 @@ def save_config(path, values, template=None):
 def _table_keys(name):
     """How save_config reads the keys of a TOML table: {} for one read like the top level ([openems]), {short
     name: setting} for a solver's [solver.<name>], None for another tool's."""
-    from kicad2ems.solvers import get
+    from kicad2ems.api.frontend import get_solver as get
     name = name.strip().strip('"')
     if name.lower() == 'openems':
         return {}
@@ -271,14 +271,14 @@ def _comment(text):
 
 def extra_values(path):
     """The settings of a TOML config that the GUI has no field for (kept and passed on to its runs)."""
-    from kicad2ems.config import read_toml
+    from kicad2ems.api.frontend import read_toml
     return {k: v for k, v in read_toml(path)[0].items() if k not in MANAGED and k not in ('events', 'preview')}
 
 
 def settings_values(path):
     """The GUI's fields from a TOML config (through the same rules as the command line). The solver tick
     boxes show the solvers the config runs (solver_ticks)."""
-    from kicad2ems.config import build_settings, read_toml
+    from kicad2ems.api.frontend import build_settings, read_toml
     s = build_settings({}, path)
     out = {}
     for key, *_ in FIELDS:

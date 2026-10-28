@@ -361,8 +361,8 @@ class VolumeTab(QWidget):
         if self.gl is None:
             return False
         import glob
-        from kicad2ems.fields.frames import find_dumps
-        from kicad2ems import meshes
+        from kicad2ems.api.frontend import find_dumps
+        from kicad2ems.api.frontend import meshes
         self.srcs = [s for s in find_dumps(out_dir) if v3.is_volume(s) or v3.is_plane(s)]
         boards = sorted(glob.glob(os.path.join(out_dir, '*_board.json')), key=os.path.getmtime)
         try:
@@ -652,7 +652,7 @@ class VolumeTab(QWidget):
                 self.items['vias'] = ln
         solver = self.mesh.currentData()
         if solver and solver in self.mesh_files:                    # a solver's mesh as lines over the board
-            from kicad2ems import meshes
+            from kicad2ems.api.frontend import meshes
             b = v3.board_box(g)
             seg = meshes.segments(self.mesh_files[solver], box=b, planes=sorted(set((g.get('cu_z') or {}).values())))
             if len(seg):
@@ -676,7 +676,7 @@ class VolumeTab(QWidget):
         tops; the selected one dark. All on screen: the height scale does not stretch them."""
         if not (self.lines and self.lines_on.isChecked()):
             return
-        from kicad2ems import overlay as ov
+        from kicad2ems.api.frontend import overlay as ov
         ref, half = ov.reference(self.lines), ov.span(self.lines)
         zs_all = [e['z0'] for e in self.lines['elements'] if e.get('z0') and e.get('kind') != 'coupling']
         lo, hi = (min(zs_all), max(zs_all)) if zs_all else (None, None)
@@ -885,7 +885,7 @@ class VolumeTab(QWidget):
         return imgs
 
     def save(self, path, fps=None, orbit=0.0):
-        from kicad2ems.fields.frames import write_frames
+        from kicad2ems.api.frontend import write_frames
         return write_frames(self.render_frames(orbit), path, fps or self.fps.value())
 
     def save_dialog(self, ext):

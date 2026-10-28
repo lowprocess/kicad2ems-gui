@@ -26,7 +26,7 @@ import pyqtgraph as pg
 import kicad2ems
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, Run, EventTail, stop_runs, settings_values,
                      extra_values, find_results, save_config, solvers_from_form, solver_ticks)
-from kicad2ems.fdtd.plugin import G_DUMP
+from kicad2ems.api.frontend import G_DUMP
 from .splot import SPlot, default_layout
 from .panels import Section, FlowLayout
 from .systempanel import SystemPanel
@@ -52,7 +52,7 @@ class SetupTab(QWidget):
     settings set), in a scroll area. Open / Save / Preview / Run are the window's toolbar."""
     def __init__(self, win):
         super().__init__()
-        from kicad2ems.config import Settings
+        from kicad2ems.api.frontend import Settings
         self.win, self.edits, self.extra = win, {}, {}
         self.path, self.dirty, self._loading, self.est = None, False, False, None
         self.defaults = Settings()
@@ -191,7 +191,7 @@ class SetupTab(QWidget):
     def _update_sections(self):
         """A solver's section (and the shared ones) greyed while none of its solvers is ticked: auto may run
         openEMS, mom25d and the line model."""
-        from kicad2ems.solvers import registry
+        from kicad2ems.api.frontend import registry
         ticked = {n for n, w in self.solver_boxes.items() if w.isChecked()}
         auto = self.edits.get(f"{TICK}auto", (None,))[0]
         if auto is not None and auto.isChecked():                   # the solvers auto may run, the line model's
@@ -367,7 +367,7 @@ class SetupTab(QWidget):
             path, _ = QFileDialog.getOpenFileName(self, 'Open a config', self._start_dir(), 'TOML (*.toml)')
         if not path:
             return False
-        from kicad2ems.config import build_settings
+        from kicad2ems.api.frontend import build_settings
         try:
             vals, extra = settings_values(path), extra_values(path)
             notes = build_settings({}, path).notes
@@ -1113,7 +1113,7 @@ class MainWindow(QMainWindow):
     def out_dir(self, vals=None):
         """The output folder: the form's, else 'out' next to the board (where a run writes), else in the working
         directory."""
-        from kicad2ems.config import default_out
+        from kicad2ems.api.frontend import default_out
         vals = self.setup.values() if vals is None else vals
         if vals.get('out'):
             return vals['out']

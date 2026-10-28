@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QPushButton, QLa
                                QSlider, QSpinBox, QFileDialog, QMessageBox, QProgressDialog, QApplication)
 import pyqtgraph as pg
 from .panels import FlowLayout
-from kicad2ems.fields import frames as F
+from kicad2ems.api.frontend import frames as F
 
 COMPONENTS = [('|F|', 'mag'), ('x', 'x'), ('y', 'y'), ('z', 'z')]
 

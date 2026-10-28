@@ -30,7 +30,7 @@ def fit_note(need, have):
 
 def _user_value(key):
     """The user's own site.toml setting of key, or '' (the field shows it, not setup.sh's)."""
-    from kicad2ems import sitecfg
+    from kicad2ems.api.frontend import sitecfg
     try:
         import tomllib
     except ImportError:
@@ -129,7 +129,7 @@ class SystemPanel(QWidget):
 
     def _save_programs(self):
         """The programs into the user's site.toml (sitecfg), then the solvers checked again."""
-        from kicad2ems import sitecfg
+        from kicad2ems.api.frontend import sitecfg
         changed = False
         for key, field in (('qucsator', self.qucsator), ('openems_venv', self.openems_venv)):
             path = field.text().strip()

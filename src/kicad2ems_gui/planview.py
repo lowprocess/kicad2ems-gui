@@ -11,7 +11,7 @@ from PySide6.QtGui import QPainterPath, QPen, QBrush, QColor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QCheckBox, QLabel, QPushButton,
                                QGraphicsPathItem, QToolTip, QSizePolicy)
 import pyqtgraph as pg
-from kicad2ems import overlay as ov
+from kicad2ems.api.frontend import overlay as ov
 from .panels import FlowLayout
 
 COPPER = QColor(214, 140, 64)
@@ -111,7 +111,7 @@ class PlanView(QWidget):
     def load(self, out_dir, lines=None):
         """A results folder's board (<name>_board.json), meshes and line model; False when there is no board."""
         import glob
-        from kicad2ems import meshes
+        from kicad2ems.api.frontend import meshes
         boards = sorted(glob.glob(os.path.join(out_dir, '*_board.json')), key=os.path.getmtime) if out_dir else []
         try:
             with open(boards[-1]) as fh:
@@ -123,7 +123,7 @@ class PlanView(QWidget):
     def set_board(self, board, lines=None, found_meshes=None, fit=True):
         """A board (Board.to_dict(), model mm) and its line model's drawing, without a results folder (the KiCad
         plugin's live board); False when there is no board."""
-        from kicad2ems import meshes
+        from kicad2ems.api.frontend import meshes
         from . import volume3d as v3
         self.board = board
         self.box = v3.board_box(v3.geometry_from_board(board)) if board else None

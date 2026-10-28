@@ -5,7 +5,7 @@ them (match, gain, efficiency, pattern cuts); the Viewer draws the pattern in 3D
 """
 import glob, json, os
 import numpy as np
-from kicad2ems.fields.antenna import read_sphere
+from kicad2ems.api.frontend import read_sphere
 
 
 def antenna_files(out_dir):
@@ -35,9 +35,9 @@ def find_antenna(out_dir, path=None):
 
 def load_array(out_dir, res):
     """Each port's far field of an antenna result (mom25d's <name>_mom25d_array.npz: phased.load), or None."""
-    from kicad2ems.phased import load
+    from kicad2ems.api.frontend import phased
     f = os.path.join(out_dir, (res or {}).get('array_file') or '')
-    return load(f) if (res or {}).get('array_file') and os.path.isfile(f) else None
+    return phased.load(f) if (res or {}).get('array_file') and os.path.isfile(f) else None
 
 
 def load_sphere(path):
