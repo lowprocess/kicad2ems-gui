@@ -6,6 +6,7 @@ filter synthesis (the Filter page).
 
     app          MainWindow: the panels, the run and its events
     runner       the settings form without Qt: fields, sections, solver tick boxes, configs read and written
+    api          the public surface (PlanView, for the KiCad plugin)
     planview     the board seen from above (also the KiCad plugin's map); viewer, volumetab: plan, cut and 3D views
     volume3d     the 3D view's arrays (no Qt): copper, parts, field volumes, far-field surfaces
     splot, traces, fieldtab, antennatab, steering, filtertab, systempanel, statusbar, meters, panels, runfolders

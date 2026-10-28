@@ -758,16 +758,22 @@ def test_trace_colours_and_styles(tmp_path, monkeypatch):
 
 def test_filter_command_line():
     """The Filter page's settings as dfsynth's command line: empty fields left to dfsynth, flags only when set,
-    the validation only when asked for."""
+    the validation only when asked for; the flags and kinds from dfsynth's description (--describe --json), a value
+    of an option this dfsynth lacks left out."""
     from kicad2ems_gui.filtertab import filter_argv
+    desc = dict(options=[dict(key=k, flag='--' + k.replace('_', '-'), kind=kind) for k, kind in (
+        ('type', 'str'), ('topology', 'str'), ('f0', 'str'), ('bw', 'str'), ('order', 'int'), ('ripple', 'float'),
+        ('h', 'float'), ('allow_fab_violations', 'flag'), ('no_calibrate', 'flag'), ('out', 'str'),
+        ('validate', 'str'), ('em_tune', 'int'), ('k2e_args', 'str'))])
     vals = dict(type='bandpass', topology='interdigital', f0='5G', bw='500M', order=None, ripple=None, h=0.8,
                 allow_fab_violations=True, no_calibrate=False, out='/x/idg', validate='gfdtd', em_tune=3,
                 k2e_args='--fine 0.03')
-    a = filter_argv(vals)
+    a = filter_argv(dict(vals, future_option=1), desc=desc)
     assert a[:3] == ['-u', '-m', 'dfsynth'] and a[a.index('--f0') + 1] == '5G' and a[a.index('--h') + 1] == '0.8'
     assert '--allow-fab-violations' in a and '--no-calibrate' not in a and '--order' not in a
+    assert '--future-option' not in a
     assert a[a.index('--em-tune') + 1] == '3' and a[a.index('--k2e-args') + 1] == '--fine 0.03'
-    b = filter_argv(vals, validate=False)
+    b = filter_argv(vals, validate=False, desc=desc)
     assert '--validate' not in b and '--em-tune' not in b and '--k2e-args' not in b
 
 
@@ -778,8 +784,7 @@ def test_filter_page(tmp_path):
     pytest.importorskip('pyqtgraph')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     from kicad2ems_gui import filtertab as ft
-    ds = ft.dfsynth_module()
-    if ds is None:
+    if ft.describe() is None:
         pytest.skip('no dfsynth')
     from dfsynth.cli import main as dfsynth
     base = str(tmp_path / 'lpf')
@@ -793,7 +798,7 @@ def test_filter_page(tmp_path):
     from kicad2ems_gui.app import MainWindow
     app = QApplication.instance() or QApplication([])
     w = MainWindow()
-    assert 'Filter' in w.docks and w.filter.ds is not None
+    assert 'Filter' in w.docks and w.filter.desc is not None
     page = w.filter
     page.set_values(dict(type='lowpass', topology='radial', f0='2G', out=base))
     v = page.values()
@@ -848,7 +853,7 @@ def test_new_page_docks_into_an_older_layout(monkeypatch, tmp_path):
     assert w.docks['Filter'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
     w.acts['Filter'].trigger()
     assert w.docks['Filter'].isVisibleTo(w)
-    if w.filter.ds is not None:
+    if w.filter.desc is not None:
         assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
     w.setup.dirty = False
     w.close()
@@ -1062,5 +1067,50 @@ def test_run_notes_on_the_results_page(tmp_path, monkeypatch):
     (tmp_path / 'b_run.json').write_text(json.dumps(dict(warnings=[], model=dict(notes=[]))))
     r.show(files)
     assert not r.notes_btn.isVisibleTo(r)
+    w.setup.dirty = False
+    w.close()
+
+
+def test_filter_page_from_the_description(monkeypatch):
+    """The Filter page builds from dfsynth's description alone, without importing dfsynth: its types, topologies
+    and presets; an option it has no place for appears under More options; one this dfsynth lacks is disabled."""
+    pytest.importorskip('PySide6')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    import sys
+    from kicad2ems_gui import application, filtertab as ft
+    desc = dict(format=1, version='test', kinds={'lowpass': ['stepped', 'radial'], 'bandpass': ['coupled']},
+                presets={'X-1': dict(h=1.0, er=3.0, tand=0.001, material='X')},
+                options=[dict(key='type', flag='--type', kind='str', default=None, choices=None, help='', group=''),
+                         dict(key='f0', flag='--f0', kind='str', default=None, choices=None, help='', group=''),
+                         dict(key='h', flag='--h', kind='float', default=None, choices=None, help='height', group=''),
+                         dict(key='smooth', flag='--smooth', kind='flag', default=False, choices=None,
+                              help='round the corners', group='')])
+    monkeypatch.setattr(ft, 'describe', lambda python=None: desc)
+    monkeypatch.setitem(sys.modules, 'dfsynth', None)                   # importing it would fail
+    application()
+    page = ft.FilterTab()
+    assert [page.w['type'].itemText(i) for i in range(page.w['type'].count())] == ['lowpass', 'bandpass']
+    assert page.w['substrate'].currentText() == 'X-1' and '1 (preset)' in page.w['h'].placeholderText()
+    assert 'smooth' in page.w and not page.w['ripple'].isEnabled()      # More options; ripple: not in this dfsynth
+    page.set_values(dict(type='lowpass', f0='2G', smooth=True))
+    assert ft.filter_argv(page.values(), desc=desc) == ['-u', '-m', 'dfsynth', '--type', 'lowpass', '--f0', '2G',
+                                                       '--smooth']
+
+
+def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
+    """File > Examples lists kicad2ems's installed examples; one opens from the user's folder, its board made."""
+    pytest.importorskip('PySide6')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
+    from PySide6.QtWidgets import QApplication
+    from kicad2ems_gui.app import MainWindow
+    QApplication.instance() or QApplication([])
+    w = MainWindow()
+    names = [a.text() for a in w.examples_menu.actions()]
+    assert 'rf_gcpw' in names and 'sma_launch' in names
+    w.setup.dirty = False
+    w.open_example('rf_gcpw')
+    folder = tmp_path / 'kicad2ems' / 'examples'
+    assert w.setup.path == str(folder / 'rf_gcpw.toml') and (folder / 'rf_gcpw.kicad_pcb').exists()
     w.setup.dirty = False
     w.close()

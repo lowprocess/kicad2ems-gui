@@ -4,8 +4,10 @@ response, validate it on the solvers and tune it from them, and open the board i
 
 dfsynth runs as a separate process, as kicad2ems runs do: the page follows its output, and reads what it wrote when
 it ends (<out>_design.json: the spec, the dimensions, the layout; <out>_model.s2p; each validation round's
-S-parameters in <out>_em/, <out>_em_tune1/, ...).
+S-parameters in <out>_em/, <out>_em_tune1/, ...). The page never imports dfsynth: its types and topologies, its
+substrate presets and its options come from `dfsynth --describe --json`, so the command line is its only link.
 
+    describe()                 dfsynth's description (types, presets, options), or None when it cannot run here
     filter_argv(vals)          dfsynth's command line for the page's settings
     load_design(base)          what a dfsynth run wrote under <base>: design, model and EM responses
     line_level(line)           'error', 'warn' or None: how the page's log shows a line of dfsynth's output
@@ -16,34 +18,43 @@ import numpy as np
 DFSYNTH_PIP = "python -m pip install 'kicad2ems[filter]' (or 'dfsynth @ git+https://github.com/lowprocess/dfsynth')"
 
 
-def dfsynth_module():
-    """The dfsynth package (for its topologies and substrate presets), or None when it is not installed."""
-    try:
-        import dfsynth.topologies, dfsynth.microstrip, dfsynth.prototype
-        return dfsynth
-    except ImportError:
-        return None
+_DESCRIPTIONS = {}
+DESCRIBE_FORMAT = 1                 # the --describe --json format this page reads
 
 
-# (key, dfsynth option, kind): kind 'str' / 'float' / 'int' (empty: dfsynth's default) or 'flag'
-OPTIONS = [
-    ('type', '--type', 'str'), ('topology', '--topology', 'str'), ('f0', '--f0', 'str'), ('bw', '--bw', 'str'),
-    ('response', '--response', 'str'), ('order', '--order', 'int'), ('atten', '--atten', 'str'),
-    ('ripple', '--ripple', 'float'), ('z0', '--z0', 'float'), ('zhigh', '--zhigh', 'float'),
-    ('zlow', '--zlow', 'float'), ('zstub', '--zstub', 'float'), ('stub_angle', '--stub-angle', 'float'),
-    ('hairpin_gap', '--hairpin-gap', 'float'), ('feed', '--feed', 'float'), ('substrate', '--substrate', 'str'), ('h', '--h', 'float'), ('er', '--er', 'float'),
-    ('tand', '--tand', 'float'), ('copper', '--copper', 'float'), ('min_width', '--min-width', 'float'),
-    ('min_gap', '--min-gap', 'float'), ('allow_fab_violations', '--allow-fab-violations', 'flag'),
-    ('no_calibrate', '--no-calibrate', 'flag'), ('refine_time', '--refine-time', 'float'), ('out', '--out', 'str'), ('validate', '--validate', 'str'),
-    ('em_tune', '--em-tune', 'int'), ('k2e_args', '--k2e-args', 'str'),
-]
+def describe(python=None):
+    """dfsynth's description, from `dfsynth --describe --json` in this Python (or `python`): {'kinds': {type:
+    [topologies]}, 'presets': {name: {h, er, tand, material}}, 'options': [{key, flag, kind, default, choices, help,
+    group}]}. None when dfsynth cannot run there (not installed, or too old to describe itself). Asked once."""
+    import subprocess
+    python = python or sys.executable
+    if python not in _DESCRIPTIONS:
+        d = None
+        try:
+            p = subprocess.run([python, '-m', 'dfsynth', '--describe', '--json'], capture_output=True, text=True,
+                               timeout=60)
+            if p.returncode == 0:
+                d = json.loads(p.stdout)
+                if d.get('format') != DESCRIBE_FORMAT:
+                    d = None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            d = None
+        _DESCRIPTIONS[python] = d
+    return _DESCRIPTIONS[python]
 
 
-def filter_argv(vals, validate=True):
+def options(desc):
+    """{key: option} of a description, in dfsynth's order."""
+    return {o['key']: o for o in (desc or {}).get('options', [])}
+
+
+def filter_argv(vals, validate=True, desc=None):
     """dfsynth's command line (after the interpreter) for the page's values; None / '' leave dfsynth's default.
-    validate False: the design only (no --validate, --em-tune, --k2e-args)."""
+    validate False: the design only (no --validate, --em-tune, --k2e-args). desc: dfsynth's description
+    (default: describe()); a value of no option it has is left out."""
     argv = ['-u', '-m', 'dfsynth']
-    for key, opt, kind in OPTIONS:
+    for key, o in options(desc or describe()).items():
+        opt, kind = o['flag'], o['kind']
         v = vals.get(key)
         if not validate and key in ('validate', 'em_tune', 'k2e_args'):
             continue
@@ -144,7 +155,8 @@ class FilterTab(QWidget):
         super().__init__()
         self.win, self.proc, self.base, self.result = win, None, None, None
         self.problems, self._last = {'error': 0, 'warn': 0}, None
-        self.ds = dfsynth_module()
+        self.desc = describe()
+        self.opts = options(self.desc)
         lay = QHBoxLayout(self)
         self.split = QSplitter(Qt.Horizontal)
         lay.addWidget(self.split)
@@ -152,7 +164,7 @@ class FilterTab(QWidget):
         self.split.addWidget(self._views())
         self.split.setSizes([380, 900])
         self._type_changed()
-        if self.ds is None:                                         # nothing to design with: say so, up front
+        if self.desc is None:                                       # nothing to design with: say so, up front
             self.split.widget(0).setEnabled(False)
             self.say(f"dfsynth is not installed, so filters cannot be designed here: {DFSYNTH_PIP}", 'error')
 
@@ -164,9 +176,9 @@ class FilterTab(QWidget):
         return e
 
     def _form(self):
-        ds = self.ds
-        kinds = ds.topologies.KINDS if ds else {'bandpass': ('coupled',)}
-        presets = list(ds.microstrip.PRESETS) if ds else ['RO4003C-0.508']
+        d = self.desc
+        kinds = d['kinds'] if d else {'bandpass': ('coupled',)}
+        presets = list(d['presets']) if d else ['RO4003C-0.508']
         self.w = {}
         box = QWidget()
         v = QVBoxLayout(box)
@@ -249,6 +261,16 @@ class FilterTab(QWidget):
             ('Solvers', 'validate', solv), ('Tune rounds', 'em_tune', tune),
             ('kicad2ems args', 'k2e_args', self._line('e.g. --fine 0.03', 'extra kicad2ems arguments'))],
             expanded=True)
+        more = [(o['flag'], key, self._option_widget(o)) for key, o in self.opts.items() if key not in self.w]
+        if more:                                                    # dfsynth's options the page has no place for
+            section('More options', more)
+        for key, w in self.w.items():
+            o = self.opts.get(key)
+            if o is None and d is not None:                         # this dfsynth has no such option
+                w.setEnabled(False)
+                w.setToolTip(f"this dfsynth ({d.get('version', '?')}) has no such option")
+            elif o is not None and not w.toolTip():
+                w.setToolTip(f"{o['flag']}: {o['help']}")
         foot = QWidget()                                            # the buttons, below the settings: always in view
         fv = QVBoxLayout(foot)
         fv.setContentsMargins(6, 4, 6, 6)
@@ -287,8 +309,18 @@ class FilterTab(QWidget):
         lv.addWidget(foot)
         return left
 
+    def _option_widget(self, o):
+        """A widget for one of dfsynth's options, from its declaration: a tick box, a choice or a text field."""
+        if o['kind'] == 'flag':
+            return QCheckBox(o['help'])
+        if o['choices']:
+            w = QComboBox()
+            w.addItems([''] + [str(c) for c in o['choices']])
+            return w
+        return self._line('' if o['default'] in (None, '', 0, 0.0) else str(o['default']), o['help'])
+
     def _type_changed(self, *_):
-        kinds = self.ds.topologies.KINDS if self.ds else {'bandpass': ('coupled',)}
+        kinds = self.desc['kinds'] if self.desc else {'bandpass': ('coupled',)}
         topo = self.w['topology']
         cur = topo.currentText()
         topo.blockSignals(True)
@@ -312,9 +344,10 @@ class FilterTab(QWidget):
 
     def _substrate_changed(self, name):
         """The preset's values as the hints of its overrides."""
-        if not self.ds:
+        if not self.desc:
             return
-        h, er, td, _ = self.ds.microstrip.PRESETS.get(name, (None,) * 4)
+        pre = self.desc['presets'].get(name, {})
+        h, er, td = pre.get('h'), pre.get('er'), pre.get('tand')
         for key, val in (('h', h), ('er', er), ('tand', td)):
             self.w[key].setPlaceholderText('' if val is None else f"{val:g} (preset)")
 
@@ -327,8 +360,10 @@ class FilterTab(QWidget):
     def values(self):
         """The settings as dfsynth's values (empty fields: None, its defaults)."""
         out = {}
-        for key, _, kind in OPTIONS:
-            w = self.w[key]
+        for key, o in self.opts.items():
+            w, kind = self.w.get(key), o['kind']
+            if w is None:
+                continue
             if isinstance(w, QCheckBox):
                 out[key] = w.isChecked()
             elif isinstance(w, QSpinBox):
@@ -577,7 +612,7 @@ class FilterTab(QWidget):
         self._stdout()
         self.proc = None
         for b in (self.design_btn, self.validate_btn):
-            b.setEnabled(self.ds is not None)
+            b.setEnabled(self.desc is not None)
         self.stop_btn.setEnabled(False)
         self.busy.hide()
         res = load_design(self.base) if self.base else None

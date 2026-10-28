@@ -21,9 +21,8 @@ from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
                                QLineEdit, QCheckBox, QComboBox, QPushButton, QLabel, QPlainTextEdit, QProgressBar,
                                QFileDialog, QScrollArea, QMessageBox, QDockWidget, QToolBar, QStyle, QToolButton,
-                               QDialog, QTabWidget)
+                               QDialog, QTabWidget, QApplication)
 import pyqtgraph as pg
-import kicad2ems
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, Run, EventTail, stop_runs, settings_values,
                      extra_values, find_results, save_config, solvers_from_form, solver_ticks)
 from kicad2ems.api.frontend import G_DUMP
@@ -36,8 +35,6 @@ from .meters import duration
 from .filtertab import FilterTab
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
-EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(kicad2ems.__file__)))),
-                        'examples')                                  # a kicad2ems checkout's (src/kicad2ems/__init__.py)
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
 PANELS = ('Viewer', 'Run', 'Results', 'Filter')
@@ -340,7 +337,8 @@ class SetupTab(QWidget):
     def _start_dir(self):
         if self.path:
             return os.path.dirname(self.path)
-        return EXAMPLES if os.path.isdir(EXAMPLES) else os.getcwd()
+        from kicad2ems.api.frontend import examples_folder
+        return examples_folder() if os.path.isdir(examples_folder()) else os.getcwd()
 
     def maybe_save(self):
         """True when the form may be replaced: saved, discarded or unchanged."""
@@ -1023,13 +1021,29 @@ class MainWindow(QMainWindow):
         self._fill_examples()
 
     def _fill_examples(self):
+        """kicad2ems's examples (installed with it): one opens from a folder of the user's, where it is copied, its
+        board made if it is generated."""
+        from kicad2ems.api.frontend import examples
         self.examples_menu.clear()
-        files = sorted(f for f in os.listdir(EXAMPLES) if f.endswith('.toml')) if os.path.isdir(EXAMPLES) else []
-        for f in files:
-            a = QAction(f[:-5], self)
-            a.triggered.connect(lambda _=False, p=os.path.join(EXAMPLES, f): self._open(p))
+        names = list(examples())
+        for n in names:
+            a = QAction(n, self)
+            a.triggered.connect(lambda _=False, n=n: self.open_example(n))
             self.examples_menu.addAction(a)
-        self.examples_menu.setEnabled(bool(files))
+        self.examples_menu.setEnabled(bool(names))
+
+    def open_example(self, name):
+        from kicad2ems.api.frontend import prepare_example
+        if not self.setup.maybe_save():
+            return
+        self.statusBar().showMessage(f"preparing the example {name}...")
+        QApplication.processEvents()
+        try:
+            path = prepare_example(name)
+        except Exception as e:                                      # a generator that failed: say so, keep the form
+            QMessageBox.warning(self, 'Examples', f"{name}: {type(e).__name__}: {e}")
+            return
+        self.setup.load(path)
 
     def recent(self):
         v = self.qsettings.value('recent', [])
