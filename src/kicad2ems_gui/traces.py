@@ -3,6 +3,7 @@ S-parameter traces for the interactive plots (no Qt here: testable without a dis
 
     traces = load_traces(files, compare=None)    # the run's Touchstone files (openEMS, mom25d, line model, compare)
     x, y = transform('dB', tr)                   # what a plot kind shows of a trace
+    x, y = difference('Δ|S| (dB)', tr, ref)      # a trace against the same S of another solver
     value_at(kind, tr, f)                        # the value at a frequency (cursor, markers)
     export_csv(path, traces, kind)
 """
@@ -11,6 +12,7 @@ import numpy as np
 
 KINDS = ('|S| (dB)', '|S| (linear)', 'Phase (deg)', 'Group delay (ns)', 'VSWR')     # the rectangular plot
 SMITH = 'Smith chart'                                     # the reflections beside it
+DIFF_KINDS = ('Δ|S| (dB)', '|ΔS| (dB)')                   # one solver against another: |S| apart, and S apart
 UNITS = {'|S| (dB)': 'dB', '|S| (linear)': '', 'Phase (deg)': '°', 'Group delay (ns)': 'ns', 'VSWR': '',
          'Smith chart': ''}
 SOURCES = (('openEMS', 'solid'), ('mom25d', 'dashdot'), ('qucsator', 'dot'), ('scikit-rf', 'dot'), ('line model', 'dot'),
@@ -26,6 +28,12 @@ class Trace:
 
     @property
     def param(self):
+        """S21; for a file with differential pairs (P1d, P1c: kicad2ems's mixed-mode ports) the modes and the
+        pairs' numbers, Sdd21, Scd21, and s for a single-ended port among them (Sds31)."""
+        m = modes(self.names)
+        if m and max(self.i, self.j) < len(m):
+            (mi, ki), (mj, kj) = m[self.i], m[self.j]
+            return f"S{mi}{mj}{ki}{kj}"
         return f"S{self.i + 1}{self.j + 1}"
 
     @property
@@ -42,6 +50,24 @@ class Trace:
     @property
     def empty(self):
         return not np.isfinite(self.s).all() or not np.abs(self.s).any()
+
+
+def modes(names):
+    """[(mode, port number)] per port of a file with differential pairs, or None: a pair's ports are <name>d and
+    <name>c (its differential and common modes, as kicad2ems writes them), 'd' and 'c' at the pair's number; any
+    other port is single-ended, 's'. Ports are numbered in order of first appearance, a pair once."""
+    if not names:
+        return None
+    pairs = {n[:-1] for n in names if n.endswith('d') and n[:-1] + 'c' in names}
+    if not pairs:
+        return None
+    out, order = [], []
+    for n in names:
+        base, mode = (n[:-1], n[-1]) if n[:-1] in pairs and n[-1] in 'dc' else (n, 's')
+        if base not in order:
+            order.append(base)
+        out.append((mode, order.index(base) + 1))
+    return out
 
 
 def port_names(path):
@@ -123,6 +149,27 @@ def transform(kind, tr):
     else:
         raise ValueError(f"unknown plot kind {kind!r}")
     return x, y
+
+
+def difference(kind, tr, ref):
+    """(x, y) of trace tr against ref (the same S of another solver), on tr's frequencies (GHz): Δ|S| (dB), the
+    difference of their magnitudes in dB, or |ΔS| (dB), the magnitude of the complex difference (the error
+    vector) in dB. NaN outside ref's band."""
+    f = tr.f
+    inside = (f >= ref.f[0]) & (f <= ref.f[-1])
+    r = np.interp(f, ref.f, ref.s.real) + 1j * np.interp(f, ref.f, ref.s.imag)
+    if kind == DIFF_KINDS[0]:
+        y = 20 * np.log10(np.abs(tr.s) + 1e-15) - 20 * np.log10(np.abs(r) + 1e-15)
+    elif kind == DIFF_KINDS[1]:
+        y = 20 * np.log10(np.abs(tr.s - r) + 1e-15)
+    else:
+        raise ValueError(f"unknown difference {kind!r}")
+    return f / 1e9, np.where(inside, y, np.nan)
+
+
+def counterpart(traces, tr, source):
+    """The trace of `source` with tr's S (the same i, j), or None."""
+    return next((t for t in traces if t.source == source and (t.i, t.j) == (tr.i, tr.j)), None)
 
 
 def value_at(kind, tr, f):

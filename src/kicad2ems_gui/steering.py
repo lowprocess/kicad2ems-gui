@@ -5,8 +5,10 @@ phase steps on top of it, with an amplitude taper (Taylor, Chebyshev, cosine) fo
 at once, without solving again. Without a grid the step goes from each
 driven port to the next (a line of elements); with one (COLSxROWS, or PORT:COL,ROW per port: a 2D array such as
 a 4 x 4 patch array with a feed line per patch) there are two, X per column and Y per row, and a phase map shows
-each element's phase and active reflection. The plots (gain over frequency, the far-field cuts) and the 3D
-view's pattern follow; Animate sweeps X, Y, or both round a circle (a conical scan).
+each element's phase and active reflection. Aim (results that kept the ports' places) points the beam at an angle
+instead, each port's phase from its place at the pattern frequency (phased.aim), on top of the drive and the steps.
+The plots (gain over frequency, the far-field cuts) and the 3D view's pattern follow; Animate sweeps X, Y, or both
+round a circle (a conical scan), or with Aim the angle: theta back and forth, or phi round.
 
     bar = SteeringBar()              # compact=True: stacked, for the 3D view's side panel
     bar.set_data(res, data)          # the antenna result (JSON dict) and phased.load's data, or None: hidden
@@ -17,7 +19,7 @@ import math
 import numpy as np
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
                                QSlider, QSpinBox, QVBoxLayout, QWidget)
 from kicad2ems.api.frontend import phased
 
@@ -26,6 +28,8 @@ ANIM_MS = 60            # a frame of Animate
 ANIM_DEG = 3            # a step's change per frame (Circle: the scan angle's)
 CIRCLE_R = 90           # deg: Circle's radius when both steps are about zero
 ANIM_MODES = ('X', 'Y', 'Circle')
+AIM_MODES = ('θ', 'φ')  # Animate with Aim: theta back and forth over 0..AIM_THETA_MAX, or phi round at the theta set
+AIM_THETA_MAX = 60
 
 
 class PhaseMap(QWidget):
@@ -181,6 +185,26 @@ class SteeringBar(QGroupBox):
                           "or with a grid per column: the beam tilts across the ports")
         self.label_y, self.slider_y, self.spin_y, _ = step_row(
             'Y step', "with a grid: added per row (row 0 the top one): the beam tilts across the rows")
+        self.aim_row = QWidget()
+        row = QHBoxLayout(self.aim_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.aim = QCheckBox('Aim at')
+        self.aim.setToolTip("point the beam at θ, φ: each driven port's phase from its place, −k0 (x sin θ cos φ + "
+                            "y sin θ sin φ) at the pattern frequency, on top of the drive and the steps (any layout "
+                            "of feeds). A feed well off its element's centre still needs the drive's own phases")
+        self.aim.toggled.connect(lambda *_: self._aim_changed())
+        row.addWidget(self.aim)
+        self.theta, self.phi = QDoubleSpinBox(), QDoubleSpinBox()
+        for w, lab, lo, hi in ((self.theta, 'θ', 0, 90), (self.phi, 'φ', -180, 360)):
+            w.setRange(lo, hi)
+            w.setDecimals(0)
+            w.setPrefix(f"{lab} ")
+            w.setSuffix('°')
+            w.valueChanged.connect(lambda *_: self.update())
+            row.addWidget(w)
+        self.phi.setWrapping(True)
+        row.addStretch(1)
+        lay.addWidget(self.aim_row)
         row = QHBoxLayout()
         row.addWidget(QLabel('Taper'))
         self.taper = QComboBox()
@@ -212,11 +236,12 @@ class SteeringBar(QGroupBox):
         self.anim_mode = QComboBox()
         self.anim_mode.addItems(ANIM_MODES)
         self.anim_mode.setToolTip("what Animate sweeps: the X step, the Y step, or both round a circle (the "
-                                  f"steps' size at the start, {CIRCLE_R}° when about zero)")
+                                  f"steps' size at the start, {CIRCLE_R}° when about zero); with Aim, θ back and "
+                                  f"forth over 0..{AIM_THETA_MAX}° or φ round")
         self.anim_mode.currentIndexChanged.connect(lambda *_: self._restart_circle())
         row.addWidget(self.anim_mode)
         self.reset = QPushButton('Reset')
-        self.reset.setToolTip("the run's drive, grid, taper and phase steps")
+        self.reset.setToolTip("the run's drive, grid, taper, phase steps and aim")
         self.reset.clicked.connect(self._reset)
         row.addWidget(self.reset)
         row.addStretch(1)
@@ -232,6 +257,7 @@ class SteeringBar(QGroupBox):
         self.timer.timeout.connect(self._frame)
         self._show_2d(False)
         self._taper_changed(update=False)
+        self.aim_row.hide()
         self.hide()
 
     # ---- state -----------------------------------------------------------------------------------------
@@ -241,14 +267,55 @@ class SteeringBar(QGroupBox):
         self.res, self.data = res, data
         self.setVisible(data is not None)
         if data is not None:
+            self.aim_row.setVisible(set(self.places()) == set(data['ports']))
             self._reset(emit=False)
 
     def _show_2d(self, on):
-        for w in (self.label_y, self.slider_y, self.spin_y, self.anim_mode, self.map):
+        for w in (self.label_y, self.slider_y, self.spin_y, self.map):
             w.setVisible(on)
         self.label_x.setText('X step' if on else 'Phase step')
-        if not on and self.anim_mode.currentIndex() != 0:
-            self.anim_mode.setCurrentIndex(0)
+        self._anim_modes()
+
+    def _anim_modes(self):
+        """Animate's choices: the angle with Aim, X / Y / Circle with a grid, else the one step (no choice)."""
+        modes = AIM_MODES if self.aiming() else ANIM_MODES if self._grid else ()
+        have = tuple(self.anim_mode.itemText(i) for i in range(self.anim_mode.count()))
+        if modes and have != modes:
+            self.anim_mode.blockSignals(True)
+            self.anim_mode.clear()
+            self.anim_mode.addItems(modes)
+            self.anim_mode.blockSignals(False)
+        self.anim_mode.setVisible(bool(modes))
+
+    def places(self):
+        """{port: (x, y)} of the ports the run kept places for (model mm), empty for an older result."""
+        pos = (self.data or {}).get('pos')
+        if pos is None:
+            return {}
+        return {n: (float(x), float(y)) for n, (x, y) in zip(self.data['ports'], np.asarray(pos, float))
+                if np.isfinite(x) and np.isfinite(y)}
+
+    def aiming(self):
+        return self.aim.isChecked() and self.aim_row.isVisible()
+
+    def _aim_changed(self):
+        for w in (self.theta, self.phi):
+            w.setEnabled(self.aim.isChecked())
+        self._anim_modes()
+        self.update()
+
+    def _set_aim(self, aim):
+        """The aim controls from [theta, phi] or None (off), without an update."""
+        for w in (self.aim, self.theta, self.phi):
+            w.blockSignals(True)
+        self.aim.setChecked(bool(aim))
+        if aim:
+            self.theta.setValue(aim[0])
+            self.phi.setValue(aim[1])
+        for w in (self.aim, self.theta, self.phi):
+            w.blockSignals(False)
+            w.setEnabled(w is self.aim or bool(aim))
+        self._anim_modes()
 
     def _set_steps(self, x, y):
         """Both steps (and their sliders) without an update each."""
@@ -287,6 +354,13 @@ class SteeringBar(QGroupBox):
         self._show_2d(bool(g))
         return g
 
+    def _parse_grid_quiet(self):
+        """_parse_grid, a bad grid left for update() to report."""
+        try:
+            self._parse_grid()
+        except ValueError:
+            pass
+
     def _reset(self, *_, emit=True):
         d, res = self.data, self.res or {}
         if res.get('drive_base'):                                   # the run's settings: untapered, unsteered
@@ -298,6 +372,7 @@ class SteeringBar(QGroupBox):
         self.drive.setText(', '.join(drive))
         self.grid.setText(res.get('grid') or '')
         self._set_steps(*steps)
+        self._set_aim(res.get('aim') if res.get('drive_base') else None)
         self.update(emit=emit)
 
     def mirror(self, other):
@@ -307,6 +382,8 @@ class SteeringBar(QGroupBox):
         self.drive.setText(other.drive.text())
         self.grid.setText(other.grid.text())
         self._set_taper(other.taper_spec())
+        self._set_aim([other.theta.value(), other.phi.value()] if other.aim.isChecked() else None)
+        self._parse_grid_quiet()
         self.anim_mode.blockSignals(True)
         self.anim_mode.setCurrentIndex(other.anim_mode.currentIndex())
         self.anim_mode.blockSignals(False)
@@ -329,7 +406,10 @@ class SteeringBar(QGroupBox):
             raise ValueError("drive: no port driven")
         g = self._parse_grid()
         a = phased.taper(a, names, g, self.taper_spec())
-        return phased.steer2d(a, names, g, self.spin.value(), self.spin_y.value() if g else 0)
+        a = phased.steer2d(a, names, g, self.spin.value(), self.spin_y.value() if g else 0)
+        if self.aiming():
+            a = phased.aim(a, names, self.places(), self.theta.value(), self.phi.value(), self.data['f_pattern'])
+        return a
 
     def update(self, emit=True):
         if self.data is None:
@@ -346,7 +426,7 @@ class SteeringBar(QGroupBox):
             res['grid'] = phased.format_grid(self._grid, names)
         else:
             res.pop('grid', None)
-        for k in ('drive_base', 'taper', 'steer'):                  # the run's: this drive is all in 'drive'
+        for k in ('drive_base', 'taper', 'steer', 'aim'):           # the run's: this drive is all in 'drive'
             res.pop(k, None)
         pk = c['peak']
         ip = int(np.argmin(np.abs(self.data['freq'] - pk['f'])))
@@ -355,6 +435,8 @@ class SteeringBar(QGroupBox):
         g = f"{pk['gain_dbi']:.2f} dBi" if pk['gain_dbi'] is not None else '-'
         head = (f"steps X {self.spin.value()}°, Y {self.spin_y.value()}°" if self._grid else
                 ', '.join(res['drive']))
+        if self.aiming():
+            head += f", aimed at θ {self.theta.value():g}°, φ {self.phi.value():g}°"
         if self.taper.currentIndex():
             head += f", {self.taper.currentText()}" + (f" −{self.sll.value():g} dB" if self.sll.isEnabled() else '')
         if len(act) > 4:                                            # a large array: the range, the worst named
@@ -386,6 +468,16 @@ class SteeringBar(QGroupBox):
             self.timer.stop()
 
     def _frame(self):
+        if self.aiming():                                          # the angle: theta to and fro, or phi round
+            if self.anim_mode.currentText() == 'φ':
+                self.phi.setValue((self.phi.value() + ANIM_DEG + 180) % 360 - 180)
+                return
+            v = self.theta.value() + self._dir * ANIM_DEG
+            if not 0 <= v <= AIM_THETA_MAX:
+                self._dir = -self._dir
+                v = self.theta.value() + self._dir * ANIM_DEG
+            self.theta.setValue(v)
+            return
         mode = ANIM_MODES[self.anim_mode.currentIndex()] if self._grid else 'X'
         if mode == 'Circle':
             self._t += math.radians(ANIM_DEG)

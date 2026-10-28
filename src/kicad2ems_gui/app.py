@@ -524,6 +524,22 @@ class RunTab(QWidget):
 
 
 
+def run_notes(sm):
+    """(warnings, notes) of a run's summary (<name>_run.json): its warnings (the log's WARNING lines), and the
+    notes of the board's conversion (the ground plane, ports, parts), of the line model and the log's 'note:'
+    lines (a setting ignored, an assumption made), each once and without its prefix."""
+    import re
+    strip = lambda t: re.sub(r'^\s*(?:[\w.-]+:\s+)?(?:WARNING|warning|note):\s*', '', str(t)).strip()
+    warns = list(dict.fromkeys(strip(w) for w in sm.get('warnings') or [] if str(w).strip()))
+    notes = list((sm.get('model') or {}).get('notes') or [])
+    lines = sm.get('lines')
+    if isinstance(lines, dict):
+        notes += list(lines.get('notes') or [])
+    notes += [l for l in sm.get('log') or [] if re.match(r'^\s*(?:[\w.-]+:\s+)?note:', str(l))]
+    notes = [n for n in dict.fromkeys(strip(n) for n in notes) if n and n not in warns]
+    return warns, notes
+
+
 class ResultsTab(QWidget):
     """The Results page: the S-parameters of every solver and, for an antenna, its gain, efficiency and pattern
     cuts, as subplots you add and remove (splot.SPlot). The plots of a page are remembered: one layout for
@@ -536,6 +552,18 @@ class ResultsTab(QWidget):
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.info)
+        self.notes_btn = QToolButton()                              # the run's notes and warnings, folded
+        self.notes_btn.setCheckable(True)
+        self.notes_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.notes_btn.setAutoRaise(True)
+        self.notes_btn.toggled.connect(self._fold_notes)
+        self.notes = QLabel()
+        self.notes.setWordWrap(True)
+        self.notes.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.notes.setTextFormat(Qt.RichText)
+        lay.addWidget(self.notes_btn)
+        lay.addWidget(self.notes)
+        self.set_notes([], [])
         top = FlowLayout()
         self.which = QComboBox()                                    # openEMS's and mom25d's antenna results
         self.which.setToolTip("The antenna results to show (a folder can hold openEMS's and mom25d's)")
@@ -665,6 +693,28 @@ class ResultsTab(QWidget):
             if b is not src:
                 b.mirror(src)
 
+    def set_notes(self, warns, notes):
+        """The run's warnings (red) and notes under a fold, open when there is a warning; hidden when none."""
+        import html
+        self.notes_btn.setVisible(bool(warns or notes))
+        parts = []
+        if warns:
+            parts.append(f"{len(warns)} warning{'s' if len(warns) > 1 else ''}")
+        if notes:
+            parts.append(f"{len(notes)} note{'s' if len(notes) > 1 else ''}")
+        self.notes_btn.setText(f"Notes and warnings ({', '.join(parts)})" if parts else '')
+        items = [f"<li style='color:#c62828'>{html.escape(w)}</li>" for w in warns] + \
+                [f"<li>{html.escape(n)}</li>" for n in notes]
+        self.notes.setText(f"<ul style='margin:0'>{''.join(items)}</ul>" if items else '')
+        self.notes_btn.blockSignals(True)
+        self.notes_btn.setChecked(bool(warns))
+        self.notes_btn.blockSignals(False)
+        self._fold_notes(bool(warns))
+
+    def _fold_notes(self, on):
+        self.notes_btn.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.notes.setVisible(bool(on) and self.notes_btn.isVisibleTo(self))
+
     def show(self, files, compare=None):
         """The S-parameters of a run's files (openEMS, mom25d, line model) and a compare file."""
         from .traces import load_traces
@@ -673,10 +723,12 @@ class ResultsTab(QWidget):
         self.clear_btn.setEnabled(bool(self.added))
         z0 = 50.0
         summary = next((p for l, p in files if p.endswith(('_run.json', '_openems.json'))), None)
+        self.set_notes([], [])
         if summary and os.path.exists(summary):
             try:
                 with open(summary) as fh:
                     sm = json.load(fh)
+                self.set_notes(*run_notes(sm))
                 compare = compare or (sm.get('settings') or {}).get('compare')
                 zr = sm.get('zref')
                 z0 = float(zr[0] if isinstance(zr, list) else zr or 50.0)

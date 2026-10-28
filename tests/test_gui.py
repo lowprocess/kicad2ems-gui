@@ -927,3 +927,140 @@ def test_beam_steering_bar_2d(tmp_path, monkeypatch):
     bar.set_data(dict(res, drive_base=drive, taper='chebyshev:30', steer=[20.0, -10.0]), bar.data)
     assert bar.taper_spec() == 'chebyshev:30' and (bar.spin.value(), bar.spin_y.value()) == (20, -10)
     assert bar.drive.text() == ', '.join(drive)                      # the run's untapered drive, not tapered twice
+
+
+def test_beam_steering_aim(tmp_path, monkeypatch):
+    """A result that kept the ports' places (three feeds in a triangle): Aim points the beam at θ, φ, Animate
+    sweeps θ or turns φ, Reset gives the run's aim back; a result without places has no Aim."""
+    pytest.importorskip('PySide6')
+    pytest.importorskip('pyqtgraph')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    from kicad2ems import phased
+    from kicad2ems_gui import application
+    from kicad2ems_gui.steering import SteeringBar
+    from test_phased import placed_sources
+    application()
+    data = placed_sources({'P1': (0.0, 0.0), 'P2': (61.2, 0.0), 'P3': (30.6, 53.0)})
+    c = phased.combine(data, data['drive'])
+    drive = phased.format_drive(data['drive'], data['ports'])
+    res = dict(rows=c['rows'], peak=c['peak'], drive=drive, drive_base=drive, taper='uniform', steer=[0.0, 0.0],
+               aim=[25.0, 45.0])
+    bar = SteeringBar()
+    got = []
+    bar.steered.connect(lambda r, s: got.append(r))
+    bar.set_data(res, data)
+    assert bar.aim_row.isVisibleTo(bar) and bar.aim.isChecked() and (bar.theta.value(), bar.phi.value()) == (25, 45)
+    assert [bar.anim_mode.itemText(i) for i in range(bar.anim_mode.count())] == ['θ', 'φ']
+    bar.phi.setValue(200)
+    pk = got[-1]['peak']
+    assert abs(pk['theta'] - 25) <= 2 and abs(pk['phi'] - 200) <= 4 and 'aimed at θ 25°' in bar.readout.text()
+    assert 'aim' not in got[-1]                                      # the drive holds it all now
+    bar.anim.setChecked(True)
+    t0 = bar.theta.value()
+    for _ in range(5):
+        bar._frame()
+    assert bar.theta.value() != t0 and 0 <= bar.theta.value() <= 60
+    bar.anim_mode.setCurrentIndex(1)                                 # φ round, θ kept
+    t1, p1 = bar.theta.value(), bar.phi.value()
+    bar._frame()
+    assert bar.theta.value() == t1 and bar.phi.value() != p1
+    bar.anim.setChecked(False)
+    bar.aim.setChecked(False)                                        # off: the drive's own phases, broadside
+    assert got[-1]['peak']['theta'] == 0 and not bar.anim_mode.isVisibleTo(bar)
+    bar.reset.click()
+    assert bar.aim.isChecked() and (bar.theta.value(), bar.phi.value()) == (25, 45)
+    old = {k: v for k, v in data.items() if k != 'pos'}               # a result from before the places were kept
+    bar.set_data(dict(res, aim=None), old)
+    assert not bar.aim_row.isVisibleTo(bar) and not bar.aiming()
+    from PySide6.QtWidgets import QApplication
+    bar.steered.disconnect()                                         # a parentless bar: gone before the interpreter
+    bar.deleteLater()
+    QApplication.processEvents()
+
+
+def test_mixed_mode_names():
+    """A file with differential pairs (kicad2ems's P1d, P1c ports) names its traces by mode and pair: Sdd21, Scd21,
+    and s for a single-ended port among them; a file without pairs keeps S21."""
+    from kicad2ems_gui.traces import Trace, modes
+    names = ['P1d', 'P1c', 'P2d', 'P2c', 'P3']
+    assert modes(names) == [('d', 1), ('c', 1), ('d', 2), ('c', 2), ('s', 3)]
+    assert modes(['IN', 'OUT']) is None and modes(None) is None and modes(['Pd', 'Q']) is None
+    f, s = np.array([1e9, 2e9]), np.zeros(2)
+    tr = lambda i, j, nm=names: Trace('mom25d', i, j, f, s, list(nm))
+    assert [tr(2, 0).param, tr(3, 0).param, tr(0, 0).param, tr(4, 0).param, tr(2, 4).param] == \
+        ['Sdd21', 'Scd21', 'Sdd11', 'Ssd31', 'Sds23']
+    assert tr(2, 0).title == 'Sdd21 (P2d ← P1d)' and tr(1, 0, ['IN', 'OUT']).param == 'S21'
+
+
+def test_difference_plot(tmp_path, monkeypatch):
+    """Two solvers' results: the Cartesian plot offers Δ|S| and |ΔS| against a chosen solver, and draws each other
+    solver's checked trace as its difference from the reference's same S; with one solver there is none."""
+    pytest.importorskip('PySide6')
+    pytest.importorskip('pyqtgraph')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    from kicad2ems_gui import application
+    from kicad2ems_gui.splot import SPlot
+    from kicad2ems_gui.traces import DIFF_KINDS, load_traces, difference, counterpart
+    application()
+    f = np.linspace(1e9, 3e9, 11)
+    _s2p(tmp_path / 'b_openems.s2p', f, np.full((11, 2, 2), 0.2 + 0j))
+    _s2p(tmp_path / 'b_mom25d.s2p', f, np.full((11, 2, 2), 0.25 + 0j))
+    sp = SPlot()
+    sp.set_traces(load_traces([('t', str(tmp_path / 'b_openems.s2p'))]))
+    opts = lambda: [sp.subplots[0].option.itemText(i) for i in range(sp.subplots[0].option.count())]
+    assert not set(DIFF_KINDS) & set(opts())                         # one solver: nothing to compare
+    trs = load_traces([('a', str(tmp_path / 'b_openems.s2p')), ('b', str(tmp_path / 'b_mom25d.s2p'))])
+    sp.set_traces(trs)
+    assert set(DIFF_KINDS) <= set(opts())
+    plot = sp.subplots[0]
+    plot.option.setCurrentText(DIFF_KINDS[0])
+    assert plot.ref.isVisibleTo(plot) and plot.reference == 'openEMS'
+    import pyqtgraph as pg
+    lines = lambda: [c for c in plot.pw.listDataItems() if isinstance(c, pg.PlotDataItem)]   # not the cursor dot
+    curves = lines()
+    assert len(curves) == 2 and all(np.allclose(c.yData, 20 * np.log10(0.25 / 0.2)) for c in curves)
+    m21 = next(t for t in trs if t.source == 'mom25d' and t.param == 'S21')
+    _, y = difference(DIFF_KINDS[1], m21, counterpart(trs, m21, 'openEMS'))
+    assert np.allclose(y, 20 * np.log10(0.05))                       # |0.25 - 0.2|
+    plot.ref.setCurrentText('against mom25d')                         # openEMS against mom25d: the other sign
+    assert lines() and all(np.allclose(c.yData, -20 * np.log10(0.25 / 0.2)) for c in lines())
+
+
+def test_run_notes_on_the_results_page(tmp_path, monkeypatch):
+    """The run's warnings and notes (the board's conversion, the line model, the log's 'note:' lines) under a fold
+    on the Results page: open and red with a warning, folded with notes only, hidden with neither."""
+    pytest.importorskip('PySide6')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    from kicad2ems_gui import application
+    from kicad2ems_gui.app import MainWindow, run_notes
+    application()
+    sm = dict(warnings=['WARNING: openems: 2 vias moved onto the mesh'], model=dict(notes=['B.Cu: solid ground']),
+              lines=dict(notes=['P2: no reference copper']),
+              log=['mom25d: 400 unknowns', 'note: --steer, --taper and --aim need --drive: ignored',
+                   'mom25d: note: wave ports need a longer feed', 'WARNING: openems: 2 vias moved onto the mesh'])
+    warns, notes = run_notes(sm)
+    assert warns == ['openems: 2 vias moved onto the mesh']
+    assert notes == ['B.Cu: solid ground', 'P2: no reference copper', '--steer, --taper and --aim need --drive: ignored',
+                     'wave ports need a longer feed']
+    f = np.linspace(1e9, 3e9, 11)
+    _s2p(tmp_path / 'b_openems.s2p', f, np.full((11, 2, 2), 0.2 + 0j))
+    (tmp_path / 'b_run.json').write_text(json.dumps(sm))
+    w = MainWindow()
+    r = w.results
+    files = [('s', str(tmp_path / 'b_openems.s2p')), ('run', str(tmp_path / 'b_run.json'))]
+    r.show(files)
+    assert r.notes_btn.isVisibleTo(r) and r.notes_btn.text() == 'Notes and warnings (1 warning, 4 notes)'
+    assert r.notes_btn.isChecked() and r.notes.isVisibleTo(r) and '#c62828' in r.notes.text()
+    (tmp_path / 'b_run.json').write_text(json.dumps(dict(sm, warnings=[], log=[])))
+    r.show(files)
+    assert r.notes_btn.text() == 'Notes and warnings (2 notes)' and not r.notes.isVisibleTo(r)
+    r.notes_btn.setChecked(True)
+    assert r.notes.isVisibleTo(r) and 'solid ground' in r.notes.text()
+    (tmp_path / 'b_run.json').write_text(json.dumps(dict(warnings=[], model=dict(notes=[]))))
+    r.show(files)
+    assert not r.notes_btn.isVisibleTo(r)
+    w.setup.dirty = False
+    w.close()

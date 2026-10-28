@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, Q
                                QSizePolicy)
 import pyqtgraph as pg
 from .panels import FlowLayout
-from .traces import (KINDS, SMITH, transform, value_at, fmt_value, nearest, smith_grid, polar_grid, pattern_xy,
-                     export_csv, default_visible)
+from .traces import (KINDS, SMITH, DIFF_KINDS, transform, difference, counterpart, value_at, fmt_value, nearest,
+                     smith_grid, polar_grid, pattern_xy, export_csv, default_visible)
 
 # a colour per trace (tab10, then darker ones), a line style per source; both changeable from the trace list
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
@@ -65,7 +65,10 @@ class Subplot(QFrame):
         self.freq = QComboBox()                                     # the far-field cuts' frequency and quantity
         self.qty = QComboBox()
         self.qty.addItems(PATTERN_QTY)
-        for w in (self.freq, self.qty):
+        self.ref = QComboBox()                                      # a difference plot's reference solver
+        self.ref.setToolTip("the solver the others are compared with: each checked trace of another solver is "
+                            "drawn as its difference from this one's same S")
+        for w in (self.freq, self.qty, self.ref):
             w.setSizeAdjustPolicy(QComboBox.AdjustToContents)
             head.addWidget(w)
         head.addStretch(1)
@@ -94,6 +97,7 @@ class Subplot(QFrame):
         self.option.currentIndexChanged.connect(self._option_changed)
         self.freq.currentIndexChanged.connect(lambda *_: host.redraw())
         self.qty.currentIndexChanged.connect(lambda *_: host.redraw())
+        self.ref.currentIndexChanged.connect(lambda *_: host.redraw())
         self.pw.scene().sigMouseMoved.connect(lambda pos: host._moved(self, pos))
         self.pw.scene().sigMouseClicked.connect(lambda ev: host._clicked(self, ev))
         self._fit_head()
@@ -103,8 +107,10 @@ class Subplot(QFrame):
         keep = self.option.currentText()
         self.option.blockSignals(True)
         self.option.clear()
+        sources = self.host.sources()
         if self.kind == CARTESIAN:
-            self.option.addItems(list(KINDS) + (list(ANT_KINDS) if self.host.antenna else []))
+            self.option.addItems(list(KINDS) + (list(DIFF_KINDS) if len(sources) > 1 else []) +
+                                 (list(ANT_KINDS) if self.host.antenna else []))
         elif self.kind == POLAR:
             self.option.addItems([S_POLAR] + ([FAR_CUTS] if self.host.sphere is not None else []))
         for pick in (self.wanted, keep):
@@ -123,12 +129,26 @@ class Subplot(QFrame):
             pick = keep if 0 <= keep < len(sph['freq']) else int(np.argmin(np.abs(sph['freq'] - f0)))
             self.freq.setCurrentIndex(pick)
         self.freq.blockSignals(False)
+        keep = self.ref.currentText()
+        self.ref.blockSignals(True)
+        self.ref.clear()
+        self.ref.addItems([f"against {x}" for x in sources])
+        if keep and self.ref.findText(keep) >= 0:
+            self.ref.setCurrentText(keep)
+        self.ref.blockSignals(False)
         self._fit_head()
 
     def _fit_head(self):
         far = self.mode == FAR_CUTS
         self.freq.setVisible(far)
         self.qty.setVisible(far)
+        self.ref.setVisible(self.mode in DIFF_KINDS)
+
+    @property
+    def reference(self):
+        """A difference plot's reference solver (its source name), else None."""
+        t = self.ref.currentText()
+        return t[len('against '):] if self.mode in DIFF_KINDS and t else None
 
     def _option_changed(self, *_):
         self.wanted = self.option.currentText()
@@ -334,6 +354,8 @@ class SPlot(QWidget):
         self.tree.expandAll()
         self._swatches()
         self.tree.blockSignals(False)
+        for sp in self.subplots:                                    # a difference plot needs two solvers
+            sp.fill_options()
         self.redraw()
         self.fit()
 
@@ -351,6 +373,10 @@ class SPlot(QWidget):
         for sp in self.subplots:
             if sp.mode in ANT_KINDS or sp.mode == FAR_CUTS:
                 self._draw(sp)
+
+    def sources(self):
+        """The solvers (sources) of the traces, in their order."""
+        return list(dict.fromkeys(t.source for t in getattr(self, 'traces', [])))
 
     def visible(self):
         """The checked traces."""
@@ -504,6 +530,19 @@ class SPlot(QWidget):
             for t in self.visible():
                 x, y = transform(mode, t)
                 pw.plot(x, y, pen=self._pen(t), name=t.label)
+        elif sp.kind == CARTESIAN and mode in DIFF_KINDS:
+            ref = sp.reference
+            pw.setLabel('left', f"{mode} against {ref}")
+            drawn = 0
+            for t in self.visible():
+                r = counterpart(self.traces, t, ref) if t.source != ref else None
+                if r is not None:
+                    x, y = difference(mode, t, r)
+                    pw.plot(x, y, pen=self._pen(t), name=f"{t.param} {t.source} − {ref}")
+                    drawn += 1
+            if not drawn:
+                pw.setTitle(f"tick a trace of a solver other than {ref} (the same S of {ref} is the reference)",
+                            size='9pt')
         elif sp.kind == CARTESIAN:
             pw.setLabel('left', mode)
             rows = (self.antenna or {}).get('rows') or []
