@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- kicad2ems: a board (substrate and ground), a microstrip line and the wave it carries -->
+  <rect x="4" y="30" width="56" height="26" rx="3" fill="#1f5f3f"/>
+  <rect x="4" y="52" width="56" height="4" rx="1.5" fill="#c8823a"/>
+  <rect x="6" y="38" width="52" height="5" rx="1" fill="#e0a050"/>
+  <path d="M6 22 C 12 8, 20 8, 26 22 S 40 36, 46 22 S 56 10, 58 16" fill="none" stroke="#2b7bd8" stroke-width="4"
+        stroke-linecap="round"/>
+</svg>

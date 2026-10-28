@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad2ems-gui"
+dynamic = ["version"]
+description = "kicad2ems's window: settings, runs and results (S-parameters, fields, antennas) of KiCad boards' EM simulations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "GPL-3.0-or-later"}
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
+dependencies = [
+    "kicad2ems>=261027.post2",     # the board model, settings, solvers and runs (kicad2ems.runs)
+    "PySide6-Essentials>=6.5",
+    "pyqtgraph>=0.13",
+    "h5py>=3",                     # frequency-domain field dumps, far fields
+    "PyOpenGL>=3.1",               # the 3D field view
+]
+
+[project.optional-dependencies]
+filter = ["dfsynth @ git+https://github.com/lowprocess/dfsynth"]   # the Filter page: dfsynth's filter synthesis
+test = ["pytest>=7"]
+
+[project.scripts]
+kicad2ems-gui = "kicad2ems_gui:main"
+kicad2openems-gui = "kicad2ems_gui:main"     # the old name
+
+[tool.setuptools.dynamic]
+version = {attr = "kicad2ems_gui.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kicad2ems_gui = ["*.svg"]                  # the window's and the application launcher's icon, the wand
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
