@@ -11,7 +11,7 @@ filter synthesis (the Filter page).
     volume3d     the 3D view's arrays (no Qt): copper, parts, field volumes, far-field surfaces
     splot, traces, fieldtab, antennatab, steering, filtertab, systempanel, statusbar, meters, panels, runfolders
 """
-__version__ = '261027-r1'
+__version__ = '261028-r1'
 
 
 
