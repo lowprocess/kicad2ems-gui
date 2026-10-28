@@ -25,21 +25,40 @@ DESCRIBE_FORMAT = 1                 # the --describe --json format this page rea
 def describe(python=None):
     """dfsynth's description, from `dfsynth --describe --json` in this Python (or `python`): {'kinds': {type:
     [topologies]}, 'presets': {name: {h, er, tand, material}}, 'options': [{key, flag, kind, default, choices, help,
-    group}]}. None when dfsynth cannot run there (not installed, or too old to describe itself). Asked once."""
+    group}]}. None when dfsynth cannot run there: not installed, too old to describe itself, or describing itself
+    in another format (why_not says which). Asked once."""
+    return _describe(python)[0]
+
+
+def why_not(python=None):
+    """Why describe() gave None, as the page says it ('' when it did not)."""
+    return _describe(python)[1]
+
+
+def _describe(python=None):
     import subprocess
     python = python or sys.executable
     if python not in _DESCRIPTIONS:
-        d = None
+        d, why = None, ''
         try:
             p = subprocess.run([python, '-m', 'dfsynth', '--describe', '--json'], capture_output=True, text=True,
                                timeout=60)
             if p.returncode == 0:
                 d = json.loads(p.stdout)
                 if d.get('format') != DESCRIBE_FORMAT:
-                    d = None
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            d = None
-        _DESCRIPTIONS[python] = d
+                    d, why = None, (f"dfsynth {d.get('version', '?')} describes itself in format {d.get('format')}, "
+                                    f"this page reads {DESCRIBE_FORMAT}: update "
+                                    f"{'kicad2ems-gui' if (d.get('format') or 0) > DESCRIBE_FORMAT else 'dfsynth'}")
+            elif 'No module named dfsynth' in p.stderr:
+                why = f"dfsynth is not installed, so filters cannot be designed here: {DFSYNTH_PIP}"
+            elif '--describe' in p.stderr:                          # argparse: unrecognized arguments
+                why = (f"this dfsynth is too old for the page (it has no --describe): update it, "
+                       f"python -m pip install -U 'dfsynth @ git+https://github.com/lowprocess/dfsynth'")
+            else:
+                why = f"dfsynth --describe failed: {(p.stderr.strip().splitlines() or ['?'])[-1]}"
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            why = f"dfsynth --describe failed: {type(e).__name__}: {e}"
+        _DESCRIPTIONS[python] = (d, why)
     return _DESCRIPTIONS[python]
 
 
@@ -166,7 +185,7 @@ class FilterTab(QWidget):
         self._type_changed()
         if self.desc is None:                                       # nothing to design with: say so, up front
             self.split.widget(0).setEnabled(False)
-            self.say(f"dfsynth is not installed, so filters cannot be designed here: {DFSYNTH_PIP}", 'error')
+            self.say(why_not() or f"dfsynth cannot be run here: {DFSYNTH_PIP}", 'error')
 
     # ---- the settings ----
     def _line(self, hint='', tip=''):

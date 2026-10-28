@@ -641,8 +641,8 @@ class ResultsTab(QWidget):
         self.which.clear()
         for f in files:
             try:
-                with open(f) as fh:
-                    solver = json.load(fh).get('solver', 'openems')
+                from kicad2ems.api.frontend import read_antenna
+                solver = read_antenna(f).get('solver', 'openems')
             except (OSError, ValueError):
                 solver = os.path.basename(f)
             self.which.addItem(solver, f)
@@ -724,8 +724,8 @@ class ResultsTab(QWidget):
         self.set_notes([], [])
         if summary and os.path.exists(summary):
             try:
-                with open(summary) as fh:
-                    sm = json.load(fh)
+                from kicad2ems.api.frontend import read_summary
+                sm = read_summary(summary)
                 self.set_notes(*run_notes(sm))
                 compare = compare or (sm.get('settings') or {}).get('compare')
                 zr = sm.get('zref')

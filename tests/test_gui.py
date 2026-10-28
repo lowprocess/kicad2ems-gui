@@ -1095,6 +1095,8 @@ def test_filter_page_from_the_description(monkeypatch):
     page.set_values(dict(type='lowpass', f0='2G', smooth=True))
     assert ft.filter_argv(page.values(), desc=desc) == ['-u', '-m', 'dfsynth', '--type', 'lowpass', '--f0', '2G',
                                                        '--smooth']
+    import shiboken6
+    shiboken6.delete(page)                  # now, not at interpreter exit: a parentless page's plots crash it then
 
 
 def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
@@ -1114,3 +1116,37 @@ def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
     assert w.setup.path == str(folder / 'rf_gcpw.toml') and (folder / 'rf_gcpw.kicad_pcb').exists()
     w.setup.dirty = False
     w.close()
+
+
+def test_filter_page_says_why_dfsynth_cannot_describe(tmp_path, monkeypatch):
+    """No dfsynth, one too old for --describe and one in another description format: three different messages."""
+    import sys
+    from kicad2ems_gui import filtertab as ft
+
+    def fake(code):                                                 # a Python whose 'dfsynth' behaves so
+        path = tmp_path / f"py{len(list(tmp_path.iterdir()))}"
+        path.write_text(f"#!{sys.executable}\nimport sys\n{code}\n")
+        path.chmod(0o755)
+        return str(path)
+    missing = fake("sys.stderr.write('No module named dfsynth\\n'); sys.exit(1)")
+    old = fake("sys.stderr.write('dfsynth: error: unrecognized arguments: --describe --json\\n'); sys.exit(2)")
+    newer = fake("print('{\"format\": 2, \"version\": \"x\"}')")
+    assert ft.describe(missing) is None and 'not installed' in ft.why_not(missing)
+    assert ft.describe(old) is None and 'too old' in ft.why_not(old)
+    assert ft.describe(newer) is None and 'update kicad2ems-gui' in ft.why_not(newer)
+
+
+def test_antenna_sphere_from_sphere_file(tmp_path):
+    """The sphere is where the solver's results say (sphere_file); openEMS's results from before it, in its run
+    folder."""
+    from kicad2ems_gui.antennatab import find_antenna
+    (tmp_path / 'fd').mkdir()
+    (tmp_path / 'fd' / 'sph.h5').write_bytes(b'')
+    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1', sphere_file='fd/sph.h5')))
+    res, sph, _ = find_antenna(str(tmp_path))
+    assert sph == str(tmp_path / 'fd' / 'sph.h5')
+    old = tmp_path / 'openems' / 'exc_P1p'
+    old.mkdir(parents=True)
+    (old / 'nf2ff_sphere.h5').write_bytes(b'')
+    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1+')))
+    assert find_antenna(str(tmp_path))[1] == str(old / 'nf2ff_sphere.h5')

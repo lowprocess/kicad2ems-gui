@@ -9,6 +9,7 @@ S-parameter traces for the interactive plots (no Qt here: testable without a dis
 """
 import os, re
 import numpy as np
+from kicad2ems.api.frontend import port_names              # noqa: F401  (traces.port_names, as before)
 
 KINDS = ('|S| (dB)', '|S| (linear)', 'Phase (deg)', 'Group delay (ns)', 'VSWR')     # the rectangular plot
 SMITH = 'Smith chart'                                     # the reflections beside it
@@ -68,21 +69,6 @@ def modes(names):
             order.append(base)
         out.append((mode, order.index(base) + 1))
     return out
-
-
-def port_names(path):
-    """Port names from the '! ports: 1=P1, 2=P2' comment kicad2ems writes, or None."""
-    try:
-        with open(path) as fh:
-            for line in fh:
-                if not line.startswith('!'):
-                    break
-                m = re.match(r'!\s*ports:\s*(.*)', line)
-                if m:
-                    return [p.split('=', 1)[1].strip() for p in m.group(1).split(',') if '=' in p]
-    except OSError:
-        pass
-    return None
 
 
 BY_SUFFIX = dict(openems='openEMS', mom25d='mom25d', qucs='qucsator', scikit='scikit-rf',

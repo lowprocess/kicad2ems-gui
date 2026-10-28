@@ -3,7 +3,7 @@ A results folder's antenna results (mode = antenna), for the GUI: the run's <nam
 far-field sphere (openEMS's <out>/openems/exc_<port>/nf2ff_sphere.h5, or mom25d's .npz). The Results page plots
 them (match, gain, efficiency, pattern cuts); the Viewer draws the pattern in 3D over the board.
 """
-import glob, json, os
+import glob, os
 import numpy as np
 from kicad2ems.api.frontend import read_sphere
 
@@ -19,14 +19,18 @@ def find_antenna(out_dir, path=None):
     js = [path] if path else antenna_files(out_dir)
     if not js:
         return None
-    with open(js[-1]) as fh:
-        res = json.load(fh)
+    from kicad2ems.api.frontend import read_antenna
+    try:
+        res = read_antenna(js[-1])
+    except (OSError, ValueError):                                   # unreadable, or a newer format
+        return None
     name = os.path.basename(js[-1])[:-len('_antenna.json')]
     solver = res.get('solver', 'openems')
-    if solver != 'openems':                                         # <name>_<solver>_antenna.json, its own sphere
-        name = name[:-len(f"_{solver}")] if name.endswith(f"_{solver}") else name
-        sph = os.path.join(out_dir, res.get('sphere_file', ''))
-    else:
+    if name.endswith(f"_{solver}"):                                 # <name>_<solver>_antenna.json (openEMS's: no suffix)
+        name = name[:-len(f"_{solver}")]
+    if res.get('sphere_file'):                                      # where the solver wrote it, relative to out_dir
+        sph = os.path.join(out_dir, res['sphere_file'])
+    else:                                                           # openEMS's results from before sphere_file
         tag = res.get('port', 'P1').replace('+', 'p').replace('-', 'n')
         sph = os.path.join(out_dir, 'openems', f"exc_{tag}", 'nf2ff_sphere.h5')
     s1p = os.path.join(out_dir, f"{name}_{solver}.s1p")

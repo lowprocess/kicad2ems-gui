@@ -163,7 +163,13 @@ class SystemPanel(QWidget):
         self.proc = None
         self.refresh_btn.setEnabled(True)
         try:
-            self.set_info(json.loads(out))
+            from kicad2ems.api.frontend import check_format
+            d = json.loads(out)
+            why = check_format(d, 'kicad2ems-sysinfo')
+            if why:
+                self.state.setText(f"system check: {why}")
+                return
+            self.set_info(d)
         except ValueError:
             self.state.setText(f"system check failed (code {code}): {err.strip().splitlines()[-1] if err.strip() else out[:200]}")
 
@@ -210,8 +216,8 @@ class SystemPanel(QWidget):
         if not runs:
             return False
         try:
-            with open(runs[-1]) as fh:
-                est = json.load(fh).get('estimates')
+            from kicad2ems.api.frontend import read_summary
+            est = read_summary(runs[-1]).get('estimates')
         except (OSError, ValueError):
             return False
         if not est:

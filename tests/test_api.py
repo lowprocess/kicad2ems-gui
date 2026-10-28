@@ -16,3 +16,5 @@ def test_planview_has_what_a_subclass_uses():
     for name in ('load', 'set_board', 'set_lines_visible', 'current_layer', 'z_of', 'redraw', 'fit', 'select',
                  'selected', 'plot', 'mesh', '_moved', '_clicked'):
         assert hasattr(v, name), name
+    import shiboken6
+    shiboken6.delete(v)                     # now, not at interpreter exit (a parentless plot can crash it then)

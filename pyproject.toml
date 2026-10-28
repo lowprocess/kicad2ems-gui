@@ -16,11 +16,15 @@ classifiers = [
 ]
 authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
 dependencies = [
-    "kicad2ems>=261027.post2",     # the board model, settings, solvers and runs (kicad2ems.runs)
+    "kicad2ems>=261028.post1",     # the board model, settings, solvers, runs, examples (kicad2ems.api.frontend 2.1)
     "PySide6-Essentials>=6.5",
     "pyqtgraph>=0.13",
     "h5py>=3",                     # frequency-domain field dumps, far fields
     "PyOpenGL>=3.1",               # the 3D field view
+    "numpy>=1.24",                 # imported here too (each also comes with kicad2ems)
+    "shapely>=2.0",                # volume3d: the board's outline and copper
+    "matplotlib>=3.7",             # volume3d: colour maps
+    "pillow>=9",                   # fieldtab: saving a frame
 ]
 
 [project.optional-dependencies]

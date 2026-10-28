@@ -7,7 +7,7 @@ holds one board's results (a shared one had shown another board's dumps after op
     preview_dir(base, board)      # <base>/<board>_preview
     runs(base, board)             # [(folder, label)], the newest first: this board's runs that wrote a summary
 """
-import datetime, glob, json, os, re
+import datetime, glob, os, re
 
 STAMP = '%Y%m%d_%H%M%S'
 
@@ -41,8 +41,8 @@ def runs(base, board):
             continue
         when = datetime.datetime.strptime(m.group(1), STAMP)
         try:
-            with open(summary) as fh:
-                solvers = json.load(fh).get('solvers') or []
+            from kicad2ems.api.frontend import read_summary
+            solvers = read_summary(summary).get('solvers') or []
         except (OSError, ValueError):
             solvers = []
         out.append((d, f"{when:%Y-%m-%d %H:%M:%S}" + (f" ({', '.join(solvers)})" if solvers else '')))
