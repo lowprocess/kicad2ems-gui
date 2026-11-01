@@ -4,6 +4,7 @@ The Viewer: everything about the board and its fields in one page.
     3D       the board in 3D: copper, vias, a solver's mesh, plane and volume dumps in place, the far field
     Plan     the board from above: one layer's copper, a solver's mesh on it, the ports
     Cut      a cut through a field dump, with its values (time frames, phases, live while openEMS runs)
+    Section  the field across the line-model section picked, solved when it is picked
     Images   the plots a run wrote (the openEMS mesh with its side views, the model, the line model)
 
 The line model is an overlay of 3D and Plan: its sections coloured by Z0 against the ports' impedance, listed
@@ -19,12 +20,14 @@ from kicad2ems.api.frontend import overlay as ov
 from .fieldtab import FieldsTab
 from .panels import ImagePanel
 from .planview import PlanView
+from .sectionview import SectionView
 from .volumetab import VolumeTab
 
-VIEWS = ('3D', 'Plan', 'Cut', 'Images')
+VIEWS = ('3D', 'Plan', 'Cut', 'Section', 'Images')
 TIPS = {'3D': 'the board in 3D: copper, a solver\'s mesh, the line model, dumps in place, the far field',
         'Plan': 'the board from above: one layer, a solver\'s mesh, the line model (hover, click a section)',
         'Cut': 'a cut through a field dump, with its values',
+        'Section': 'the field across the line-model section picked: strength, equipotentials, the copper, the mesh',
         'Images': 'the plots the run wrote: the openEMS mesh and its side views, the model, the line model'}
 
 
@@ -69,7 +72,7 @@ class Viewer(QWidget):
     def __init__(self, win=None):
         super().__init__()
         self.win, self.out, self.lines = win, None, None
-        self.cuts, self.volume, self.plan = FieldsTab(win), VolumeTab(win), PlanView()
+        self.cuts, self.volume, self.plan, self.section = FieldsTab(win), VolumeTab(win), PlanView(), SectionView()
         self.images = ImagePanel('the plots of a preview or a run: the openEMS mesh, the model, the line model')
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -99,7 +102,8 @@ class Viewer(QWidget):
         lay.addLayout(bar)
 
         self.stack = QStackedWidget()
-        self.views = {'3D': self.volume, 'Plan': self.plan, 'Cut': self.cuts, 'Images': self.images}
+        self.views = {'3D': self.volume, 'Plan': self.plan, 'Cut': self.cuts, 'Section': self.section,
+                      'Images': self.images}
         for w in self.views.values():
             self.stack.addWidget(w)
         side = QWidget()
@@ -109,13 +113,14 @@ class Viewer(QWidget):
         self.legend = Z0Legend()
         sl.addWidget(self.legend)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['section', 'Z0 (Ω)', 'mm', 'ps', 'εeff'])
+        self.tree.setHeaderLabels(['section', 'Z0 (Ω)', 'mm', 'ps', 'εeff', 'by'])
+        self.tree.headerItem().setToolTip(5, "where its Z0 came from: the formula, or the field solver")
         self.tree.setRootIsDecorated(True)
         self.tree.setUniformRowHeights(True)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.tree.header().setStretchLastSection(False)
         self.tree.setColumnWidth(0, 170)
-        for c in range(1, 5):
+        for c in range(1, 6):
             self.tree.header().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.tree.itemSelectionChanged.connect(self._tree_picked)
         sl.addWidget(self.tree, 1)
@@ -133,6 +138,7 @@ class Viewer(QWidget):
         self.split.setSizes([880, 380])
         lay.addWidget(self.split, 1)
         self.plan.selected.connect(lambda i: self.select(i, source='plan'))
+        self._picked = None
         self._items = {}
         self.set_view('3D' if self.volume.gl is not None else 'Plan')
         self._fit()
@@ -152,8 +158,11 @@ class Viewer(QWidget):
         self.images.show_images(imgs)
         self._fill_tree()
         self.detail.setText(' ')                                    # a new folder: nothing selected
+        self._picked = None
+        self.section.show_section(None)
         has = {'3D': self.volume.gl is not None and bool(three or plan), 'Plan': plan,
-               'Cut': bool(self.cuts.srcs), 'Images': bool(imgs)}
+               'Cut': bool(self.cuts.srcs), 'Images': bool(imgs),
+               'Section': any(e.get('section') for e in (self.lines or {}).get('elements', []))}
         for n, b in self.buttons.items():
             b.setEnabled(has[n])
         cur = self.view()
@@ -184,7 +193,8 @@ class Viewer(QWidget):
                 it = QTreeWidgetItem([e.get('label') or e.get('kind', ''), f"{z0:.1f}" if z0 else '',
                                       f"{e['length']:.2f}" if e.get('length') is not None else '',
                                       f"{e['delay_ps']:.1f}" if e.get('delay_ps') else '',
-                                      f"{e['eeff']:.2f}" if e.get('eeff') else ''])
+                                      f"{e['eeff']:.2f}" if e.get('eeff') else '',
+                                      {'formula': 'formula', 'cut': 'field', 'cpwg': 'field'}.get(e.get('source'), '')])
                 it.setIcon(0, _swatch(ov.z0_colour(z0, ref, half)))
                 it.setData(0, Qt.UserRole, e['id'])
                 it.setToolTip(0, ov.describe(e))
@@ -212,6 +222,8 @@ class Viewer(QWidget):
         for n, b in self.buttons.items():
             b.setChecked(n == name)
         self._fit()
+        if name == 'Section':
+            self._show_section()
         self.view_changed.emit(name)
 
     def view(self):
@@ -219,7 +231,8 @@ class Viewer(QWidget):
 
     def _fit(self):
         """The section list where it means something: a line model, shown, in the 3D or plan view."""
-        on = bool(self.lines) and self.lines_on.isChecked() and self.view() in ('3D', 'Plan')
+        on = bool(self.lines) and self.view() in ('3D', 'Plan', 'Section') and \
+            (self.lines_on.isChecked() or self.view() == 'Section')
         self.side.setVisible(on)
         self.lines_on.setVisible(bool(self.lines) and self.view() in ('3D', 'Plan'))
         n = len([e for e in (self.lines or {}).get('elements', []) if e.get('kind') != 'coupling'])
@@ -251,6 +264,16 @@ class Viewer(QWidget):
                 self.tree.scrollToItem(self._items[i])
             self.tree.blockSignals(False)
         self.detail.setText(ov.describe(self.lines['elements'][i]) if (i is not None and self.lines) else ' ')
+        self._picked = i
+        if self.view() == 'Section':
+            self._show_section()
+
+    def _show_section(self):
+        """The Section view on the section picked; solved only here, while that view is the one shown."""
+        i = self._picked
+        e = self.lines['elements'][i] if (i is not None and self.lines) else None
+        if e is not self.section.e:
+            self.section.show_section(e)
 
     @property
     def selected(self):

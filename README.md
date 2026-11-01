@@ -28,6 +28,7 @@ It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 2610
 | `runner.py` | the settings form without Qt: fields, sections, solver tick boxes, configs read and written back |
 | `planview.py` | the board seen from above, with the line model and the meshes (the KiCad plugin's map too) |
 | `viewer.py`, `volumetab.py`, `volume3d.py` | the plan, cut and 3D views; `volume3d` holds their arrays, without Qt |
+| `sectionview.py` | the field across a line-model section (the KiCad plugin's too) |
 | `splot.py`, `traces.py` | S-parameter plots, Smith charts, traces and their export |
 | `fieldtab.py`, `antennatab.py`, `steering.py` | field maps, antenna results, beam steering |
 | `filtertab.py` | the Filter page (dfsynth) |

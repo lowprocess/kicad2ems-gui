@@ -1,5 +1,5 @@
 """kicad2ems-gui: the settings form without a display, and the Qt window (offscreen)."""
-import json, math, os, pytest
+import json, math, os, time, pytest
 import numpy as np
 from kicad2ems_gui.runner import write_toml, settings_values, FIELDS
 from kicad2ems.config import build_settings
@@ -358,6 +358,55 @@ def test_line_model_drawing(wilkinson_preview):
     seg = ov.plan_segments(next(iter(__import__('kicad2ems.meshes', fromlist=['find']).find(wilkinson_preview).values())),
                            (0, -20, 25, 0, 0, 0.8), 0.8)
     assert seg.shape[1] == 2 and len(seg) % 2 == 0 and len(seg) > 0
+
+
+def test_section_view(wilkinson_preview):
+    """The Section view: a section picked in the list solved when the view is shown, its Z0 where it comes from, the
+    field drawn with the copper; a section with no cross-section says so; a new folder clears it."""
+    pytest.importorskip('PySide6')
+    pytest.importorskip('pyqtgraph')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from kicad2ems_gui import application
+    from kicad2ems_gui.viewer import Viewer
+    app = application()
+    v = Viewer()
+    v.load(wilkinson_preview)
+    assert v.buttons['Section'].isEnabled()
+    v.set_view('Plan')
+    arm = next(e for e in v.lines['elements'] if e['kind'] == 'trace' and e['z0'] and e['z0'] > 60 and e['length'])
+    v.select(arm['id'])
+    assert v.section.e is None                                      # not solved until the view is shown
+    v.set_view('Section')
+    assert v.section.e is arm and not v.side.isHidden()
+
+    def settle():
+        for _ in range(3000):
+            app.processEvents()
+            if not v.section.busy():
+                break
+            time.sleep(0.005)
+        app.processEvents()
+    settle()
+    text = v.section.info.text()
+    assert v.section.v is not None and 'Z0' in text and 'formula' in text and 'nodes' in text
+    img = v.section.img.image
+    assert img is not None and np.isfinite(img).any()
+    assert len(v.section.items) > 3                                 # lines, arrows, copper
+    assert v.section.mode.count() >= 1 and v.section.mode.currentData() == 'cut'
+    for what in (1, 0):
+        v.section.show_what.setCurrentIndex(what)
+        v.section.mesh_on.setChecked(bool(what))
+        v.section.redraw()
+    n = len(v.section.items)
+    v.section.redraw()
+    assert len(v.section.items) == n                                # nothing piles up
+    other = next((e for e in v.lines['elements'] if not e.get('section')), None)
+    if other is not None:
+        v.select(other['id'])
+        settle()
+        assert v.section.v is None and 'no cross-section' in v.section.info.text()
+    v.load(wilkinson_preview)
+    assert v.section.e is None and v.section.v is None
 
 
 def test_viewer_sections_and_views(wilkinson_preview):

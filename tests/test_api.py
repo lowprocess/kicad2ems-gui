@@ -5,7 +5,7 @@ import subprocess, sys
 def test_api_loads_qt_on_first_use():
     code = "import sys, kicad2ems_gui.api as a; print('PySide6' in sys.modules, a.API_VERSION)"
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout.split(None, 1)
-    assert out == ['False', '(1, 0)\n']
+    assert out == ['False', '(1, 1)\n']
 
 
 def test_planview_has_what_a_subclass_uses():
