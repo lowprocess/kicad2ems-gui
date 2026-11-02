@@ -29,7 +29,7 @@ def find_antenna(out_dir, path=None):
     if name.endswith(f"_{solver}"):                                 # <name>_<solver>_antenna.json (openEMS's: no suffix)
         name = name[:-len(f"_{solver}")]
     if res.get('sphere_file'):                                      # where the solver wrote it, relative to out_dir
-        sph = os.path.join(out_dir, res['sphere_file'])
+        sph = os.path.normpath(os.path.join(out_dir, res['sphere_file']))     # it is written with '/'
     else:                                                           # openEMS's results from before sphere_file
         tag = res.get('port', 'P1').replace('+', 'p').replace('-', 'n')
         sph = os.path.join(out_dir, 'openems', f"exc_{tag}", 'nf2ff_sphere.h5')

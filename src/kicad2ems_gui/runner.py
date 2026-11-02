@@ -117,12 +117,13 @@ def write_toml(path, values):
 
 
 def _rel(path, base):
-    """A path written relative to the config's folder where that is possible (portable configs)."""
+    """A path written relative to the config's folder where that is possible (portable configs), with '/' (Windows
+    reads it too, and the config moves between systems)."""
     try:
         rel = os.path.relpath(path, base)
     except ValueError:                                     # another drive (Windows)
         return path
-    return path if rel.startswith(os.pardir + os.sep + os.pardir) else rel     # at most one folder up
+    return path if rel.startswith(os.pardir + os.sep + os.pardir) else rel.replace(os.sep, '/')   # at most one up
 
 
 def _value_end(lines, i, start):

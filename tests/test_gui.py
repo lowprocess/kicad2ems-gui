@@ -39,7 +39,7 @@ def test_window_builds(tmp_path):
 def test_dump_lists_and_extra_settings(tmp_path):
     cfg = tmp_path / 'c.toml'
     cfg.write_text('board = "b.kicad_pcb"\nmode = "antenna"\nair = 7.5\nno_mask = true\n'
-                   'dump = ["E@F.Cu@2,6", "J@y=3"]\n[openems]\nbc = "pml_8"\n')
+                   'dump = ["E@F.Cu@2,6", "J@y=3"]\n[openems]\nbc = "pml_8"\n', encoding='utf-8')
     vals = settings_values(str(cfg))
     assert vals['mode'] == 'antenna' and vals['dump'] == ['E@F.Cu@2,6', 'J@y=3']
     from kicad2ems_gui.runner import extra_values
@@ -140,15 +140,15 @@ def test_run_panel_plots_the_mom25d_sweep():
 def test_save_config_keeps_the_file(tmp_path):
     """Saving over a loaded config keeps its comments, tables and unknown keys; paths relative to the file."""
     from kicad2ems_gui.runner import save_config, extra_values
-    (tmp_path / 'b.kicad_pcb').write_text('')
+    (tmp_path / 'b.kicad_pcb').write_text('', encoding='utf-8')
     src = tmp_path / 'c.toml'
     src.write_text('# my board\nboard = "b.kicad_pcb"   # the board\npos = "x.pos"\nfmin = 1.0  # GHz\n'
-                   'nets = [\n  "RF",\n  "GND",\n]\nfuture_key = 3\n\n[openems]\nair = 5.0   # mm\nend-db = -40\n')
+                   'nets = [\n  "RF",\n  "GND",\n]\nfuture_key = 3\n\n[openems]\nair = 5.0   # mm\nend-db = -40\n', encoding='utf-8')
     vals = dict(settings_values(str(src)), **extra_values(str(src)))
     vals.update(fmin=2.0, nets=['RF'], **{'solver:mom25d': True})
     del vals['pos']                                                 # the field was cleared
     save_config(str(src), vals, template=str(src))
-    text = src.read_text()
+    text = src.read_text(encoding='utf-8')
     assert '# my board' in text and 'board = "b.kicad_pcb"   # the board' in text
     assert 'fmin = 2.0  # GHz' in text and 'pos' not in text and 'future_key = 3' in text
     assert 'air = 5.0   # mm' in text and 'end-db = -40.0' in text
@@ -161,13 +161,13 @@ def test_save_config_keeps_the_file(tmp_path):
     new = tmp_path / 'sub' / 'n.toml'                                # a new file: only what differs from the defaults
     new.parent.mkdir()
     save_config(str(new), vals)
-    t = new.read_text()
+    t = new.read_text(encoding='utf-8')
     assert 'board = "../b.kicad_pcb"' in t and 'points' not in t and 'fmin = 2.0' in t
     assert build_settings({}, str(new)).board == str(tmp_path / 'b.kicad_pcb')
 
 
 def _s2p(path, f, S, names=('IN', 'OUT')):
-    with open(path, 'w') as fh:
+    with open(path, 'w', encoding='utf-8') as fh:
         fh.write(f"! ports: 1={names[0]}, 2={names[1]}\n# Hz S RI R 50\n")
         for fi, s in zip(f, S):
             fh.write(f"{fi:.6e} " + " ".join(f"{v.real:.9e} {v.imag:.9e}" for v in (s[0, 0], s[1, 0], s[0, 1], s[1, 1])) + "\n")
@@ -193,7 +193,7 @@ def test_traces(tmp_path):
     assert value_at('VSWR', s11, 2e9) == __import__('pytest').approx(1.1 / 0.9)
     assert np.isnan(value_at('|S| (dB)', s11, 5e9)) and value_at('Smith chart', s11, 2e9) == __import__('pytest').approx(0.1)
     export_csv(tmp_path / 'x.csv', [s11, s21], '|S| (dB)', reflections=[s11])
-    head = (tmp_path / 'x.csv').read_text().splitlines()[0]
+    head = (tmp_path / 'x.csv').read_text(encoding='utf-8').splitlines()[0]
     assert head == 'f_GHz,S11 openEMS dB,S21 openEMS dB,S11 openEMS re,S11 openEMS im'
     assert len(smith_grid()) > 10
 
@@ -209,12 +209,12 @@ def test_window_config_and_plots(tmp_path, monkeypatch):
     from kicad2ems_gui.traces import load_traces
     app = QApplication.instance() or QApplication([])
     cfg = tmp_path / 'c.toml'
-    cfg.write_text('# hello\nboard = "b.kicad_pcb"\nfmin = 1.0\n')
+    cfg.write_text('# hello\nboard = "b.kicad_pcb"\nfmin = 1.0\n', encoding='utf-8')
     w = MainWindow(str(cfg))
     assert w.setup.path == str(cfg) and not w.setup.dirty and w.windowTitle().startswith('c.toml -')
     w.setup.edits['fmax'][0].setText('7')
     assert w.setup.dirty and w.windowTitle().startswith('c.toml*')
-    assert w.setup.save() and not w.setup.dirty and 'fmax = 7.0' in cfg.read_text() and '# hello' in cfg.read_text()
+    assert w.setup.save() and not w.setup.dirty and 'fmax = 7.0' in cfg.read_text(encoding='utf-8') and '# hello' in cfg.read_text(encoding='utf-8')
     assert str(cfg) in w.recent()
     f = np.linspace(1e9, 3e9, 11)
     S = np.full((11, 2, 2), 0.2 + 0j)
@@ -256,7 +256,7 @@ def test_gui_solver_boxes(tmp_path, monkeypatch):
     assert [k for k, *_ in FIELDS if k.startswith('solver:')] == ['solver:auto', 'solver:openems', 'solver:mom25d',
                                                                     'solver:gfdtd', 'solver:qucs', 'solver:scikit']
     p = tmp_path / 'c.toml'
-    p.write_text('board = "b.kicad_pcb"\nsolvers = ["mom", "lines"]\n')
+    p.write_text('board = "b.kicad_pcb"\nsolvers = ["mom", "lines"]\n', encoding='utf-8')
     vals = settings_values(str(p))
     assert not vals['solver:openems'] and vals['solver:mom25d'] and vals['solver:scikit'] and not vals['solver:qucs']
     assert 'solvers' not in extra_values(str(p))                    # the tick boxes own it
@@ -267,14 +267,14 @@ def test_gui_solver_boxes(tmp_path, monkeypatch):
     s = solvers_from_form(dict(vals, **{'solver:auto': True, 'solver:mom25d': False, 'solver:scikit': False}))
     assert 'solvers' not in s                                       # auto alone: the default, not written
     save_config(str(p), s, template=str(p))
-    assert 'solvers' not in p.read_text() and build_settings({}, str(p)).solver_plan()[0] == ['auto']
+    assert 'solvers' not in p.read_text(encoding='utf-8') and build_settings({}, str(p)).solver_plan()[0] == ['auto']
     s = solvers_from_form(dict(vals, **{'solver:mom25d': False}))   # only the line model
     assert s['solvers'] == ['scikit']
     write_toml(tmp_path / 'r.toml', s)
     assert build_settings({}, str(tmp_path / 'r.toml')).solver_plan()[0] == ['scikit']
     none = solvers_from_form({k: False for k, *_ in FIELDS if k.startswith('solver:')})
     assert none['solvers'] == []                                    # none: the GUI says so
-    p.write_text('board = "b.kicad_pcb"\nsolvers = ["auto"]\n')     # auto has a box of its own (and is the default)
+    p.write_text('board = "b.kicad_pcb"\nsolvers = ["auto"]\n', encoding='utf-8')     # auto has a box of its own (and is the default)
     vals = settings_values(str(p))
     assert vals['solver:auto'] and not vals['solver:openems'] and 'solvers' not in solvers_from_form(vals)   # the default
 
@@ -284,11 +284,11 @@ def test_save_config_in_solver_tables(tmp_path):
     from kicad2ems_gui.runner import settings_values, save_config, extra_values
     p = tmp_path / 'c.toml'
     p.write_text('board = "b.kicad_pcb"\n[solver.mom25d]\nport = "auto"  # MoM\ndmax = 0.4\n'
-                 '[other]\nmom_port = "x"\n')
+                 '[other]\nmom_port = "x"\n', encoding='utf-8')
     vals = dict(settings_values(str(p)), **extra_values(str(p)))
     assert vals['mom_port'] == 'auto' and vals['mom_dmax'] == 0.4
     save_config(str(p), dict(vals, mom_port='lumped'), template=str(p))
-    text = p.read_text()
+    text = p.read_text(encoding='utf-8')
     assert 'port = "lumped"' in text and '# MoM' in text and 'dmax = 0.4' in text and 'mom_port = "x"' in text
     s = build_settings({}, str(p))
     assert s.mom_port == 'lumped' and s.mom_dmax == 0.4
@@ -316,7 +316,7 @@ def test_system_panel(tmp_path):
     assert p.solvers.topLevelItemCount() == 2
     est = dict(solvers=dict(openems=dict(seconds=60, gb=0.1, what='0.5 M cells'),
                             mom25d=dict(seconds=600, gb=30.0, gpu_gb=8.1, how='tiled', what='45,000 unknowns')))
-    (tmp_path / 'b_run.json').write_text(json.dumps(dict(estimates=est)))
+    (tmp_path / 'b_run.json').write_text(json.dumps(dict(estimates=est)), encoding='utf-8')
     assert p.load_estimates(str(tmp_path)) and p.est_tree.topLevelItemCount() == 2
     oems, mom = (p.est_tree.topLevelItem(i) for i in range(2))
     assert 'not available' in oems.text(4) and '~10 min' == mom.text(1)
@@ -513,7 +513,7 @@ def test_meters(tmp_path, monkeypatch):
     """The status bar's readings: system RAM from /proc/meminfo, a process tree's memory, the GPU tools' output."""
     from kicad2ems_gui import meters
     mi = tmp_path / 'meminfo'
-    mi.write_text('MemTotal:       16000000 kB\nMemFree:  1 kB\nMemAvailable:    4000000 kB\n')
+    mi.write_text('MemTotal:       16000000 kB\nMemFree:  1 kB\nMemAvailable:    4000000 kB\n', encoding='utf-8')
     used, total = meters.ram(str(mi))
     assert total == pytest.approx(16.384) and used == pytest.approx(12.288)
     assert meters.ram(str(tmp_path / 'none')) is None or len(meters.ram(str(tmp_path / 'none'))) == 2   # sysconf
@@ -646,7 +646,7 @@ def test_run_folders(tmp_path):
     for d, solvers in ((d1, ['openems']), (d2, ['mom25d', 'qucs']), (other, ['openems'])):
         os.makedirs(d)
         name = os.path.basename(d).rsplit('_', 2)[0]
-        json.dump(dict(solvers=solvers), open(os.path.join(d, f"{name}_run.json"), 'w'))
+        json.dump(dict(solvers=solvers), open(os.path.join(d, f"{name}_run.json"), 'w', encoding='utf-8'))
     os.makedirs(run_dir(base, 'x/rf_coupler.kicad_pcb', t + datetime.timedelta(hours=1)))   # stopped: no summary
     rs = runs(base, 'x/rf_coupler.kicad_pcb')
     assert [d for d, _ in rs] == [d2, d1]
@@ -747,7 +747,7 @@ def test_beam_steering_bar(tmp_path, monkeypatch):
     res = dict(match=dict(f_res=2.45e9, s11_db=-20.0, zin=[50.0, 0.0], bw10=None), rows=c['rows'],
                f_pattern=2.45e9, port='P1@0, P2@0', solver='mom25d', sphere_file='b_mom25d_sphere.npz',
                array_file='b_mom25d_array.npz', drive=['P1@0', 'P2@0'], peak=c['peak'])
-    (tmp_path / 'b_mom25d_antenna.json').write_text(json.dumps(res))
+    (tmp_path / 'b_mom25d_antenna.json').write_text(json.dumps(res), encoding='utf-8')
     w = MainWindow()
     assert w.results.load_antenna(str(tmp_path))
     bar = w.results.steer
@@ -944,7 +944,7 @@ def test_beam_steering_bar_2d(tmp_path, monkeypatch):
     res = dict(match=dict(f_res=2.45e9, s11_db=-20.0, zin=[50.0, 0.0], bw10=None), rows=c['rows'],
                f_pattern=2.45e9, port=', '.join(drive), solver='mom25d', sphere_file='a_mom25d_sphere.npz',
                array_file='a_mom25d_array.npz', drive=drive, grid='4x4', peak=c['peak'])
-    (tmp_path / 'a_mom25d_antenna.json').write_text(json.dumps(res))
+    (tmp_path / 'a_mom25d_antenna.json').write_text(json.dumps(res), encoding='utf-8')
     w = MainWindow()
     assert w.results.load_antenna(str(tmp_path))
     bar = w.results.steer
@@ -1115,19 +1115,19 @@ def test_run_notes_on_the_results_page(tmp_path, monkeypatch):
                      'wave ports need a longer feed']
     f = np.linspace(1e9, 3e9, 11)
     _s2p(tmp_path / 'b_openems.s2p', f, np.full((11, 2, 2), 0.2 + 0j))
-    (tmp_path / 'b_run.json').write_text(json.dumps(sm))
+    (tmp_path / 'b_run.json').write_text(json.dumps(sm), encoding='utf-8')
     w = MainWindow()
     r = w.results
     files = [('s', str(tmp_path / 'b_openems.s2p')), ('run', str(tmp_path / 'b_run.json'))]
     r.show(files)
     assert r.notes_btn.isVisibleTo(r) and r.notes_btn.text() == 'Notes and warnings (1 warning, 4 notes)'
     assert r.notes_btn.isChecked() and r.notes.isVisibleTo(r) and '#c62828' in r.notes.text()
-    (tmp_path / 'b_run.json').write_text(json.dumps(dict(sm, warnings=[], log=[])))
+    (tmp_path / 'b_run.json').write_text(json.dumps(dict(sm, warnings=[], log=[])), encoding='utf-8')
     r.show(files)
     assert r.notes_btn.text() == 'Notes and warnings (2 notes)' and not r.notes.isVisibleTo(r)
     r.notes_btn.setChecked(True)
     assert r.notes.isVisibleTo(r) and 'solid ground' in r.notes.text()
-    (tmp_path / 'b_run.json').write_text(json.dumps(dict(warnings=[], model=dict(notes=[]))))
+    (tmp_path / 'b_run.json').write_text(json.dumps(dict(warnings=[], model=dict(notes=[]))), encoding='utf-8')
     r.show(files)
     assert not r.notes_btn.isVisibleTo(r)
     w.setup.dirty = False
@@ -1188,7 +1188,12 @@ def test_filter_page_says_why_dfsynth_cannot_describe(tmp_path, monkeypatch):
 
     def fake(code):                                                 # a Python whose 'dfsynth' behaves so
         path = tmp_path / f"py{len(list(tmp_path.iterdir()))}"
-        path.write_text(f"#!{sys.executable}\nimport sys\n{code}\n")
+        if sys.platform == 'win32':                                 # no shebangs: a .cmd runs the script
+            path.with_suffix('.py').write_text(f"import sys\n{code}\n", encoding='utf-8')
+            path = path.with_suffix('.cmd')
+            path.write_text(f'@"{sys.executable}" "{path.with_suffix(".py")}" %*\r\n', encoding='utf-8')
+            return str(path)
+        path.write_text(f"#!{sys.executable}\nimport sys\n{code}\n", encoding='utf-8')
         path.chmod(0o755)
         return str(path)
     missing = fake("sys.stderr.write('No module named dfsynth\\n'); sys.exit(1)")
@@ -1205,11 +1210,11 @@ def test_antenna_sphere_from_sphere_file(tmp_path):
     from kicad2ems_gui.antennatab import find_antenna
     (tmp_path / 'fd').mkdir()
     (tmp_path / 'fd' / 'sph.h5').write_bytes(b'')
-    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1', sphere_file='fd/sph.h5')))
+    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1', sphere_file='fd/sph.h5')), encoding='utf-8')
     res, sph, _ = find_antenna(str(tmp_path))
     assert sph == str(tmp_path / 'fd' / 'sph.h5')
     old = tmp_path / 'openems' / 'exc_P1p'
     old.mkdir(parents=True)
     (old / 'nf2ff_sphere.h5').write_bytes(b'')
-    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1+')))
+    (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1+')), encoding='utf-8')
     assert find_antenna(str(tmp_path))[1] == str(old / 'nf2ff_sphere.h5')
