@@ -514,6 +514,7 @@ def test_meters(tmp_path, monkeypatch):
     from kicad2ems_gui import meters
     mi = tmp_path / 'meminfo'
     mi.write_text('MemTotal:       16000000 kB\nMemFree:  1 kB\nMemAvailable:    4000000 kB\n', encoding='utf-8')
+    monkeypatch.setattr(meters.sys, 'platform', 'linux')            # /proc/meminfo's reading, on any system
     used, total = meters.ram(str(mi))
     assert total == pytest.approx(16.384) and used == pytest.approx(12.288)
     assert meters.ram(str(tmp_path / 'none')) is None or len(meters.ram(str(tmp_path / 'none'))) == 2   # sysconf
