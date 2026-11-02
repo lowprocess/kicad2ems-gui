@@ -29,7 +29,7 @@ def fit_note(need, have):
 
 
 def _user_value(key):
-    """The user's own site.toml setting of key, or '' (the field shows it, not setup.sh's)."""
+    """The user's own site.toml setting of key, or '' (the field shows it, not the installer's)."""
     from kicad2ems.api.frontend import sitecfg
     try:
         import tomllib
@@ -67,10 +67,12 @@ class SystemPanel(QWidget):
         lay.addWidget(box)
         box = QGroupBox('Programs')                                 # the machine's, not a board's: site.toml
         pf = QFormLayout(box)
+        from kicad2ems.api.frontend import sitecfg
+        where = sitecfg.user_file()
         row = QHBoxLayout()
         self.qucsator = QLineEdit()
         self.qucsator.setToolTip("the line model's circuit solver (Qucs-S's qucsator_rf, or qucsator): empty finds it "
-                                 "on the PATH (or where setup.sh recorded it); saved in ~/.config/kicad2ems/site.toml")
+                                 f"on the PATH (or where the installer recorded it); saved in {where}")
         self.qucsator.setText(_user_value('qucsator'))
         self.qucsator.editingFinished.connect(self._save_programs)
         row.addWidget(self.qucsator, 1)
@@ -82,8 +84,8 @@ class SystemPanel(QWidget):
         row = QHBoxLayout()
         self.openems_venv = QLineEdit()
         self.openems_venv.setToolTip("a Python environment (venv) with openEMS (CSXCAD and openEMS), when it is not "
-                                     "in kicad2ems's own: its folder, or its bin/python. It must be the same Python "
-                                     "version as kicad2ems's; saved in ~/.config/kicad2ems/site.toml")
+                                     "in kicad2ems's own: its folder, or its python (bin/python, Scripts\\python.exe). "
+                                     f"It must be the same Python version as kicad2ems's; saved in {where}")
         self.openems_venv.setPlaceholderText('empty: openEMS in kicad2ems\'s own Python')
         self.openems_venv.setText(_user_value('openems_venv'))
         self.openems_venv.editingFinished.connect(self._save_programs)
@@ -93,6 +95,21 @@ class SystemPanel(QWidget):
         b.clicked.connect(self._browse_openems)
         row.addWidget(b)
         pf.addRow('openEMS environment', row)
+        self.openems_dir = None
+        if sys.platform == 'win32':                                 # Windows: where openEMS's DLLs are
+            row = QHBoxLayout()
+            self.openems_dir = QLineEdit()
+            self.openems_dir.setToolTip("the unpacked openEMS for Windows, the folder with openEMS.dll and CSXCAD.dll: "
+                                        f"its DLLs go on the DLL search; saved in {where}")
+            self.openems_dir.setPlaceholderText('empty: OPENEMS_INSTALL_PATH, or the DLLs already on the PATH')
+            self.openems_dir.setText(_user_value('openems_dir'))
+            self.openems_dir.editingFinished.connect(self._save_programs)
+            row.addWidget(self.openems_dir, 1)
+            b = QPushButton('…')
+            b.setFixedWidth(28)
+            b.clicked.connect(self._browse_openems_dir)
+            row.addWidget(b)
+            pf.addRow('openEMS folder', row)
         lay.addWidget(box)
         box = QGroupBox('Hardware')
         self.hw = QFormLayout(box)
@@ -114,7 +131,8 @@ class SystemPanel(QWidget):
     # ---- the programs ----
     def _browse_qucsator(self):
         from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(self, 'qucsator program', self.qucsator.text() or '/usr/bin')
+        start = self.qucsator.text() or ('' if sys.platform == 'win32' else '/usr/bin')
+        path, _ = QFileDialog.getOpenFileName(self, 'qucsator program', start)
         if path:
             self.qucsator.setText(path)
             self._save_programs()
@@ -127,11 +145,22 @@ class SystemPanel(QWidget):
             self.openems_venv.setText(path)
             self._save_programs()
 
+    def _browse_openems_dir(self):
+        from PySide6.QtWidgets import QFileDialog
+        path = QFileDialog.getExistingDirectory(self, 'The openEMS folder (openEMS.dll, CSXCAD.dll)',
+                                                self.openems_dir.text() or os.path.expanduser('~'))
+        if path:
+            self.openems_dir.setText(path)
+            self._save_programs()
+
     def _save_programs(self):
         """The programs into the user's site.toml (sitecfg), then the solvers checked again."""
         from kicad2ems.api.frontend import sitecfg
         changed = False
-        for key, field in (('qucsator', self.qucsator), ('openems_venv', self.openems_venv)):
+        fields = [('qucsator', self.qucsator), ('openems_venv', self.openems_venv)]
+        if self.openems_dir is not None:
+            fields.append(('openems_dir', self.openems_dir))
+        for key, field in fields:
             path = field.text().strip()
             if path != _user_value(key):
                 sitecfg.set_user(key, path)

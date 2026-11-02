@@ -1,5 +1,5 @@
 """kicad2ems-gui: the settings form without a display, and the Qt window (offscreen)."""
-import json, math, os, time, pytest
+import json, math, os, sys, time, pytest
 import numpy as np
 from kicad2ems_gui.runner import write_toml, settings_values, FIELDS
 from kicad2ems.config import build_settings
@@ -509,7 +509,7 @@ def test_results_subplots_and_layout(tmp_path, monkeypatch):
     app.processEvents()
 
 
-def test_meters(tmp_path):
+def test_meters(tmp_path, monkeypatch):
     """The status bar's readings: system RAM from /proc/meminfo, a process tree's memory, the GPU tools' output."""
     from kicad2ems_gui import meters
     mi = tmp_path / 'meminfo'
@@ -517,6 +517,11 @@ def test_meters(tmp_path):
     used, total = meters.ram(str(mi))
     assert total == pytest.approx(16.384) and used == pytest.approx(12.288)
     assert meters.ram(str(tmp_path / 'none')) is None or len(meters.ram(str(tmp_path / 'none'))) == 2   # sysconf
+    import emsdev.memory
+    monkeypatch.setattr(meters.sys, 'platform', 'win32')
+    monkeypatch.setattr(emsdev.memory, 'windows_status', lambda: (32e9, 20e9))
+    assert meters.ram() == (12.0, 32.0)                             # Windows: GlobalMemoryStatusEx
+    monkeypatch.undo()
     if os.path.isdir('/proc/self'):
         assert meters.tree_rss(os.getpid()) > 0.01                  # this test process
     assert meters.tree_rss(None) is None and meters.tree_rss(2 ** 30) is None
@@ -711,6 +716,15 @@ def test_solvers_window_saves_qucsator(tmp_path, monkeypatch):
     p.openems_venv.setText('/opt/openems/venv')                     # the openEMS environment, the same way
     p._save_programs()
     assert sitecfg.get('openems_venv') == '/opt/openems/venv' and sitecfg.get('qucsator') is None and checks == [1, 1, 1]
+    assert p.openems_dir is None or sys.platform == 'win32'          # the DLL folder: a Windows field
+    import kicad2ems_gui.systempanel as sp
+    monkeypatch.setattr(sp.sys, 'platform', 'win32')
+    w = SystemPanel()
+    w.stop()
+    monkeypatch.setattr(w, 'refresh', lambda: checks.append(1))
+    w.openems_dir.setText('C:/openEMS')
+    w._save_programs()
+    assert sitecfg.get('openems_dir') == 'C:/openEMS' and sitecfg.get('openems_venv') == '/opt/openems/venv'
     monkeypatch.setattr(sitecfg, '_cache', None)
 
 

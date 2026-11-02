@@ -42,7 +42,7 @@ version = {attr = "kicad2ems_gui.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-kicad2ems_gui = ["*.svg"]                  # the window's and the application launcher's icon, the wand
+kicad2ems_gui = ["*.svg", "*.ico"]         # the window's and the application launcher's icon (.ico: Windows'), the wand
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,18 +3,26 @@ Live memory for the GUI's status bar (no Qt here: testable without a display). A
 couple of seconds; the GPU through its vendor's tool, run by the caller as a separate process, so the GUI never
 holds a GPU context or imports CuPy.
 
-    ram()                    (used, total) GB of the system (Linux: /proc/meminfo; elsewhere what sysconf gives)
+    ram()                    (used, total) GB of the system (Linux: /proc/meminfo; Windows: GlobalMemoryStatusEx;
+                             elsewhere what sysconf gives)
     tree_rss(pid)            GB resident in a process and its children (Linux), or None
     gpu_command()            [program, args...] that prints the GPU's memory (nvidia-smi / rocm-smi), or None
     parse_gpu(name, text)    [(used, total) GB per GPU] from that program's output
     estimate(est, values, usable)  what the next run should take: the solvers it runs, their time and memory
 """
-import json, os, shutil
+import json, os, shutil, sys
 
 
 def ram(meminfo='/proc/meminfo'):
     """(used, total) of the system's memory in GB: used = total - available (what other programs can still
-    have). None where neither /proc/meminfo nor sysconf can tell."""
+    have). None where neither /proc/meminfo, Windows nor sysconf can tell."""
+    if sys.platform == 'win32':
+        try:
+            from emsdev.memory import windows_status
+            st = windows_status()
+        except ImportError:                                         # an emsdev from before it
+            st = None
+        return ((st[0] - st[1]) / 1e9, st[0] / 1e9) if st else None
     try:
         kb = {}
         with open(meminfo) as fh:
