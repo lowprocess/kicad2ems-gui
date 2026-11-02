@@ -108,7 +108,7 @@ def load_design(base):
     path = base + '_design.json'
     if not os.path.exists(path):
         return None
-    with open(path) as fh:
+    with open(path, encoding='utf-8') as fh:
         design = json.load(fh)
     model = read_touchstone(base + '_model.s2p') if os.path.exists(base + '_model.s2p') else None
     # only this run's rounds (the design JSON lists them): a folder of an earlier run with more rounds is not one

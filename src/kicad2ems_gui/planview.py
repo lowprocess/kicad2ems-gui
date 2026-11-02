@@ -114,7 +114,7 @@ class PlanView(QWidget):
         from kicad2ems.api.frontend import meshes
         boards = sorted(glob.glob(os.path.join(out_dir, '*_board.json')), key=os.path.getmtime) if out_dir else []
         try:
-            with open(boards[-1]) as fh:
+            with open(boards[-1], encoding='utf-8') as fh:
                 board = json.load(fh)
         except (IndexError, OSError, ValueError):
             board = None

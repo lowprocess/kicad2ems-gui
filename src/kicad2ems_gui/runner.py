@@ -180,7 +180,7 @@ def save_config(path, values, template=None):
         text = "\n".join(lines) + "\n"
     else:
         import re
-        src = open(template).read().splitlines()
+        src = open(template, encoding='utf-8').read().splitlines()
         out, seen, i, first_table, table = [], set(), 0, None, {}
         key_re = re.compile(r'^(\s*)([A-Za-z0-9_-]+)(\s*=\s*)')
         while i < len(src):
@@ -234,7 +234,7 @@ def save_config(path, values, template=None):
             out[at:at] = extra
         text = "\n".join(out) + "\n"
     tmp = path + '.tmp'
-    with open(tmp, 'w') as fh:
+    with open(tmp, 'w', encoding='utf-8') as fh:
         fh.write(text)
     os.replace(tmp, path)
 

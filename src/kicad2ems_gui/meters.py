@@ -25,7 +25,7 @@ def ram(meminfo='/proc/meminfo'):
         return ((st[0] - st[1]) / 1e9, st[0] / 1e9) if st else None
     try:
         kb = {}
-        with open(meminfo) as fh:
+        with open(meminfo, encoding='utf-8') as fh:
             for line in fh:
                 k, _, v = line.partition(':')
                 if k in ('MemTotal', 'MemAvailable'):
@@ -50,7 +50,7 @@ def _children(proc='/proc'):
         if not d.isdigit():
             continue
         try:
-            with open(os.path.join(proc, d, 'stat')) as fh:
+            with open(os.path.join(proc, d, 'stat'), encoding='utf-8') as fh:
                 stat = fh.read()
             ppid = int(stat[stat.rindex(')') + 2:].split()[1])      # the name may hold spaces and brackets
         except (OSError, ValueError, IndexError):
@@ -71,7 +71,7 @@ def tree_rss(pid, proc='/proc'):
             continue
         seen.add(p)
         try:
-            with open(os.path.join(proc, str(p), 'status')) as fh:
+            with open(os.path.join(proc, str(p), 'status'), encoding='utf-8') as fh:
                 for line in fh:
                     if line.startswith('VmRSS:'):
                         total += float(line.split()[1]) * 1.024e-6  # kiB -> GB
