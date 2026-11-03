@@ -131,6 +131,28 @@ def test_volume_panel(volume_run, tmp_path):
     assert not any(k.startswith('cu') or k == 'outline' for k in w.items)
 
 
+def test_volume_panel_without_opengl(volume_run, monkeypatch):
+    """A machine whose OpenGL the 3D view cannot use (a VM's GDI Generic 1.1, Qt's software renderer out of
+    PyOpenGL's reach): the panel says why and loads nothing; the window still opens."""
+    pytest.importorskip('PySide6')
+    pytest.importorskip('pyqtgraph')
+    pytest.importorskip('OpenGL')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PySide6.QtWidgets import QApplication, QLabel
+    from kicad2ems_gui import volumetab
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(volumetab, '_GL_WHY', None)
+    monkeypatch.setenv('KICAD2EMS_GL', 'off')
+    w = volumetab.VolumeTab()
+    assert w.gl is None and not w.load(volume_run[0])
+    assert any('3D field view is off' in lb.text() for lb in w.findChildren(QLabel))
+    monkeypatch.setattr(volumetab, '_GL_WHY', None)
+    monkeypatch.setattr(volumetab, '_gl_probe', lambda: "OpenGL 1.1.0 (GDI Generic): the 3D view needs OpenGL 2.1")
+    monkeypatch.delenv('KICAD2EMS_GL')
+    assert volumetab.gl_problem().startswith('OpenGL 1.1.0') and volumetab.VolumeTab().gl is None
+    monkeypatch.setattr(volumetab, '_GL_WHY', None)
+
+
 def test_saved_animations(volume_run, board, tmp_path, monkeypatch):
     """Save GIF / MP4 of the 3D view: a frequency-domain dump's period, a time-domain dump's time steps (it had
     given a single still frame), and one frame only (the envelope) refused."""
