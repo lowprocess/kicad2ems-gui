@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QCheckBox, QLabe
 import pyqtgraph as pg
 from kicad2ems.api.frontend import overlay as ov
 from .panels import FlowLayout
+from . import meshpick as mp
 
 COPPER = QColor(214, 140, 64)
 OTHER = QColor(214, 140, 64, 45)
@@ -86,6 +87,10 @@ class PlanView(QWidget):
         self.mesh.setToolTip("a solver's discretisation of this layer: openEMS's grid lines, mom25d's triangles")
         self.mesh.currentIndexChanged.connect(self.redraw)
         bar.addWidget(self.mesh)
+        self.solved = QCheckBox('solved')
+        self.solved.setStyleSheet(f'QCheckBox {{ color: {mp.SOLVED_COLOUR}; }}')
+        self.solved.toggled.connect(self.redraw)
+        bar.addWidget(self.solved)
         bar.addStretch(1)
         fit = QPushButton('Fit')
         fit.clicked.connect(self.fit)
@@ -143,16 +148,24 @@ class PlanView(QWidget):
         self.mesh.blockSignals(True)
         self.mesh.clear()
         self.mesh.addItem('none', None)
-        for solver, p in self.meshes.items():
+        for solver in mp.solvers(self.meshes):
             self.mesh.addItem(meshes.LABELS.get(solver, solver), solver)
         self.mesh.setCurrentIndex(max(self.mesh.findData(keep), 0))
         self.mesh.setEnabled(bool(self.meshes))
         self.mesh.blockSignals(False)
+        self._solved_state()
         self.sel = self.hover = None
         self.redraw()
         if fit:
             self.fit()
         return self.board is not None
+
+    def _solved_state(self):
+        """The "solved" tick box: usable where a run of the solver picked wrote the mesh it solved on."""
+        from kicad2ems.api.frontend import meshes
+        solver = self.mesh.currentData()
+        self.solved.setEnabled(mp.solved(self.meshes, solver) is not None)
+        self.solved.setToolTip(mp.tip(self.meshes, solver, meshes.counts))
 
     def set_lines_visible(self, on):
         self.show_lines = on
@@ -187,14 +200,19 @@ class PlanView(QWidget):
                 add(_item(_path(polys), QPen(QColor(150, 90, 30), 1) if own else QPen(Qt.NoPen),
                           QBrush(self.copper_colour if own else self.other_colour), -10 if own else -20))
         solver = self.mesh.currentData()
-        if solver in self.meshes and self.box is not None and self.z_of(lay) is not None:
-            seg = ov.plan_segments(self.meshes[solver], self.box, self.z_of(lay))
-            if len(seg):
-                colour = dict(openems='#1f4fa0', mom25d='#1d7a3a').get(solver, '#333')
-                c = pg.PlotCurveItem(seg[:, 0], seg[:, 1], connect='pairs', pen=pg.mkPen(colour, width=1))
-                c.setOpacity(0.55)
-                c.setZValue(0)
-                add(c)
+        self._solved_state()
+        if solver and self.box is not None and self.z_of(lay) is not None:
+            drawn = [(mp.shown(self.meshes, solver), dict(openems='#1f4fa0', mom25d='#1d7a3a').get(solver, '#333'),
+                      1.0, 0.55, 0)]
+            if self.solved.isChecked() and mp.solved(self.meshes, solver):      # the run's, in pink over it
+                drawn.append((mp.solved(self.meshes, solver), mp.SOLVED_COLOUR, 1.3, 0.85, 1))
+            for path, colour, width, alpha, z in drawn:
+                seg = ov.plan_segments(path, self.box, self.z_of(lay)) if path else []
+                if len(seg):
+                    c = pg.PlotCurveItem(seg[:, 0], seg[:, 1], connect='pairs', pen=pg.mkPen(colour, width=width))
+                    c.setOpacity(alpha)
+                    c.setZValue(z)
+                    add(c)
         if self.lines and self.show_lines:
             ref, half = ov.reference(self.lines), ov.span(self.lines)
             for e in self.lines['elements']:

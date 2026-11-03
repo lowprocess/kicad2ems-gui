@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, Q
                                QPushButton, QLabel, QDoubleSpinBox, QFileDialog, QMessageBox, QSpinBox)
 
 from . import volume3d as v3
+from . import meshpick as mp
 
 N_PHASE = 24
 
@@ -200,7 +201,6 @@ class FrameSlider(QWidget):
         self.label.setText(self.labels[i])
 
 
-
 class VolumeTab(QWidget):
     def __init__(self, win=None):
         super().__init__()
@@ -278,6 +278,8 @@ class VolumeTab(QWidget):
         self.boxc = QCheckBox('board box and vias')
         self.boxc.setChecked(True)
         self.mesh = QComboBox()
+        self.solved = QCheckBox('solved mesh')
+        self.solved.setStyleSheet(f'QCheckBox {{ color: {mp.SOLVED_COLOUR}; }}')
         self.far = QComboBox()
         self.far.setToolTip("the far-field gain pattern (antenna mode) at a recorded frequency, over the board: "
                             "its distance from the board's centre is the gain, 30 dB of range")
@@ -342,7 +344,7 @@ class VolumeTab(QWidget):
                                    ('Every n-th frame', self.every), ('', self.play_btn),
                                    ('', saves))),
                   ('Board', True, (('Height scale', self.zscale), ('', self.copper), ('Copper shown', self.cu_t),
-                                   ('', self.boxc), ('Mesh', self.mesh), ('', self.lines_on),
+                                   ('', self.boxc), ('Mesh', self.mesh), ('', self.solved), ('', self.lines_on),
                                    ('Z0 relief', self.relief), ('', self.parts_on))),
                   ('Far field', True, (('Pattern', self.far), ('Size', self.far_size), ('Height', self.far_up),
                                        ('', self.steer))))
@@ -396,7 +398,8 @@ class VolumeTab(QWidget):
         for w in (self.envelope, self.whole, self.log, self.copper, self.boxc):
             w.toggled.connect(self._recolour)
         self.cu_t.valueChanged.connect(self._cu_t_set)
-        self.mesh.currentIndexChanged.connect(lambda *_: self._board())
+        self.mesh.currentIndexChanged.connect(lambda *_: (self._solved_state(), self._board()))
+        self.solved.toggled.connect(lambda *_: self._board())
         self.far.currentIndexChanged.connect(lambda *_: (self._board(), self.reset_camera()))
         self.far_size.valueChanged.connect(lambda *_: self._board())
         self.far_up.valueChanged.connect(lambda *_: (self._board(), self.reset_camera()))
@@ -441,11 +444,13 @@ class VolumeTab(QWidget):
         self.mesh.blockSignals(True)
         self.mesh.clear()
         self.mesh.addItem('none', None)
-        for solver, path in self.mesh_files.items():
+        for solver in mp.solvers(self.mesh_files):
+            path = mp.shown(self.mesh_files, solver)
             self.mesh.addItem(f"{meshes.LABELS.get(solver, solver)}: {meshes.counts(path)}", solver)
         i = self.mesh.findData(keep)
         self.mesh.setCurrentIndex(max(i, 0))
         self.mesh.blockSignals(False)
+        self._solved_state()
         self.dump.blockSignals(True)
         self.dump.clear()
         self.dump.addItems([s.label for s in self.srcs])
@@ -661,6 +666,13 @@ class VolumeTab(QWidget):
         self.status.setText(f"far field at {f / 1e9:.4g} GHz: peak gain {peak:.2f} dBi (30 dB of range); "
                             f"drag to orbit, wheel to zoom, Ctrl + drag to pan")
 
+    def _solved_state(self):
+        """The "solved mesh" tick box: usable where a run of the solver picked wrote the mesh it solved on."""
+        from kicad2ems.api.frontend import meshes
+        solver = self.mesh.currentData()
+        self.solved.setEnabled(mp.solved(self.mesh_files, solver) is not None)
+        self.solved.setToolTip(mp.tip(self.mesh_files, solver, meshes.counts))
+
     def _board(self):
         """Copper (translucent orange), vias and the board's box, at the height scale."""
         gl, zs = self.gl, self.zscale.value()
@@ -717,18 +729,23 @@ class VolumeTab(QWidget):
                 self.view.addItem(ln)
                 self.items['vias'] = ln
         solver = self.mesh.currentData()
-        if solver and solver in self.mesh_files:                    # a solver's mesh as lines over the board
+        if solver and mp.shown(self.mesh_files, solver):           # a solver's mesh as lines over the board
             from kicad2ems.api.frontend import meshes
-            b = v3.board_box(g)
-            seg = meshes.segments(self.mesh_files[solver], box=b, planes=sorted(set((g.get('cu_z') or {}).values())))
-            if len(seg):
-                seg = seg.copy()
-                seg[:, 2] *= zs
-                colour = dict(openems=(0.1, 0.3, 0.7, 0.55), mom25d=(0.1, 0.5, 0.2, 0.7)).get(solver, (0.2, 0.2, 0.2, 0.6))
-                ln = gl.GLLinePlotItem(pos=seg.astype(np.float32), mode='lines', color=colour, width=1, antialias=True)
-                ln.setDepthValue(-1)
-                self.view.addItem(ln)
-                self.items['mesh'] = ln
+            b, planes = v3.board_box(g), sorted(set((g.get('cu_z') or {}).values()))
+            drawn = [('mesh', mp.shown(self.mesh_files, solver), 1, dict(openems=(0.1, 0.3, 0.7, 0.55),
+                      mom25d=(0.1, 0.5, 0.2, 0.7)).get(solver, (0.2, 0.2, 0.2, 0.6)))]
+            if self.solved.isChecked() and mp.solved(self.mesh_files, solver):  # the run's, in pink over it
+                drawn.append(('mesh solved', mp.solved(self.mesh_files, solver), 1.5, mp.SOLVED_RGBA))
+            for key, path, width, colour in drawn:
+                seg = meshes.segments(path, box=b, planes=planes)
+                if len(seg):
+                    seg = seg.copy()
+                    seg[:, 2] *= zs
+                    ln = gl.GLLinePlotItem(pos=seg.astype(np.float32), mode='lines', color=colour, width=width,
+                                           antialias=True)
+                    ln.setDepthValue(-1 if key == 'mesh' else 0)
+                    self.view.addItem(ln)
+                    self.items[key] = ln
         self._line_model(zs)
         self._parts(zs)
         self._far_field(g, zs)
