@@ -1219,3 +1219,14 @@ def test_antenna_sphere_from_sphere_file(tmp_path):
     (old / 'nf2ff_sphere.h5').write_bytes(b'')
     (tmp_path / 'b_antenna.json').write_text(json.dumps(dict(solver='openems', port='P1+')), encoding='utf-8')
     assert find_antenna(str(tmp_path))[1] == str(old / 'nf2ff_sphere.h5')
+
+
+def test_the_solved_mesh_goes_with_its_solver():
+    """meshpick: one Mesh entry a solver; the run's mesh (<solver>-run) is the pink overlay, or the mesh itself where
+    there is no preview."""
+    from kicad2ems_gui import meshpick as mp
+    found = {'mom25d-run': 'r.npz', 'openems': 'o.npz', 'mom25d': 'p.npz'}
+    assert mp.solvers(found) == ['mom25d', 'openems']
+    assert (mp.shown(found, 'mom25d'), mp.solved(found, 'mom25d')) == ('p.npz', 'r.npz')
+    assert mp.solved(found, 'openems') is None and mp.solved(found, None) is None
+    assert mp.shown({'mom25d-run': 'r.npz'}, 'mom25d') == 'r.npz'
