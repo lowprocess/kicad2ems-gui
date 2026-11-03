@@ -5,6 +5,7 @@ plays one period of Re(F e^jphi), a time-domain one its frames; *Save GIF / MP4*
 from the current camera. Needs PyOpenGL (pip install PyOpenGL; the gui extra has it).
 """
 import os
+import sys
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage
@@ -23,6 +24,64 @@ def gl_module():
         return gl, ''
     except Exception as e:                                          # ImportError: no PyOpenGL
         return None, f"{type(e).__name__}: {e}"
+
+
+_GL_WHY = None
+
+
+def gl_problem():
+    """'' when the 3D view can draw here, else why not (cached): pyqtgraph.opengl needs OpenGL 2.1, and it draws
+    through PyOpenGL, which must reach the context Qt made. A Windows VM without the GPU passed through has only
+    OpenGL 1.1 (GDI Generic); Qt then falls back to its own software renderer (opengl32sw.dll), whose context
+    PyOpenGL (the system's opengl32.dll) cannot reach, and every GL call fails. KICAD2EMS_GL=off turns the view
+    off, =on skips this check."""
+    global _GL_WHY
+    if _GL_WHY is None:
+        setting = os.environ.get('KICAD2EMS_GL', '').strip().lower()
+        if setting in ('0', 'off', 'no', 'false'):
+            _GL_WHY = 'turned off (KICAD2EMS_GL=off)'
+        elif setting in ('1', 'on', 'yes', 'true'):
+            _GL_WHY = ''
+        else:
+            try:
+                _GL_WHY = _gl_probe()
+            except Exception as e:                                  # a broken driver: no view, not no window
+                _GL_WHY = f"OpenGL check failed: {type(e).__name__}: {e}"
+    return _GL_WHY
+
+
+def _gl_probe():
+    from PySide6.QtGui import QGuiApplication, QOffscreenSurface, QOpenGLContext
+    if QGuiApplication.platformName() in ('offscreen', 'minimal'):  # tests: nothing is drawn
+        return ''
+    ctx = QOpenGLContext()
+    if not ctx.create():
+        return "no OpenGL context: the display driver has no OpenGL (a VM needs the GPU passed through)"
+    surf = QOffscreenSurface()
+    surf.setFormat(ctx.format())
+    surf.create()
+    if not ctx.makeCurrent(surf):
+        return "an OpenGL context could not be made current"
+    try:
+        fmt = ctx.format()
+        have = f"{fmt.majorVersion()}.{fmt.minorVersion()}"
+        try:
+            from OpenGL import GL
+            ver, ren = GL.glGetString(GL.GL_VERSION), GL.glGetString(GL.GL_RENDERER)
+        except Exception as e:                                      # NullFunctionError, GLError: no context here
+            ver = ren = None
+            why = f" ({type(e).__name__})"
+        else:
+            why = ''
+        if not ver:
+            return (f"PyOpenGL cannot reach Qt's OpenGL {have} context{why}: Qt fell back to its software renderer, "
+                    f"the display driver's OpenGL being too old (a VM needs the GPU passed through)")
+        dec = lambda b: b.decode(errors='replace') if isinstance(b, bytes) else str(b)
+        if not ctx.isOpenGLES() and (fmt.majorVersion(), fmt.minorVersion()) < (2, 1):
+            return f"OpenGL {dec(ver)} ({dec(ren)}): the 3D view needs OpenGL 2.1 (a VM needs the GPU passed through)"
+        return ''
+    finally:
+        ctx.doneCurrent()
 
 
 _COPPER_SHADER = None
@@ -152,8 +211,15 @@ class VolumeTab(QWidget):
         self.lines, self.sel = None, None                           # the line model (overlay.load_lines), a section
         lay = QHBoxLayout(self)
         self.gl, why = gl_module()
-        if self.gl is None:
-            note = QLabel(f"The 3D field view needs PyOpenGL: pip install PyOpenGL (into the Python of the GUI)\n({why})")
+        problem = gl_problem() if self.gl is not None else ''
+        if self.gl is None or problem:
+            msg = (f"The 3D field view is off: {problem}" if problem else
+                   f"The 3D field view needs PyOpenGL: pip install PyOpenGL (into the Python of the GUI)\n({why})")
+            if problem:
+                print(f"kicad2ems-gui: {msg}", file=sys.stderr)
+            self.gl = None
+            note = QLabel(msg)
+            note.setWordWrap(True)
             note.setAlignment(Qt.AlignCenter)
             note.setStyleSheet('color: gray')
             lay.addWidget(note)
