@@ -44,7 +44,8 @@ def test_dump_lists_and_extra_settings(tmp_path):
     assert vals['mode'] == 'antenna' and vals['dump'] == ['E@F.Cu@2,6', 'J@y=3']
     from kicad2ems_gui.runner import extra_values
     extra = extra_values(str(cfg))
-    assert extra == dict(mask=False, bc='pml_8')                    # kept for the runs: no field in the form
+    assert extra == dict(bc='pml_8')                                # kept for the runs: no field in the form
+    assert vals['mask'] is False                                    # no_mask = true: the form's mask box, unticked
     assert vals['air'] == 7.5                                       # the air margin has one (openEMS + gfdtd)
     write_toml(tmp_path / 'r.toml', dict(vals, **extra))
     s = build_settings({}, str(tmp_path / 'r.toml'))
