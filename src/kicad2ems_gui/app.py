@@ -1,6 +1,6 @@
 """
 kicad2ems GUI (PySide6 + pyqtgraph): set up a run, preview it, watch it, see the results. The window has the
-settings on the left and four pages:
+settings on the left and five pages:
 
     Viewer   the board in 3D or from above, a solver's mesh, the line model coloured by Z0 (pick a section to read
              it), field dumps in place or as cuts (live while the run goes), the far field, the run's plots
@@ -8,6 +8,9 @@ settings on the left and four pages:
     Results  S-parameters and antenna results as Cartesian, Smith and polar plots you add and remove
     Filter Synthesis
              design a microstrip filter with dfsynth, validate and tune it on the solvers, open its board here
+    Power Integrity
+             a power rail's DC drop (maps, each load's voltage, via currents) and PDN impedance with its decaps,
+             from mom25d's power-integrity tool (python -m mom25d.pdn)
 
 Every run is the command-line tool started as a separate process with --events; the GUI follows its event
 stream, so a closed window never kills a simulation's results and the GUI needs no openEMS of its own. The
@@ -33,12 +36,13 @@ from .viewer import Viewer, VIEWS
 from .statusbar import MemoryMeters, EstimateButton
 from .meters import duration
 from .filtertab import FilterTab
+from .pdntab import PdnTab
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
-PANELS = ('Viewer', 'Run', 'Results', 'Filter')
-TITLES = {'Filter': 'Filter Synthesis'}                           # a page's tab title, when not its name
+PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN')
+TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
@@ -777,6 +781,7 @@ class MainWindow(QMainWindow):
         self.setup, self.runtab, self.results = SetupTab(self), RunTab(self), ResultsTab(self)
         self.viewer = Viewer(self)
         self.filter = FilterTab(self)
+        self.pdn = PdnTab(self)
         self.fields, self.volume = self.viewer.cuts, self.viewer.volume      # the field views, inside the viewer
         if getattr(self.volume, 'steer', None) is not None:          # its Far field section steers too
             self.results.link_steering(self.volume.steer)
@@ -802,7 +807,7 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         self.docks = {}
-        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter)):
+        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn)):
             d = QDockWidget(TITLES.get(name, name), self.work)
             d.setObjectName(name)
             d.setWidget(w)
@@ -830,6 +835,7 @@ class MainWindow(QMainWindow):
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
         return {'viewer': self.viewer.split, 'results': self.results.splot.split, 'filter': self.filter.split,
+                'pdn': self.pdn.split,
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
     def _restore_shape(self):
