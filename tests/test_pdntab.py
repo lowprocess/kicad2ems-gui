@@ -14,7 +14,7 @@ DESC = dict(format=1, options=[
 def test_argv_passes_what_was_set():
     argv = pdntab.pdn_argv(dict(rail='+3V3', volts='3.3', load='U1=2\nU2=0.5, U3=1', no_pdn=True), 'b.kicad_pcb', 'out',
                            DESC, python='py')
-    assert argv[:6] == ['py', '-m', 'mom25d.pdn', 'b.kicad_pcb', '--out', 'out']
+    assert argv[:6] == ['py', '-m', 'pcbqs.pdn', 'b.kicad_pcb', '--out', 'out']
     assert argv[6:] == ['--rail', '+3V3', '--load', 'U1=2', '--load', 'U2=0.5', '--load', 'U3=1', '--no-pdn']
 
 
@@ -53,3 +53,14 @@ def test_page_shows_a_result(tmp_path):
     page.show_result(r)
     assert 'U1' in page.summary.toPlainText()
     assert len(page.zplot.listDataItems()) == 3                      # U1, its bare planes, the target
+
+
+def test_transferred_unknown_supply_requires_explicit_voltage(tmp_path,monkeypatch):
+    from PySide6.QtWidgets import QApplication
+    app=QApplication.instance() or QApplication([])
+    monkeypatch.setattr(pdntab,'describe',lambda:DESC)
+    page=pdntab.PdnTab();page._transferred_unknown_voltage=True
+    page.set_values(dict(rail='VCC',volts=''))
+    board=tmp_path/'board.json';board.write_text('{}');page.board.setText(str(board))
+    page.start()
+    assert page.proc is None and 'supply voltage' in page.status.text()

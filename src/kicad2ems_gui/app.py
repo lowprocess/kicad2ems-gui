@@ -10,7 +10,7 @@ settings on the left and five pages:
              design a microstrip filter with dfsynth, validate and tune it on the solvers, open its board here
     Power Integrity
              a power rail's DC drop (maps, each load's voltage, via currents) and PDN impedance with its decaps,
-             from mom25d's power-integrity tool (python -m mom25d.pdn)
+             from pcbqs's power-integrity tool (python -m pcbqs.pdn)
 
 Every run is the command-line tool started as a separate process with --events; the GUI follows its event
 stream, so a closed window never kills a simulation's results and the GUI needs no openEMS of its own. The
@@ -38,11 +38,12 @@ from .meters import duration
 from .filtertab import FilterTab
 from .pdntab import PdnTab
 from .mqstab import MqsTab
+from .powercircuittab import PowerCircuitTab
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
-PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field')
+PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit')
 TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
@@ -784,6 +785,7 @@ class MainWindow(QMainWindow):
         self.filter = FilterTab(self)
         self.pdn = PdnTab(self)
         self.mqs = MqsTab(self)
+        self.circuit = PowerCircuitTab(self)
         self.fields, self.volume = self.viewer.cuts, self.viewer.volume      # the field views, inside the viewer
         if getattr(self.volume, 'steer', None) is not None:          # its Far field section steers too
             self.results.link_steering(self.volume.steer)
@@ -809,7 +811,7 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         self.docks = {}
-        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs)):
+        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs, self.circuit)):
             d = QDockWidget(TITLES.get(name, name), self.work)
             d.setObjectName(name)
             d.setWidget(w)
@@ -837,7 +839,7 @@ class MainWindow(QMainWindow):
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
         return {'viewer': self.viewer.split, 'results': self.results.splot.split, 'filter': self.filter.split,
-                'pdn': self.pdn.split, 'mqs': self.mqs.split,
+                'pdn': self.pdn.split, 'mqs': self.mqs.split, 'circuit': self.circuit.split,
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
     def _restore_shape(self):
@@ -1113,6 +1115,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev):
         if self.setup.maybe_save():
             self._save_shape()
+            self.circuit.stop()
+            if self.circuit.proc is not None:self.circuit.proc.waitForFinished(3000)
             self.system.stop()
             self.meters.stop()
             self.solvers_dialog.close()

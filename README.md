@@ -3,7 +3,7 @@
 The window of [kicad2ems](https://github.com/lowprocess/kicad2ems): a run's settings, the run itself and its
 results. S-parameter plots and the report, the board in plan and 3D with the line model over it, field maps and
 animations, antenna patterns and beam steering, dfsynth's filter synthesis (the Filter page), and converter input-loop magnetic fields (the Near field page).
-The Near field page uses `python -m mom25d.mqs`; update mom25d to obtain the command and its option schema.
+The Near field page uses `python -m pcbqs.mqs`; update mom25d to obtain the command and its option schema.
 
 ![A hairpin filter's S-parameters from gfdtd, mom25d and the line model, with a Smith chart](https://github.com/lowprocess/kicad2ems/raw/main/docs/img/readme/gui_sparams.png)
 
@@ -50,3 +50,26 @@ default `../kicad2ems`), and run the window offscreen. kicad2ems's `tools/test_a
 ## Licence
 
 GPL-3.0-or-later, as kicad2ems.
+
+Near field includes **Preview mesh** (no fill/solve), a layer-selectable copper
+and component view, and interactive field overlays with opacity controls. The
+Viewer supports the same meshes and approximate component bodies in 3D. Cyan
+marks simulated copper, grey the layout context and gold selected components.
+The **Use board and rail in Power Integrity** action transfers the board/net
+context while leaving DC source, voltage and loads for review.
+
+The **Circuit** page runs ngspice operational circuits through
+`python -m pcbqs.power_circuit`. It accepts an editable component model with
+switch/NMOS/VDMOS/vendor-subcircuit choices, capacitor ESR/ESL, inductor DCR,
+input filter and coupled receiver. Select frequency/load-power sweeps and k,
+optionally include a passive broadband PCB equivalent and infer periodic
+copper fields. Top controls override corresponding JSON values. Individual
+case fields open in the existing time-domain Viewer. The supplied parasitics
+and receiver are assumptions; see pcbqs `docs/power-circuit.md` for scope and
+validation, including the distinction between electrical startup and periodic
+field inference. ngspice must be installed separately.
+
+**Parallel circuit cases** runs independent operating points concurrently
+(default four, capped by available CPUs). Extraction/field transfers are prepared
+once and shared; stopping a sweep also stops its active ngspice children. Each
+case records runtime and per-trial solver statistics for profiling.

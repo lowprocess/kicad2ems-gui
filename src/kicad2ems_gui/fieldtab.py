@@ -26,6 +26,7 @@ class FieldsTab(QWidget):
     def __init__(self, win):
         super().__init__()
         self.win, self.out, self.srcs, self.src, self.pl, self.lim = win, None, [], None, None, None
+        self._layout_items, self._layout_key = [], None
         self.user_lim = False                                       # the colour bar was dragged: keep it
         lay = QVBoxLayout(self)
 
@@ -76,6 +77,18 @@ class FieldsTab(QWidget):
         self.auto.setToolTip('Off: keep the colour range (drag the colour bar to set it)')
         self.auto.toggled.connect(self._new_range)
         row.addWidget(self.auto)
+        lay.addLayout(row)
+        row = FlowLayout()
+        self.layout_on=QCheckBox('Layout overlay');self.layout_on.setChecked(True)
+        self.layout_on.toggled.connect(self.draw);row.addWidget(self.layout_on)
+        row.addWidget(QLabel('Layer'))
+        self.layout_layer=QComboBox();self.layout_layer.setToolTip('Project this copper layer under horizontal field maps; the sampled field height is unchanged');self.layout_layer.currentIndexChanged.connect(self.draw);row.addWidget(self.layout_layer)
+        self.components_on=QCheckBox('Components');self.components_on.setChecked(True)
+        self.components_on.toggled.connect(self.draw);row.addWidget(self.components_on)
+        row.addWidget(QLabel('Field opacity'))
+        self.field_opacity=QSlider(Qt.Horizontal);self.field_opacity.setRange(10,100);self.field_opacity.setValue(65)
+        self.field_opacity.setMaximumWidth(140);self.field_opacity.valueChanged.connect(self.draw);row.addWidget(self.field_opacity)
+        row.addWidget(QLabel('Cyan: simulated copper · grey: context · gold: selected parts'))
         lay.addLayout(row)
 
         self.view = pg.PlotWidget()
@@ -164,6 +177,14 @@ class FieldsTab(QWidget):
         i = self.dump.currentIndex()
         self.src = self.srcs[i] if 0 <= i < len(self.srcs) else None
         self.lim = None
+        keep=self.layout_layer.currentText()
+        self.layout_layer.blockSignals(True);self.layout_layer.clear()
+        cu=(self.src.geometry if self.src else {}).get('cu_z',{})
+        self.layout_layer.addItems(sorted(cu,key=lambda l:-cu[l]))
+        self.layout_layer.setCurrentIndex(max(0,self.layout_layer.findText(keep)))
+        self.layout_layer.blockSignals(False)
+        self._layout_key=None
+        if self.src is None:self._draw_layout(None)
         self._set_controls()
         if self.src and len(self.src):
             shape = self.src.shape()
@@ -261,6 +282,8 @@ class FieldsTab(QWidget):
         scaled = src.domain == 'FD' and src.scale(i)
         self.cbar.axis.setLabel(('log10 ' if use_log else '') + f"{what} ({src.unit}" +
                                 (', 1 V incident' if scaled else '') + ')')
+        self._draw_layout(ax)
+        self.img.setOpacity(self.field_opacity.value()/100 if ax==2 and self.layout_on.isChecked() and self.layout_layer.count() else 1.)
         segs = F.outlines(src.geometry, ax, pl.pos)
         if segs:
             xs = np.concatenate([np.append(u, np.nan) for u, _ in segs])
@@ -275,6 +298,19 @@ class FieldsTab(QWidget):
         p.setLabel('bottom', f"{pl.names[0]} (mm)")
         p.setLabel('left', f"{pl.names[1]} (mm)")
         self.frame_lab.setText(f"{i + 1}/{len(src)}: {src.frame_label(i, self._phase())}")
+
+    def _draw_layout(self, axis):
+        key=(id(self.src),axis,self.layout_layer.currentText(),self.layout_on.isChecked(),self.components_on.isChecked())
+        if key==self._layout_key:return
+        for it in self._layout_items:self.view.removeItem(it)
+        self._layout_items=[];self._layout_key=key
+        if self.src and axis==2 and self.layout_on.isChecked():
+            from .layoutscene import layout_items
+            self._layout_items=layout_items(self.src.geometry,self.layout_layer.currentText(),kicad=True,
+                                           components=self.components_on.isChecked())
+            for it in self._layout_items:self.view.addItem(it)
+        self.layout_layer.setEnabled(axis==2)
+        self.components_on.setEnabled(axis==2)
 
     def _sample(self, ax):
         """Images for one colour range over the series: time domain, up to 12 frames across it; frequency
@@ -358,6 +394,8 @@ class FieldsTab(QWidget):
             path += '.' + ext
         ax, comp, use_log = self.axis.currentIndex(), self._component(), self._use_log()
         lim = None if self.auto.isChecked() else self.lim
+        style=dict(enabled=self.layout_on.isChecked() and ax==2 and self.layout_layer.count()>0,layer=self.layout_layer.currentText(),
+                   components=self.components_on.isChecked(),opacity=self.field_opacity.value()/100)
         try:
             if ext == 'png':
                 from PIL import Image
@@ -366,7 +404,7 @@ class FieldsTab(QWidget):
                 what = f"|{src.field}|" if comp == 'mag' else f"{src.field}_{comp}"
                 Image.fromarray(F.render(self.pl, lo, hi, use_log,
                                          f"{what}, {self.slice_lab.text()}, {src.frame_label(i, self._phase())} "
-                                         f"({src.run} driven)", src.geometry, f"{what} ({src.unit})")).save(path)
+                                         f"({src.run} driven)", src.geometry, f"{what} ({src.unit})",layout=style)).save(path)
             else:
                 frames = self._frames()
                 n = len(frames) if src.domain == 'TD' else 24
@@ -378,7 +416,7 @@ class FieldsTab(QWidget):
                     dlg.setValue(k)
                     QApplication.processEvents()
                 F.save_animation(src, path, ax, self.slice.value(), comp, frames, fps=self.fps.value(),
-                                 log=self.log.isChecked(), lim=lim, progress=progress)
+                                 log=self.log.isChecked(), lim=lim, progress=progress, layout=style)
                 dlg.close()
         except Exception as e:
             QMessageBox.warning(self, 'Save', str(e))

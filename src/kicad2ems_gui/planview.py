@@ -107,7 +107,6 @@ class PlanView(QWidget):
         self.plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lay.addWidget(self.plot, 1)
         self.info = QLabel(' ')
-        self.info.setStyleSheet('color: #444')
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.info)
         self.show_lines = True
@@ -193,7 +192,14 @@ class PlanView(QWidget):
         ol = self.board.get('outline')
         if ol:
             add(_item(_path(_rings(ol)), QPen(QColor('#555'), 1.2), QBrush(QColor(236, 240, 236)), -30))
-        if self.copper.isChecked():
+        if 'active_nets' in self.board:
+            from .layoutscene import layout_items
+            from .volume3d import geometry_from_board
+            g=geometry_from_board(self.board)
+            if self.copper.isChecked():
+                for it in layout_items(g,lay,components=False):add(it)
+            for it in layout_items({'components':g.get('components',[])},lay):add(it)
+        elif self.copper.isChecked():
             for name, items in self.board['copper'].items():
                 polys = [r for it in items for r in _rings(it['polygon'])]
                 own = name == lay
@@ -249,6 +255,9 @@ class PlanView(QWidget):
             t.setZValue(30)
             add(t)
         self._mark()
+        if 'active_nets' in self.board:
+            self.info.setText('Cyan: simulated copper · grey: layout context · gold: selected components (package approximations)')
+            return
         self.info.setText('hover a section to read it; click to select' if self.lines and self.show_lines
                           else ' ')
 

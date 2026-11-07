@@ -332,9 +332,9 @@ class VolumeTab(QWidget):
                                "quarter as high, so each step in height is a step in impedance. 0: flat")
         self.relief.valueChanged.connect(self._relief_set)
         self._relief_auto = True
-        self.parts_on = QCheckBox('parts at true size (R / C / L)')
+        self.parts_on = QCheckBox('Components')
         self.parts_on.setChecked(True)
-        self.parts_on.setToolTip('lumped parts as their chips (0201, 0402, 0603, ... from the footprint name): '
+        self.parts_on.setToolTip('package silhouettes and lumped-part chips; heights may be approximate. '
                                  'resistors green, capacitors cyan, inductors pink, with their value')
         self.parts_on.toggled.connect(lambda *_: self._board())
         groups = (('Field', True, (('Dump', self.dump), ('Frame', self.frame), ('Show', self.comp),
@@ -684,20 +684,22 @@ class VolumeTab(QWidget):
         if self.copper.isChecked():
             shown = self.cu_t.value()                               # on screen: the slab before the height scale
             t = shown / zs
-            parts = v3.copper_solids(g, t) if shown > 0 else v3.copper_triangles(g)
-            for i, (lay, z, verts, faces) in enumerate(parts):
-                v = verts.copy()
-                v[:, 2] *= zs
-                if shown > 0:                                       # lit by the faces' angle to the view
-                    md = gl.MeshData(vertexes=v.astype(np.float32), faces=faces.astype(np.uint32))
-                    m = gl.GLMeshItem(meshdata=md, color=(0.85, 0.5, 0.2, 0.7), smooth=False, shader=copper_shader(),
-                                      glOptions='translucent')
-                else:
-                    m = gl.GLMeshItem(vertexes=v.astype(np.float32), faces=faces.astype(np.uint32),
-                                      color=(0.85, 0.5, 0.15, 0.55), smooth=False, glOptions='translucent')
-                m.setDepthValue(-10 + i)
-                self.view.addItem(m)
-                self.items[f'cu{i}'] = m
+            groups=[(g,(0.85,.5,.2,.7))]
+            if 'active_copper' in g:
+                groups=[(dict(g,copper=g.get('inactive_copper',{})),(.55,.59,.63,.22)),
+                        (dict(g,copper=g['active_copper']),(.10,.72,.80,.65))]
+            i=0
+            for geo,rgba in groups:
+                parts = v3.copper_solids(geo, t) if shown > 0 else v3.copper_triangles(geo)
+                for lay, z, verts, faces in parts:
+                    v = verts.copy();v[:, 2] *= zs
+                    if shown > 0:
+                        md = gl.MeshData(vertexes=v.astype(np.float32), faces=faces.astype(np.uint32))
+                        m = gl.GLMeshItem(meshdata=md, color=rgba, smooth=False, shader=copper_shader(), glOptions='translucent')
+                    else:
+                        m = gl.GLMeshItem(vertexes=v.astype(np.float32), faces=faces.astype(np.uint32), color=rgba,
+                                          smooth=False, glOptions='translucent')
+                    m.setDepthValue(-10+i);self.view.addItem(m);self.items[f'cu{i}']=m;i+=1
             ol = v3.copper_outlines(g)                              # dark edges: the copper reads through the field
             if len(ol):
                 ol = ol.copy()
@@ -765,7 +767,7 @@ class VolumeTab(QWidget):
         lo, hi = (min(zs_all), max(zs_all)) if zs_all else (None, None)
         full = max(self.relief.value(), 0.01)                       # on screen, mm
         base = 0.5 * self.cu_t.value() if self.copper.isChecked() else 0.0
-        chips = bool((self.board or {}).get('parts')) and self.parts_on.isChecked()
+        chips = bool((self.board or {}).get('parts') or (self.board or self.geometry or {}).get('components')) and self.parts_on.isChecked()
         rims = []
         for e in self.lines['elements']:
             if e.get('z') is None or not ov.drawn(e):
@@ -805,10 +807,24 @@ class VolumeTab(QWidget):
     def _parts(self, zs):
         """The lumped parts as their chips (volume3d.part_solids): coloured body, metal end caps, a label."""
         parts = (self.board or {}).get('parts') or []
-        if not (parts and self.parts_on.isChecked()):
+        if not self.parts_on.isChecked():
             return
-        g = self.board
+        g = self.board or self.geometry
+        if g is None:return
         lift = 0.5 * self.cu_t.value() if self.copper.isChecked() else 0.0
+        for k,c in enumerate(g.get('components',[])):
+            for j,(rgba,verts,faces) in enumerate(v3.component_solids(c,g.get('cu_z',{}),zs,lift)):
+                md=self.gl.MeshData(vertexes=verts.astype(np.float32),faces=faces.astype(np.uint32))
+                item=self.gl.GLMeshItem(meshdata=md,color=rgba,smooth=False,shader=copper_shader(),glOptions='opaque')
+                item.setDepthValue(4);self.view.addItem(item);self.items[f'component{k}_{j}']=item
+            if not c.get('active'):continue
+            coords=np.asarray(c['polygon']['coordinates'][0]);xy=(coords.min(0)+coords.max(0))/2
+            z=c['z']*zs + (-c['height']-.2 if c.get('side')=='B' else c['height']+.2)
+            label=self.gl.GLTextItem(pos=(xy[0],xy[1],z),text=c['ref'],color=(20,20,20,255))
+            from OpenGL import GL
+            label.setGLOptions({GL.GL_DEPTH_TEST:False,GL.GL_BLEND:True,
+                                'glBlendFunc':(GL.GL_SRC_ALPHA,GL.GL_ONE_MINUS_SRC_ALPHA)})
+            label.setDepthValue(20);self.view.addItem(label);self.items[f'component{k}_label']=label
         for k, p in enumerate(parts):
             made = v3.part_solids(p, g.get('cu_z') or {}, zs, lift)
             if made is None:
@@ -850,7 +866,7 @@ class VolumeTab(QWidget):
         self.sections['Far field'].setVisible(self.ant is not None)
         self.lines_on.setVisible(self.lines is not None)
         self.relief.setVisible(self.lines is not None)
-        self.parts_on.setVisible(bool((self.board or {}).get('parts')))
+        self.parts_on.setVisible(bool((self.board or {}).get('parts') or (self.board or self.geometry or {}).get('components')))
         lab = self.relief.parentWidget().layout().labelForField(self.relief) if self.relief.parentWidget() else None
         if lab is not None:
             lab.setVisible(self.lines is not None)

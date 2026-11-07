@@ -6,31 +6,32 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .pdntab import PdnTab, FitImages, pdn_argv
-from PySide6.QtCore import Qt, QProcess
+from .pdntab import PdnTab, pdn_argv
+from PySide6.QtCore import Qt, QProcess, QProcessEnvironment
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QTabWidget,
                                QTextBrowser, QPlainTextEdit, QPushButton)
 import pyqtgraph as pg
 
 
 def describe():
-    p=subprocess.run([sys.executable,'-m','mom25d.mqs','--describe','--json'],capture_output=True,text=True,timeout=60)
+    p=subprocess.run([sys.executable,'-m','pcbqs.mqs','--describe','--json'],capture_output=True,text=True,timeout=60)
     if p.returncode:
-        raise ValueError(p.stderr.strip() or 'MQS command unavailable; update mom25d')
+        raise ValueError(p.stderr.strip() or 'MQS command unavailable; update pcbqs')
     d=json.loads(p.stdout)
     if d.get('format')!=1:
-        raise ValueError('Unsupported MQS option format; update mom25d and kicad2ems-gui')
+        raise ValueError('Unsupported MQS option format; update pcbqs and kicad2ems-gui')
     return d
 
 
-def mqs_argv(vals,board,out,desc,python=None):
+def mqs_argv(vals,board,out,desc,python=None,preview=False):
     argv=pdn_argv(vals,board,out,desc,python)
-    argv[2]='mom25d.mqs'
+    argv[2]='pcbqs.mqs'
+    if preview:argv.append('--preview')
     return argv
 
 
-def load_result(out):
-    path=Path(out)/'mqs.json'
+def load_result(out,preview=False):
+    path=Path(out)/('mqs-preview.json' if preview else 'mqs.json')
     if not path.is_file():return None
     res=json.loads(path.read_text())
     if res.get('format')!=1:raise ValueError('Unsupported MQS result format')
@@ -40,6 +41,10 @@ def load_result(out):
 
 def summary_html(res):
     s=res['selection'];e=html.escape
+    if res.get('preview'):
+        rows=''.join(f"<tr><td>{e(l)}</td><td>{v['triangles']}</td><td>{v['max_edge_mm']:.3g}</td><td>{v['min_angle_deg']:.2f}</td></tr>" for l,v in res['layers'].items())
+        return f"<h3>{e(s['converter'])}: mesh preview</h3><p>{res['triangles']:,} triangles. No matrix fill or solve.</p><table cellspacing=6><tr><th>Layer</th><th>Triangles</th><th>Max edge (mm)</th><th>Min angle (°)</th></tr>{rows}</table>"
+
     h=[f"<h3>{e(s['converter'])}: {e(s['vin'])} / {e(s['ground'])}</h3>",
        f"<p>Input capacitors: {e(', '.join(s['capacitors']))}; {res['triangles']:,} triangles.</p>",
        '<table cellspacing=6><tr><th>Hz</th><th>Peak A</th><th>Copper R (mΩ)</th><th>Copper L (nH)</th><th>Peak H (A/m)</th></tr>']
@@ -56,6 +61,7 @@ class MqsTab(PdnTab):
     def __init__(self,win=None):
         QWidget.__init__(self)
         self.win,self.proc,self.out,self.result=win,None,None,None
+        self._preview=False
         why=''
         try:self.desc=describe()
         except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
@@ -67,38 +73,55 @@ class MqsTab(PdnTab):
             if section.title in ('Converter', 'Operating point'):
                 section.set_expanded(True)
         self.outdir.setPlaceholderText('mqs_<converter> beside the board')
+        self.preview_btn=QPushButton('Preview mesh')
+        self.preview_btn.clicked.connect(self.preview)
+        self.preview_btn.setEnabled('preview' in (self.desc or {}).get('features',[]))
+        self.preview_btn.setToolTip('Build the selected crop mesh without filling matrices or solving')
+        self.run_btn.parentWidget().layout().insertWidget(0,self.preview_btn)
         self.run_btn.setToolTip('Solve the converter input loop and scan its magnetic near field')
         if self.desc is None:
             self.run_btn.setEnabled(False);self.say(why)
 
     def _views(self):
         self.tabs=QTabWidget()
-        self.summary=QTextBrowser();self.maps=FitImages('Magnetic near-field maps')
+        from .planview import PlanView
+        self.layout=PlanView()
+        from .fieldtab import FieldsTab
+        self.summary=QTextBrowser();self.maps=FieldsTab(self.win)
         self.spectrum=pg.PlotWidget(title='Peak magnetic field per harmonic')
         self.spectrum.setLogMode(x=True,y=True)
         self.spectrum.setLabel('bottom','Hz');self.spectrum.setLabel('left','Peak |H|, A/m')
         self.log=QPlainTextEdit();self.log.setReadOnly(True);self.log.setMaximumBlockCount(5000)
+        self.tabs.addTab(self.layout,'Layout / mesh')
         self.tabs.addTab(self.summary,'Summary');self.tabs.addTab(self.spectrum,'Spectrum')
-        self.tabs.addTab(self.maps,'H maps');self.tabs.addTab(self.log,'Log')
+        self.tabs.addTab(self.maps,'Field overlay');self.tabs.addTab(self.log,'Log')
         box=QWidget();layout=QVBoxLayout(box);layout.addWidget(self.tabs)
         self.open_btn=QPushButton('Open fields in Viewer');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);layout.addWidget(self.open_btn)
+        self.pdn_btn=QPushButton('Use board and rail in Power Integrity')
+        self.pdn_btn.clicked.connect(self.open_pdn);self.pdn_btn.setEnabled(False);layout.addWidget(self.pdn_btn)
         return box
 
-    def start(self):
+    def preview(self):
+        self.start(preview=True)
+
+    def start(self,checked=False,preview=False):
         if self.proc is not None:return
         board=self.board_path()
         if not board or not os.path.isfile(board):
             self.status.setText('Choose a board first');return
         vals=self.values();ref=vals.get('converter') or 'auto'
         folder='mqs_'+''.join(c if c.isalnum() else '_' for c in ref)
-        self.out=os.path.abspath(self.outdir.text().strip() or os.path.join(os.path.dirname(os.path.abspath(board)),folder))
-        argv=mqs_argv(vals,board,self.out,self.desc)
+        base=os.path.abspath(self.outdir.text().strip() or os.path.join(os.path.dirname(os.path.abspath(board)),folder))
+        self._preview=preview
+        self.out=os.path.join(base,'preview') if preview else base
+        argv=mqs_argv(vals,board,self.out,self.desc,preview=preview)
         self.log.clear();self.say('$ python '+' '.join(argv[1:]));self.tabs.setCurrentWidget(self.log)
         self.proc=QProcess(self);self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        env=QProcessEnvironment.systemEnvironment();env.insert('PYTHONUNBUFFERED','1');self.proc.setProcessEnvironment(env)
         self.proc.readyReadStandardOutput.connect(self._stdout);self.proc.finished.connect(self._finished)
         self.proc.errorOccurred.connect(self._error)
-        self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.busy.show()
+        self.run_btn.setEnabled(False);self.preview_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.busy.show()
         self.open_btn.setEnabled(False);self.status.setText('Running…')
         self.proc.start(argv[0],argv[1:])
 
@@ -115,17 +138,25 @@ class MqsTab(PdnTab):
     def _finished(self,code,_status=None):
         if self.proc is not None:
             self._stdout();self.proc.deleteLater();self.proc=None
-        self.run_btn.setEnabled(True);self.stop_btn.setEnabled(False);self.busy.hide()
-        try:res=load_result(self.out) if code==0 else None
+        self.run_btn.setEnabled(True);self.preview_btn.setEnabled('preview' in (self.desc or {}).get('features',[]));self.stop_btn.setEnabled(False);self.busy.hide()
+        try:res=load_result(self.out,preview=self._preview) if code==0 else None
         except (OSError,ValueError,KeyError) as exc:
             self.say(str(exc));res=None
         if res is None:
             self.status.setText(f'Run failed (exit {code}); see Log');return
-        self.show_result(res);self.tabs.setCurrentWidget(self.summary);self.status.setText('Done')
+        self.show_result(res);self.tabs.setCurrentWidget(self.layout if self._preview else self.summary);self.status.setText('Mesh preview ready' if self._preview else 'Done')
 
     def show_result(self,res):
         self.result=res;self.summary.setHtml(summary_html(res))
-        self.maps.show_images([os.path.join(res['_dir'],f) for f in res.get('figures',[])])
+        self.layout.load(res['_dir'])
+        if self.layout.mesh.findData('mqs')>=0:self.layout.mesh.setCurrentIndex(self.layout.mesh.findData('mqs'))
+        self.open_btn.setText('Open layout in Viewer' if res.get('preview') else 'Open fields in Viewer')
+        self.open_btn.setEnabled(self.win is not None)
+        self.pdn_btn.setEnabled(self.win is not None and hasattr(self.win,'pdn'))
+        if res.get('preview'):
+            self.spectrum.clear();self.maps.load(res['_dir'])
+            return
+        self.maps.load(res['_dir'])
         self.spectrum.clear()
         self.spectrum.plot(res['frequencies_Hz'],[max(row) for row in res['peak_H_Am']],pen='b',symbol='o')
         self.open_btn.setEnabled(self.win is not None)
@@ -133,3 +164,16 @@ class MqsTab(PdnTab):
     def open_fields(self):
         if self.win is not None and self.result is not None:
             self.win.open_results(self.result['_dir'])
+
+    def open_pdn(self):
+        if self.win is None or self.result is None or not hasattr(self.win,'pdn'):return
+        r=self.result;s=r['selection'];pdn=self.win.pdn
+        pdn.board.setText(r.get('source_path') or self.board_path())
+        vals={o['key']:o['default'] for o in (pdn.desc or {}).get('options',[])}
+        vals.update(rail=s['vin'],ground=s['ground'],ground_source=s['converter'],load='')
+        voltage=r.get('settings',{}).get('vin_volts',0)
+        vals['volts']=voltage if voltage else ''
+        pdn._transferred_unknown_voltage=not bool(voltage)
+        pdn.set_values(vals)
+        pdn.status.setText('Board and input rail shared. Set source, supply voltage and DC loads before Run.')
+        self.win.show_panel('PDN')

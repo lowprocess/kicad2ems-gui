@@ -68,7 +68,7 @@ def test_window_tabs(tmp_path):
     assert v['dump'] == ['E@F.Cu@2,6', 'H@volume'] and v['mode'] == 'antenna'
     w.setup.extra = dict(air=3.0)
     assert w.setup.values()['air'] == 3.0
-    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field']
+    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit']
     assert w.viewer.view() in ('3D', 'Plan')                         # 3D when OpenGL can be had
     w.viewer.set_view('Plan')
     assert w.viewer.view() == 'Plan' and w.viewer.buttons['Plan'].isChecked()

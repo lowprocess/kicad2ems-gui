@@ -216,12 +216,30 @@ def geometry_from_board(path):
     outline = (rings(ol)[0][0] if ol else [])
     return dict(copper=copper, cu_z={c['name']: c['z'] for c in b['stack']['copper']},
                 vias=[[v['x'], v['y'], v['r'], v['z0'], v['z1']] for v in b['vias']], outline=outline,
-                thickness=b['stack']['thickness'], parts=b.get('parts') or [])
+                thickness=b['stack'].get('thickness', max(c['z'] for c in b['stack']['copper'])), parts=b.get('parts') or [],
+                components=b.get('components', []), active_nets=b.get('active_nets', []),
+                **({key: {lay: [poly for it in items if bool(it.get('active')) == flag for poly in rings(it['polygon'])]
+                          for lay, items in b['copper'].items()}
+                    for key, flag in [('active_copper', True), ('inactive_copper', False)]}
+                   if 'active_nets' in b else {}))
 
 
 PART_COLOURS = dict(R=(0.15, 0.85, 0.30), C=(0.00, 0.82, 0.95), L=(1.00, 0.35, 0.75),   # green, cyan, pink
                     short=(0.72, 0.72, 0.76))                                          # a 0 ohm link: metal
 CAP_COLOUR = (0.86, 0.86, 0.88)                                     # the end terminations: tinned metal
+
+
+def component_solids(component, cu_z, zs=1., lift=0.):
+    """Display-only package silhouette extruded by an approximate height; never a solver solid."""
+    poly=component['polygon']
+    polys=[poly['coordinates']] if poly['type']=='Polygon' else poly['coordinates']
+    h=component['height'];z=component['z']*zs
+    below=component.get('side')=='B'
+    centre=z-lift-h/2 if below else z+lift+h/2
+    g=dict(copper={'body':polys},cu_z={'body':centre})
+    parts=copper_solids(g,h)
+    colour=(1.,.72,.20,1.) if component.get('active') else (.35,.39,.44,.9)
+    return [(colour,verts,faces) for _,_,verts,faces in parts]
 
 
 def part_kind(p):

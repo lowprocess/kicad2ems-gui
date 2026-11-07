@@ -1,11 +1,11 @@
 """
-The PDN page: a power rail's DC drop and PDN impedance (mom25d's power-integrity tool, `python -m mom25d.pdn`): the
+The PDN page: a power rail's DC drop and PDN impedance (pcbqs's power-integrity tool, `python -m pcbqs.pdn`): the
 rail, its loads and the regulator on the left; the impedance each load sees, the drop and current maps, the summary
 (the rail tree, each load's voltage, the plane pairs, each part's connection) and the log on the right.
 
 The tool runs as a separate process, as kicad2ems runs and dfsynth do: the page follows its output and reads what it
-wrote when it ends (<out>/pdn.json, its figures). Its options come from `python -m mom25d.pdn --describe --json`, so
-the page never imports mom25d.
+wrote when it ends (<out>/pdn.json, its figures). Its options come from `python -m pcbqs.pdn --describe --json`, so
+the page never imports pcbqs.
 
     describe()                 the tool's description (options), or None when it cannot run here
     pdn_argv(vals, board, out) its command line for the page's settings
@@ -15,7 +15,7 @@ the page never imports mom25d.
 import html, json, os, sys
 import numpy as np
 
-MOM_PIP = "python -m pip install 'kicad2ems[mom]' (mom25d, with its power-integrity tool)"
+QS_PIP = "python -m pip install 'kicad2ems[qs]' (pcbqs, with its power-integrity tool)"
 DESCRIBE_FORMAT = 1
 _DESC = {}
 
@@ -35,28 +35,28 @@ def _describe(python=None):
     if python not in _DESC:
         d, why = None, ''
         try:
-            p = subprocess.run([python, '-m', 'mom25d.pdn', '--describe', '--json'], capture_output=True, text=True,
+            p = subprocess.run([python, '-m', 'pcbqs.pdn', '--describe', '--json'], capture_output=True, text=True,
                                timeout=60)
             if p.returncode == 0:
                 d = json.loads(p.stdout)
                 if d.get('format') != DESCRIBE_FORMAT:
-                    d, why = None, (f"mom25d's PDN tool describes itself in format {d.get('format')}, this page reads "
-                                    f"{DESCRIBE_FORMAT}: update {'kicad2ems-gui' if (d.get('format') or 0) > DESCRIBE_FORMAT else 'mom25d'}")
+                    d, why = None, (f"pcbqs's PDN tool describes itself in format {d.get('format')}, this page reads "
+                                    f"{DESCRIBE_FORMAT}: update {'kicad2ems-gui' if (d.get('format') or 0) > DESCRIBE_FORMAT else 'pcbqs'}")
             elif 'No module named' in p.stderr:
-                why = f"mom25d (with its PDN tool) is not installed here: {MOM_PIP}"
+                why = f"pcbqs (with its PDN tool) is not installed here: {QS_PIP}"
             else:
-                why = f"python -m mom25d.pdn --describe failed: {(p.stderr.strip().splitlines() or ['?'])[-1]}"
+                why = f"python -m pcbqs.pdn --describe failed: {(p.stderr.strip().splitlines() or ['?'])[-1]}"
         except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-            why = f"python -m mom25d.pdn --describe failed: {type(e).__name__}: {e}"
+            why = f"python -m pcbqs.pdn --describe failed: {type(e).__name__}: {e}"
         _DESC[python] = (d, why)
     return _DESC[python]
 
 
 def pdn_argv(vals, board, out, desc=None, python=None):
-    """[python, -m, mom25d.pdn, board, --out, out, ...] for the page's values {key: text or bool}: an option left
+    """[python, -m, pcbqs.pdn, board, --out, out, ...] for the page's values {key: text or bool}: an option left
     empty (or at its default) is not passed; 'load' is lines or commas of REF=AMPS."""
     opts = {o['key']: o for o in (desc or {}).get('options', [])}
-    argv = [python or sys.executable, '-m', 'mom25d.pdn', board, '--out', out]
+    argv = [python or sys.executable, '-m', 'pcbqs.pdn', board, '--out', out]
     for key, v in vals.items():
         o = opts.get(key)
         if o is None:
@@ -205,7 +205,7 @@ class PdnTab(QWidget):
         self.split.setSizes([380, 900])
         if self.desc is None:
             self.split.widget(0).setEnabled(False)
-            self.say(why_not() or f"the PDN tool cannot run here: {MOM_PIP}")
+            self.say(why_not() or f"the PDN tool cannot run here: {QS_PIP}")
 
     # ---- the settings ----
     def _form(self):
@@ -337,6 +337,9 @@ class PdnTab(QWidget):
         if self.proc is not None:
             return
         vals = self.values()
+        if getattr(self, '_transferred_unknown_voltage', False) and not str(vals.get('volts','')).strip():
+            self.status.setText('Enter the supply voltage for the transferred input rail before Run')
+            return
         board = self.board_path()
         if not board or not os.path.exists(board):
             self.status.setText('choose a board first (here, or in the main settings)')
