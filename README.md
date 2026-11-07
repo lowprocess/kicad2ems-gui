@@ -73,3 +73,14 @@ field inference. ngspice must be installed separately.
 (default four, capped by available CPUs). Extraction/field transfers are prepared
 once and shared; stopping a sweep also stops its active ngspice children. Each
 case records runtime and per-trial solver statistics for profiling.
+
+The Circuit page now includes a **Schematic** editor beside **Model JSON**.
+Select symbols to edit component models/parasitics/connections, add/remove
+passives, undo/redo and save diagram positions. Search references or highlight
+nets; expand Operating settings for the sweep controls. The optional pcbqs
+backend owns KiCad import: `.kicad_sch` uses `kicad-cli`, or import a KiCad XML
+netlist directly. Review existing/source values and selected parts before
+applying changes. The original sheets can be viewed read-only with Qt SVG
+support. DNP markers, hierarchy, fields and pin/net information remain visible;
+unknown IC behavior is not automatically modeled. All edits affect the saved
+simulation JSON, not the KiCad source file.

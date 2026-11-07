@@ -3,7 +3,8 @@ import json,os,subprocess,sys
 import numpy as np
 import pyqtgraph as pg
 from pathlib import Path
-from PySide6.QtCore import QProcess,QProcessEnvironment
+from PySide6.QtCore import QProcess,QProcessEnvironment,QTimer
+from .schematicview import SchematicEditor
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QPushButton,QComboBox,
                                QCheckBox,QPlainTextEdit,QTextBrowser,QTabWidget,QFileDialog,QLabel,QSplitter,QScrollArea,QSpinBox)
 from PySide6.QtCore import Qt
@@ -11,9 +12,10 @@ from PySide6.QtCore import Qt
 
 class PowerCircuitTab(QWidget):
     def __init__(self,win=None):
-        super().__init__();self.win=win;self.proc=None;self.out=None
+        super().__init__();self.win=win;self.proc=None;self.out=None;self._syncing=False
         root=QVBoxLayout(self);settings=QWidget();form=QFormLayout(settings)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);scroll.setMinimumHeight(210);scroll.setMaximumHeight(390);root.addWidget(scroll)
+        self.settings_toggle=QPushButton('Operating settings');self.settings_toggle.setCheckable(True);root.addWidget(self.settings_toggle)
+        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);scroll.setMinimumHeight(180);scroll.setMaximumHeight(310);root.addWidget(scroll);scroll.hide();self.settings_toggle.toggled.connect(scroll.setVisible)
         self.board=QLineEdit();self.outdir=QLineEdit();self.frequencies=QLineEdit('90000,110000');self.powers=QLineEdit('5,10,20,30');self.coupling=QLineEdit('0.4')
         for label,w in [('PCB (optional)',self.board),('Output folder',self.outdir),('Frequencies (Hz)',self.frequencies),('Receiver powers (W)',self.powers),('Coupling k',self.coupling)]:form.addRow(label,w)
         self.receiver_C=QLineEdit();self.receiver_C.setPlaceholderText('Blank: tune at each frequency')
@@ -37,31 +39,54 @@ class PowerCircuitTab(QWidget):
         self.stop_btn=QPushButton('Stop');self.stop_btn.setEnabled(False);self.stop_btn.clicked.connect(self.stop);row.addWidget(self.stop_btn)
         self.split=QSplitter(Qt.Horizontal);root.addWidget(self.split,1)
         self.editor=QPlainTextEdit();self.editor.setPlaceholderText('Component model JSON: per-part types, ESR/ESL/DCR, coil loss/SRF, switch parameters, input filter…')
-        self.split.addWidget(self.editor);self.tabs=QTabWidget();self.split.addWidget(self.tabs)
+        self.schematic=SchematicEditor(self);self.schematic.model_provider=self.values
+        self.model_tabs=QTabWidget();self.model_tabs.addTab(self.schematic,'Schematic');self.model_tabs.addTab(self.editor,'Model JSON')
+        self.split.addWidget(self.model_tabs);self.tabs=QTabWidget();self.split.addWidget(self.tabs)
         self.summary=QTextBrowser();self.log=QPlainTextEdit();self.log.setReadOnly(True)
         self.tabs.addTab(self.summary,'Results')
         wave=QWidget();wave_layout=QVBoxLayout(wave);self.signal_view=QComboBox();self.signal_view.addItems(['Winding currents','Bridge / coil voltages','Input filter currents','Bus voltages']);wave_layout.addWidget(self.signal_view)
         self.waveform=pg.PlotWidget();self.waveform.addLegend();self.waveform.showGrid(x=True,y=True,alpha=.2);wave_layout.addWidget(self.waveform);self.signal_view.currentIndexChanged.connect(self.show_waveform)
         self.tabs.addTab(wave,'Time-domain waveforms');self.tabs.addTab(self.log,'Log')
         self.status=QLabel('Ready. Top controls override the corresponding JSON settings when run.');root.addWidget(self.status)
+        self.editor_only=QPushButton('Editor only');self.editor_only.setCheckable(True);self.editor_only.setChecked(True);row.addWidget(self.editor_only)
+        self.editor_only.toggled.connect(lambda on:self.tabs.setVisible(not on));self.tabs.hide()
+        self.schematic.modelChanged.connect(self.schematic_changed);self.schematic.statusChanged.connect(self.status.setText)
+        self.refresh_timer=QTimer(self);self.refresh_timer.setSingleShot(True);self.refresh_timer.setInterval(250);self.refresh_timer.timeout.connect(self.refresh_schematic)
+        self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
+        for control in [self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,*self.overrides.values()]:control.editingFinished.connect(self.refresh_schematic)
+        self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
         try:
             p=subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template'],capture_output=True,text=True,timeout=30,check=True)
             self.set_model(json.loads(p.stdout))
-        except (OSError,ValueError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False)
+        except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False);self.schematic.setEnabled(False)
 
     def matching_text(self,c):
         cap=f'fixed {c["secondary_C_F"]*1e9:g} nF' if c.get('secondary_C_F') is not None else 'tuned per frequency'
         load=f'fixed {c["load_ohm"]:g} Ω' if c.get('load_ohm') is not None else 'efficiency matched per frequency'
-        return f'Primary compensation stays fixed. Receiver C: {cap}; load: {load}. Phase targets load power.'
+        return f'Primary C: {c["primary_C_F"]*1e9:g} nF. Receiver C: {cap}; load: {load}. Phase targets load power.'
 
-    def set_model(self,c):
-        self.receiver_C.setText(str(c['secondary_C_F']*1e9) if c.get('secondary_C_F') is not None else '')
-        self.load_R.setText(str(c['load_ohm']) if c.get('load_ohm') is not None else '')
-        self.matching_note.setText(self.matching_text(c))
-        for w in self.overrides.values():w.clear()
-        self.editor.setPlainText(json.dumps(c,indent=2));self.frequencies.setText(','.join(map(str,c['frequencies_Hz'])));self.powers.setText(','.join(map(str,c['powers_W'])));self.coupling.setText(str(c['coupling']));self.model.setCurrentText(c.get('switch_model',{}).get('type','switch'))
+    def set_model(self,c,diagram=True):
+        self._syncing=True
+        try:
+            if diagram:self.schematic.set_model(c)
+            self.receiver_C.setText(str(c['secondary_C_F']*1e9) if c.get('secondary_C_F') is not None else '')
+            self.load_R.setText(str(c['load_ohm']) if c.get('load_ohm') is not None else '')
+            self.matching_note.setText(self.matching_text(c))
+            self.settings_toggle.setText(f'Operating settings — {c["voltage_V"]:g} V · '+', '.join(f'{f/1000:g} kHz' for f in c['frequencies_Hz'])+f' · k={c["coupling"]:g}')
+            for w in self.overrides.values():w.clear()
+            self.editor.setPlainText(json.dumps(c,indent=2));self.frequencies.setText(','.join(map(str,c['frequencies_Hz'])));self.powers.setText(','.join(map(str,c['powers_W'])));self.coupling.setText(str(c['coupling']));self.model.setCurrentText(c.get('switch_model',{}).get('type','switch'))
+        finally:self._syncing=False
+        if diagram:QTimer.singleShot(0,self.schematic.fit)
+
+    def schematic_changed(self,c):
+        self.refresh_timer.stop();self.set_model(c,diagram=False)
+
+    def refresh_schematic(self,*_):
+        if self._syncing:return
+        try:self.schematic.set_model(self.values())
+        except (ValueError,KeyError,TypeError,ImportError) as exc:self.status.setText('Model needs attention: '+str(exc))
 
     def values(self):
         c=json.loads(self.editor.toPlainText());c['frequencies_Hz']=[float(x) for x in self.frequencies.text().split(',')];c['powers_W']=[float(x) for x in self.powers.text().split(',')];c['coupling']=float(self.coupling.text());c.setdefault('switch_model',{})['type']=self.model.currentText()
@@ -117,10 +142,17 @@ class PowerCircuitTab(QWidget):
         self.proc.readyReadStandardOutput.connect(self.read_log);self.proc.finished.connect(self.finished)
         self.proc.errorOccurred.connect(lambda error:self.finished(-1) if error==QProcess.FailedToStart else None)
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
+        self.editor_only.setChecked(False)
         self.proc.start(sys.executable,argv)
 
     def stop(self):
         if self.proc:self.proc.terminate()
+        self.schematic.cancel_import()
+
+    def closeEvent(self,event):
+        self.stop()
+        if self.proc:self.proc.waitForFinished(3000)
+        super().closeEvent(event)
 
     def read_log(self):
         if self.proc:self.log.appendPlainText(bytes(self.proc.readAllStandardOutput()).decode(errors='replace').rstrip())
@@ -133,6 +165,7 @@ class PowerCircuitTab(QWidget):
         self.show_result(json.loads(path.read_text()))
 
     def show_result(self,res):
+        self.editor_only.setChecked(False)
         self.result=res;self.case.clear();rows=[]
         for c in res['cases']:
             rows.append(f'<tr><td>{c["frequency_Hz"]/1000:g}</td><td>{c["load_power_W"]:.3f}</td><td>{c["phase_deg"]:.2f}</td><td>{c["primary_rms_A"]:.3f}</td><td>{100*c["efficiency"]:.2f}</td></tr>')
