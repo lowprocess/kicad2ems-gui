@@ -2,7 +2,8 @@
 
 The window of [kicad2ems](https://github.com/lowprocess/kicad2ems): a run's settings, the run itself and its
 results. S-parameter plots and the report, the board in plan and 3D with the line model over it, field maps and
-animations, antenna patterns and beam steering, and dfsynth's filter synthesis (the Filter page).
+animations, antenna patterns and beam steering, dfsynth's filter synthesis (the Filter page), and converter input-loop magnetic fields (the Near field page).
+The Near field page uses `python -m mom25d.mqs`; update mom25d to obtain the command and its option schema.
 
 ![A hairpin filter's S-parameters from gfdtd, mom25d and the line model, with a Smith chart](https://github.com/lowprocess/kicad2ems/raw/main/docs/img/readme/gui_sparams.png)
 

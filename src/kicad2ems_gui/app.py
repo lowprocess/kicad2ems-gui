@@ -37,11 +37,12 @@ from .statusbar import MemoryMeters, EstimateButton
 from .meters import duration
 from .filtertab import FilterTab
 from .pdntab import PdnTab
+from .mqstab import MqsTab
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
-PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN')
+PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field')
 TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
@@ -782,6 +783,7 @@ class MainWindow(QMainWindow):
         self.viewer = Viewer(self)
         self.filter = FilterTab(self)
         self.pdn = PdnTab(self)
+        self.mqs = MqsTab(self)
         self.fields, self.volume = self.viewer.cuts, self.viewer.volume      # the field views, inside the viewer
         if getattr(self.volume, 'steer', None) is not None:          # its Far field section steers too
             self.results.link_steering(self.volume.steer)
@@ -807,7 +809,7 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         self.docks = {}
-        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn)):
+        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs)):
             d = QDockWidget(TITLES.get(name, name), self.work)
             d.setObjectName(name)
             d.setWidget(w)
@@ -835,7 +837,7 @@ class MainWindow(QMainWindow):
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
         return {'viewer': self.viewer.split, 'results': self.results.splot.split, 'filter': self.filter.split,
-                'pdn': self.pdn.split,
+                'pdn': self.pdn.split, 'mqs': self.mqs.split,
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
     def _restore_shape(self):
