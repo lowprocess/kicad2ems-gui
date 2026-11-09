@@ -168,9 +168,11 @@ class PowerCircuitTab(QWidget):
         self.editor_only.setChecked(False)
         self.result=res;self.case.clear();rows=[]
         for c in res['cases']:
-            rows.append(f'<tr><td>{c["frequency_Hz"]/1000:g}</td><td>{c["load_power_W"]:.3f}</td><td>{c["phase_deg"]:.2f}</td><td>{c["primary_rms_A"]:.3f}</td><td>{100*c["efficiency"]:.2f}</td></tr>')
+            num=lambda key,fmt,scale=1:format(c[key]*scale,fmt) if isinstance(c.get(key),(int,float)) else '–'
+            rows.append(f'<tr><td>{c["frequency_Hz"]/1000:g}</td><td>{c["load_power_W"]:.3f}</td><td>{num("input_power_W",".3f")}</td><td>{100*c["efficiency"]:.2f}</td>'
+                        f'<td>{c["phase_deg"]:.2f}</td><td>{c["primary_rms_A"]:.3f}</td><td>{num("bus_ripple_V",".2f")}</td><td>{num("runtime_s",".0f")}</td></tr>')
             self.case.addItem(f'{c["frequency_Hz"]/1000:g} kHz / {c["target_W"]:g} W',c['folder'])
-        self.summary.setHtml('<h3>Operational circuit results</h3><table cellspacing=8><tr><th>kHz</th><th>Load W</th><th>Phase °</th><th>Primary RMS A</th><th>Efficiency %</th></tr>'+''.join(rows)+'</table><p>Receiver/load and unmeasured parasitics are model assumptions. See model.json and case.json for matching, settling and power checks.</p><p>Fields are band-limited copper-current inference; external coils, package filaments and environment coupling are omitted.</p>')
+        self.summary.setHtml('<h3>Operational circuit results</h3><table cellspacing=8><tr><th>kHz</th><th>Load W</th><th>Input W</th><th>Efficiency %</th><th>Phase °</th><th>Primary RMS A</th><th>VHB p-p V*</th><th>Run s</th></tr>'+''.join(rows)+'</table><p>* At every solver timestep, so it includes switching-edge spikes that the sampled waveforms below do not show.</p><p>Receiver/load and unmeasured parasitics are model assumptions. See model.json and case.json for matching, settling and power checks.</p><p>Fields are band-limited copper-current inference; external coils, package filaments and environment coupling are omitted.</p>')
         self.tabs.setCurrentWidget(self.summary);self.open_btn.setEnabled(self.win is not None and any('field_inference' in c for c in res['cases']));self.status.setText('Completed' if res.get('complete') else 'Partial results')
 
     def show_waveform(self,*_):
@@ -182,7 +184,9 @@ class PowerCircuitTab(QWidget):
             t=v['time_s'];take=t>=t[-1]-2/r['frequency_Hz'];xx=(t[take]-(t[-1]-2/r['frequency_Hz']))*1e6
             options=[(['PRIMARY.winding_I','SECONDARY.winding_I'],'A'),(['bridge.V','PRIMARY.V','SECONDARY.V'],'V'),(['L3.I','R9.I'],'A'),(['bus.V','input.V','supply.V'],'V')]
             keys,unit=options[self.signal_view.currentIndex()];self.waveform.clear()
-            for i,key in enumerate(keys):self.waveform.plot(xx,v[key][take],pen=pg.mkPen(['#e9783c','#409ad6','#6eb671'][i],width=1.5),name=key)
+            present=[key for key in keys if key in v]               # a board without L3/R9 still shows the rest
+            if not present:self.status.setText('This case has none of: '+', '.join(keys))
+            for i,key in enumerate(present):self.waveform.plot(xx,v[key][take],pen=pg.mkPen(['#e9783c','#409ad6','#6eb671'][i],width=1.5),name=key)
             self.waveform.setLabel('bottom','Time in final two periods',units='µs');self.waveform.setLabel('left',unit)
         except (OSError,ValueError,KeyError,StopIteration) as error:self.status.setText('Waveforms unavailable: '+str(error))
 

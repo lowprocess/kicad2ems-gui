@@ -28,6 +28,12 @@ def test_saved_case_waveforms_are_visible(tmp_path):
     c=dict(folder=str(tmp_path),frequency_Hz=1000,target_W=5,load_power_W=5,phase_deg=30,primary_rms_A=.707,efficiency=.9)
     tab.show_result(dict(complete=True,cases=[c]))
     assert len(tab.waveform.listDataItems())==2
+    assert 'Input W' in tab.summary.toHtml() and 'VHB p-p' in tab.summary.toHtml()
+    tab.signal_view.setCurrentIndex(2)                      # input filter currents: none saved in this case
+    assert len(tab.waveform.listDataItems())==0 and 'none of' in tab.status.text()
+    tab.signal_view.setCurrentIndex(0)
+    c2=dict(c,input_power_W=5.4,bus_ripple_V=3.88,runtime_s=56.0);tab.show_result(dict(complete=True,cases=[c2]))
+    assert '5.400' in tab.summary.toHtml() and '3.88' in tab.summary.toHtml()
     assert len(tab.waveform.listDataItems()[0].getData()[0])>100
     tab.overrides['cap_ESR'].setText('12');tab.overrides['dead_time_s'].setText('80')
     vals=tab.values();assert vals['switch_model']['dead_time_s']==80e-9

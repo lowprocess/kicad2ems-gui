@@ -106,11 +106,12 @@ def summary_html(res):
              f"{res['loss_W'] * 1e3:.1f} mW in the copper.</p>")
     if res['tree']:
         h.append("<table border=0 cellspacing=6><tr><th align=left>series part</th><th>kind</th><th>R (Ω)</th>"
-                 "<th>current (A)</th><th>drop (mV)</th><th align=left>between</th></tr>")
+                 "<th>L (µH)</th><th>current (A)</th><th>drop (mV)</th><th align=left>between</th></tr>")
         for t in res['tree']:
             s = res['series'].get(t['ref'], {})
+            L = f"{t['L'] * 1e6:.3g}" if t.get('L') else ''          # a followed series (filter) inductor
             h.append(f"<tr><td>{e(t['ref'])}</td><td>{e(t['kind'])}{' (DCR assumed)' if t['defaulted'] else ''}</td>"
-                     f"<td align=right>{t['R']:.3g}</td><td align=right>{s.get('I', 0):.3g}</td>"
+                     f"<td align=right>{t['R']:.3g}</td><td align=right>{L}</td><td align=right>{s.get('I', 0):.3g}</td>"
                      f"<td align=right>{_mv(s.get('drop', 0))}</td><td>{e(t['a'])} → {e(t['b'])}</td></tr>")
         h.append("</table>")
     h.append("<h4>Loads at DC</h4><table border=0 cellspacing=6><tr><th align=left>load</th><th>I (A)</th><th>sees (V)</th>"

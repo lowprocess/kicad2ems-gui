@@ -64,3 +64,10 @@ def test_transferred_unknown_supply_requires_explicit_voltage(tmp_path,monkeypat
     board=tmp_path/'board.json';board.write_text('{}');page.board.setText(str(board))
     page.start()
     assert page.proc is None and 'supply voltage' in page.status.text()
+
+
+def test_summary_shows_a_series_inductor():
+    res = _result()
+    res['tree'].append(dict(ref='L3', kind='inductor', R=0.03, L=5.6e-6, a='OUT', b='VHB', defaulted=False))
+    h = pdntab.summary_html(res)
+    assert 'L (µH)' in h and '>5.6<' in h and 'inductor' in h
