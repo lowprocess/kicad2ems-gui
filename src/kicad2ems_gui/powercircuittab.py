@@ -3,8 +3,9 @@ import json,os,subprocess,sys
 import numpy as np
 import pyqtgraph as pg
 from pathlib import Path
-from PySide6.QtCore import QProcess,QProcessEnvironment,QTimer
+from PySide6.QtCore import QTimer
 from .schematicview import SchematicEditor
+from .toolprocess import run_tool
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QPushButton,QComboBox,
                                QCheckBox,QPlainTextEdit,QTextBrowser,QTabWidget,QFileDialog,QLabel,QSplitter,QScrollArea,QSpinBox)
 from PySide6.QtCore import Qt
@@ -137,13 +138,9 @@ class PowerCircuitTab(QWidget):
         argv=['-u','-m','pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
         if self.copper.isChecked():argv+=['--copper','--board',self.board.text()]
         if self.fields.isChecked():argv+=['--fields']
-        self.proc=QProcess(self);self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        env=QProcessEnvironment.systemEnvironment();env.insert('PYTHONUNBUFFERED','1');env.insert('OPENBLAS_NUM_THREADS','8');self.proc.setProcessEnvironment(env)
-        self.proc.readyReadStandardOutput.connect(self.read_log);self.proc.finished.connect(self.finished)
-        self.proc.errorOccurred.connect(lambda error:self.finished(-1) if error==QProcess.FailedToStart else None)
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)
-        self.proc.start(sys.executable,argv)
+        run_tool(self,[sys.executable,*argv],self.read_log,self.finished,env=dict(OPENBLAS_NUM_THREADS='8'))
 
     def stop(self):
         if self.proc:self.proc.terminate()

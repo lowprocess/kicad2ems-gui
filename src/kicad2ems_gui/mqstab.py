@@ -2,25 +2,23 @@
 import html
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
-from .pdntab import PdnTab, pdn_argv
-from PySide6.QtCore import Qt, QProcess, QProcessEnvironment
+from .pdntab import PdnTab, pdn_argv, QS_PIP
+from .toolprocess import describe_tool, run_tool
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QTabWidget,
                                QTextBrowser, QPlainTextEdit, QPushButton)
 import pyqtgraph as pg
 
 
 def describe():
-    p=subprocess.run([sys.executable,'-m','pcbqs.mqs','--describe','--json'],capture_output=True,text=True,timeout=60)
-    if p.returncode:
-        raise ValueError(p.stderr.strip() or 'MQS command unavailable; update pcbqs')
-    d=json.loads(p.stdout)
-    if d.get('format')!=1:
-        raise ValueError('Unsupported MQS option format; update pcbqs and kicad2ems-gui')
-    return d
+    """The near-field tool's description, or None (why_not() says why)."""
+    return describe_tool(None,('-m','pcbqs.mqs'),'pcbqs',QS_PIP)[0]
+
+
+def why_not():
+    return describe_tool(None,('-m','pcbqs.mqs'),'pcbqs',QS_PIP)[1]
 
 
 def mqs_argv(vals,board,out,desc,python=None,preview=False):
@@ -62,10 +60,7 @@ class MqsTab(PdnTab):
         QWidget.__init__(self)
         self.win,self.proc,self.out,self.result=win,None,None,None
         self._preview=False
-        why=''
-        try:self.desc=describe()
-        except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
-            self.desc=None;why=str(exc)
+        self.desc=describe()
         layout=QHBoxLayout(self);self.split=QSplitter(Qt.Horizontal);layout.addWidget(self.split)
         self.split.addWidget(self._form());self.split.addWidget(self._views());self.split.setSizes([380,900])
         from .panels import Section
@@ -80,7 +75,7 @@ class MqsTab(PdnTab):
         self.run_btn.parentWidget().layout().insertWidget(0,self.preview_btn)
         self.run_btn.setToolTip('Solve the converter input loop and scan its magnetic near field')
         if self.desc is None:
-            self.run_btn.setEnabled(False);self.say(why)
+            self.run_btn.setEnabled(False);self.say(why_not())
 
     def _views(self):
         self.tabs=QTabWidget()
@@ -117,17 +112,9 @@ class MqsTab(PdnTab):
         self.out=os.path.join(base,'preview') if preview else base
         argv=mqs_argv(vals,board,self.out,self.desc,preview=preview)
         self.log.clear();self.say('$ python '+' '.join(argv[1:]));self.tabs.setCurrentWidget(self.log)
-        self.proc=QProcess(self);self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        env=QProcessEnvironment.systemEnvironment();env.insert('PYTHONUNBUFFERED','1');self.proc.setProcessEnvironment(env)
-        self.proc.readyReadStandardOutput.connect(self._stdout);self.proc.finished.connect(self._finished)
-        self.proc.errorOccurred.connect(self._error)
         self.run_btn.setEnabled(False);self.preview_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.busy.show()
         self.open_btn.setEnabled(False);self.status.setText('Running…')
-        self.proc.start(argv[0],argv[1:])
-
-    def _error(self,error):
-        if error==QProcess.FailedToStart:
-            self.say(self.proc.errorString());self._finished(-1)
+        run_tool(self,argv,self._stdout,self._finished)
 
     def _stdout(self):
         text=bytes(self.proc.readAllStandardOutput()).decode(errors='replace')

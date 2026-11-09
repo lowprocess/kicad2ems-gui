@@ -2,7 +2,7 @@
 the page in the window (offscreen) showing a run's result."""
 import json, os, sys
 import pytest
-from kicad2ems_gui import pdntab
+from kicad2ems_gui import pdntab, toolprocess
 
 DESC = dict(format=1, options=[
     dict(key='rail', flag='--rail', kind='str', default='', help='', group='Rail'),
@@ -45,7 +45,7 @@ def test_page_shows_a_result(tmp_path):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
-    pdntab._DESC[sys.executable] = (DESC, '')
+    toolprocess._DESCRIPTIONS[(sys.executable, '-m', 'pcbqs.pdn')] = (DESC, '')
     page = pdntab.PdnTab()
     page.set_values(dict(rail='+3V3', load=['U1=2']))
     assert page.values()['rail'] == '+3V3' and page.values()['load'] == 'U1=2'
@@ -71,3 +71,12 @@ def test_summary_shows_a_series_inductor():
     res['tree'].append(dict(ref='L3', kind='inductor', R=0.03, L=5.6e-6, a='OUT', b='VHB', defaulted=False))
     h = pdntab.summary_html(res)
     assert 'L (µH)' in h and '>5.6<' in h and 'inductor' in h
+
+
+def test_list_options_keep_commas_inside_an_item():
+    """--cap REF=C,ESR,ESL carries commas: only a comma that starts a new REF= separates two items."""
+    desc = dict(options=[dict(key='cap', flag='--cap', kind='list', default=[]),
+                         dict(key='load', flag='--load', kind='list', default=[])])
+    argv = pdntab.pdn_argv(dict(cap='CA1=47e-6,0.02,1e-9,CA2=1e-6\nC19=47e-6,0.49', load='U1=2, U2=3'), 'b', 'o', desc)
+    assert argv[6:] == ['--cap', 'CA1=47e-6,0.02,1e-9', '--cap', 'CA2=1e-6', '--cap', 'C19=47e-6,0.49',
+                        '--load', 'U1=2', '--load', 'U2=3']

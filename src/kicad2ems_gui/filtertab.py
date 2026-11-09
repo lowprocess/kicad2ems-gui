@@ -18,7 +18,6 @@ import numpy as np
 DFSYNTH_PIP = "python -m pip install 'kicad2ems[filter]' (or 'dfsynth @ git+https://github.com/lowprocess/dfsynth')"
 
 
-_DESCRIPTIONS = {}
 DESCRIBE_FORMAT = 1                 # the --describe --json format this page reads
 
 
@@ -36,30 +35,10 @@ def why_not(python=None):
 
 
 def _describe(python=None):
-    import subprocess
-    python = python or sys.executable
-    if python not in _DESCRIPTIONS:
-        d, why = None, ''
-        try:
-            p = subprocess.run([python, '-m', 'dfsynth', '--describe', '--json'], capture_output=True, text=True,
-                               timeout=60)
-            if p.returncode == 0:
-                d = json.loads(p.stdout)
-                if d.get('format') != DESCRIBE_FORMAT:
-                    d, why = None, (f"dfsynth {d.get('version', '?')} describes itself in format {d.get('format')}, "
-                                    f"this page reads {DESCRIBE_FORMAT}: update "
-                                    f"{'kicad2ems-gui' if (d.get('format') or 0) > DESCRIBE_FORMAT else 'dfsynth'}")
-            elif 'No module named dfsynth' in p.stderr:
-                why = f"dfsynth is not installed, so filters cannot be designed here: {DFSYNTH_PIP}"
-            elif '--describe' in p.stderr:                          # argparse: unrecognized arguments
-                why = (f"this dfsynth is too old for the page (it has no --describe): update it, "
-                       f"python -m pip install -U 'dfsynth @ git+https://github.com/lowprocess/dfsynth'")
-            else:
-                why = f"dfsynth --describe failed: {(p.stderr.strip().splitlines() or ['?'])[-1]}"
-        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-            why = f"dfsynth --describe failed: {type(e).__name__}: {e}"
-        _DESCRIPTIONS[python] = (d, why)
-    return _DESCRIPTIONS[python]
+    from .toolprocess import describe_tool
+    return describe_tool(python, ('-m', 'dfsynth'), 'dfsynth', DFSYNTH_PIP, DESCRIBE_FORMAT,
+                         too_old="this dfsynth is too old for the page (it has no --describe): update it, "
+                                 "python -m pip install -U 'dfsynth @ git+https://github.com/lowprocess/dfsynth'")
 
 
 def options(desc):
@@ -144,7 +123,7 @@ def _db(x):
 
 
 # ------------------------------------------------------------------------------------------- the page (Qt)
-from PySide6.QtCore import Qt, QProcess
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainterPath, QPen, QBrush, QColor, QFontDatabase, QTextCursor, QTextCharFormat, QIcon
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox, QCheckBox,
                                QPushButton, QPlainTextEdit, QSplitter, QTabWidget, QTableWidget,
@@ -590,20 +569,16 @@ class FilterTab(QWidget):
                 os.remove(p)
         self.clear_log()
         self.tabs.setCurrentWidget(self.log)
-        self.proc = QProcess(self)
-        self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        self.proc.setWorkingDirectory(os.path.dirname(self.base))
-        self.proc.readyReadStandardOutput.connect(self._stdout)
-        self.proc.finished.connect(self._finished)
         argv = filter_argv(vals, validate)
         self.say('$ dfsynth ' + ' '.join(argv[3:]))
-        self.proc.start(sys.executable, argv)
         self.progress('dfsynth: designing…' if not validate else
                       'dfsynth: designing, then validating on ' + vals['validate'])
         for b in (self.design_btn, self.validate_btn):
             b.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.busy.show()
+        from .toolprocess import run_tool
+        run_tool(self, [sys.executable, *argv], self._stdout, self._finished, cwd=os.path.dirname(self.base))
 
     def stop(self):
         """Asks a kicad2ems run dfsynth started to stop (the STOP file its solvers check), and ends dfsynth."""

@@ -12,49 +12,27 @@ the page never imports pcbqs.
     load_result(out)           what a run wrote in `out`, or None
     summary_html(res)          the summary of a result, as the page shows it
 """
-import html, json, os, sys
+import html, json, os, re, sys
 import numpy as np
 
+from .toolprocess import describe_tool, run_tool
+
 QS_PIP = "python -m pip install 'kicad2ems[qs]' (pcbqs, with its power-integrity tool)"
-DESCRIBE_FORMAT = 1
-_DESC = {}
 
 
 def describe(python=None):
     """{'options': [{key, flag, kind, default, help, group}]} from the tool, or None (why_not() says why)."""
-    return _describe(python)[0]
+    return describe_tool(python, ('-m', 'pcbqs.pdn'), 'pcbqs', QS_PIP)[0]
 
 
 def why_not(python=None):
-    return _describe(python)[1]
-
-
-def _describe(python=None):
-    import subprocess
-    python = python or sys.executable
-    if python not in _DESC:
-        d, why = None, ''
-        try:
-            p = subprocess.run([python, '-m', 'pcbqs.pdn', '--describe', '--json'], capture_output=True, text=True,
-                               timeout=60)
-            if p.returncode == 0:
-                d = json.loads(p.stdout)
-                if d.get('format') != DESCRIBE_FORMAT:
-                    d, why = None, (f"pcbqs's PDN tool describes itself in format {d.get('format')}, this page reads "
-                                    f"{DESCRIBE_FORMAT}: update {'kicad2ems-gui' if (d.get('format') or 0) > DESCRIBE_FORMAT else 'pcbqs'}")
-            elif 'No module named' in p.stderr:
-                why = f"pcbqs (with its PDN tool) is not installed here: {QS_PIP}"
-            else:
-                why = f"python -m pcbqs.pdn --describe failed: {(p.stderr.strip().splitlines() or ['?'])[-1]}"
-        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-            why = f"python -m pcbqs.pdn --describe failed: {type(e).__name__}: {e}"
-        _DESC[python] = (d, why)
-    return _DESC[python]
+    return describe_tool(python, ('-m', 'pcbqs.pdn'), 'pcbqs', QS_PIP)[1]
 
 
 def pdn_argv(vals, board, out, desc=None, python=None):
     """[python, -m, pcbqs.pdn, board, --out, out, ...] for the page's values {key: text or bool}: an option left
-    empty (or at its default) is not passed; 'load' is lines or commas of REF=AMPS."""
+    empty (or at its default) is not passed; a list ('load', 'cap') is lines, or REF=... items joined by commas
+    (a comma inside one, CA1=47e-6,0.02,1e-9, stays in it)."""
     opts = {o['key']: o for o in (desc or {}).get('options', [])}
     argv = [python or sys.executable, '-m', 'pcbqs.pdn', board, '--out', out]
     for key, v in vals.items():
@@ -65,7 +43,7 @@ def pdn_argv(vals, board, out, desc=None, python=None):
             if v:
                 argv.append(o['flag'])
         elif o['kind'] == 'list':
-            for item in [s.strip() for s in str(v or '').replace('\n', ',').split(',') if s.strip()]:
+            for item in [s.strip() for s in re.split(r'\n|,(?=\s*[^\s,=]+\s*=)', str(v or '')) if s.strip()]:
                 argv += [o['flag'], item]
         else:
             s = str(v).strip()
@@ -159,7 +137,7 @@ def summary_html(res):
 
 try:                                                    # the page itself (Qt); the helpers above need none
     import pyqtgraph as pg
-    from PySide6.QtCore import Qt, QProcess
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QSplitter, QLineEdit, QPushButton,
                                    QPlainTextEdit, QTextBrowser, QTabWidget, QCheckBox, QScrollArea, QFileDialog,
                                    QProgressBar, QLabel)
@@ -355,13 +333,9 @@ class PdnTab(QWidget):
         self.log.clear()
         self.say('$ python ' + ' '.join(argv[1:]))
         self.tabs.setCurrentWidget(self.log)
-        self.proc = QProcess(self)
-        self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        self.proc.readyReadStandardOutput.connect(self._stdout)
-        self.proc.finished.connect(self._finished)
-        self.proc.start(argv[0], argv[1:])
         self.run_btn.setEnabled(False); self.stop_btn.setEnabled(True); self.busy.show()
         self.status.setText('running…')
+        run_tool(self, argv, self._stdout, self._finished)
 
     def stop(self):
         if self.proc is not None:
