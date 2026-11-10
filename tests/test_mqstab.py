@@ -72,3 +72,26 @@ def test_preview_result_opens_mesh_without_field_dumps(tmp_path,monkeypatch):
     assert page.layout.board and page.layout.mesh.currentData()=='mqs'
     assert page.tabs.currentWidget() is page.layout and page.maps.src is None
     assert 'No matrix fill or solve' in page.summary.toPlainText()
+
+
+def test_converter_choices_offer_each_input_net():
+    """I5: an ambiguous input net is offered as a choice per converter and net, filling converter, vin and caps."""
+    found=[dict(converter='U5',inductor='L2',switch='SW5',inputs=[dict(vin='VCC',capacitors=['C1','C2']),
+                                                                  dict(vin='VDRV',capacitors=['C9'])])]
+    choices=mqstab.converter_choices(found)
+    assert [v for _,v in choices]==[dict(converter='U5',vin='VCC',capacitors='C1,C2'),
+                                    dict(converter='U5',vin='VDRV',capacitors='C9')]
+    assert 'U5: VCC' in choices[0][0] and '1 capacitor:' in choices[1][0]
+
+
+def test_find_converters_fills_the_form(monkeypatch):
+    os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
+    from PySide6.QtWidgets import QApplication
+    app=QApplication.instance() or QApplication([])
+    monkeypatch.setattr(mqstab,'describe',lambda:dict(format=1,options=[
+        dict(key=k,flag='--'+k,kind='str',default='',group='Converter',help=k) for k in ('converter','vin','capacitors')]))
+    page=mqstab.MqsTab(None)
+    page.pick_converter(mqstab.converter_choices([dict(converter='U7',inductor='L1',switch='SW',
+                                                        inputs=[dict(vin='+5V',capacitors=['C3'])])]))
+    v=page.values()
+    assert (v['converter'],v['vin'],v['capacitors'])==('U7','+5V','C3')

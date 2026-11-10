@@ -104,7 +104,7 @@ def summary_html(res):
         h.append("<p>Hottest supply vias: " + ', '.join(f"{v['I']:.2f} A at ({v['x']:.1f}, {v['y']:.1f})" for v in vp) + "</p>")
     p = res.get('pdn')
     if p:
-        h.append(f"<h4>PDN impedance (target {p['target'] * 1e3:.1f} mΩ)</h4>")
+        h.append("<h4>PDN impedance" + (f" (target {p['target'] * 1e3:.1f} mΩ)" if p.get('target') else '') + "</h4>")
         h.append("<table border=0 cellspacing=6><tr><th align=left>plane pair</th><th>d (mm)</th><th>εr</th>"
                  "<th>area (mm²)</th><th>C (nF)</th></tr>")
         for c in p['cavities']:
@@ -113,8 +113,13 @@ def summary_html(res):
                      f"<td align=right>{c['C'] * 1e9:.3g}</td></tr>")
         h.append("</table>")
         for r, z in p['z'].items():
-            bands = '; '.join(f"{_hz(a)} – {_hz(b)}" for a, b in z['over']) or 'never'
-            h.append(f"<p>{e(r)}: over the target {bands}; at most {_ohm(max(z['mag']))}.</p>")
+            t = z.get('target', p.get('target'))          # per load (--load-target), or none (--no-target)
+            if t:
+                bands = '; '.join(f"{_hz(a)} – {_hz(b)}" for a, b in z['over']) or 'never'
+                own = f" ({_ohm(t)})" if t != p.get('target') else ''
+                h.append(f"<p>{e(r)}: over the target{own} {bands}; at most {_ohm(max(z['mag']))}.</p>")
+            else:
+                h.append(f"<p>{e(r)}: no target; at most {_ohm(max(z['mag']))}.</p>")
         h.append("<table border=0 cellspacing=6><tr><th align=left>part</th><th>role</th><th>element</th>"
                  "<th>mount (nH)</th><th align=left>connection</th></tr>")
         for n, i in sorted(p['parts'].items(), key=lambda kv: (kv[1]['role'], kv[0])):
@@ -370,8 +375,18 @@ class PdnTab(QWidget):
         if not p:
             return
         f = np.asarray(p['f'])
+        shown = []
         for k, (r, z) in enumerate(p['z'].items()):
             c = COLORS[k % len(COLORS)]
             self.zplot.plot(f, np.asarray(z['mag']), pen=pg.mkPen(c, width=2), name=r)
             self.zplot.plot(f, np.asarray(z['bare']), pen=pg.mkPen(c, width=1, style=Qt.DotLine))
-        self.zplot.plot([f[0], f[-1]], [p['target']] * 2, pen=pg.mkPen('r', width=1), name=f"target {p['target'] * 1e3:.1f} mΩ")
+            shown.append(np.asarray(z['mag'], float))
+        targets = sorted({t for t in [p.get('target'), *[z.get('target') for z in p['z'].values()]] if t})
+        for t in targets:
+            self.zplot.plot([f[0], f[-1]], [t] * 2, pen=pg.mkPen('r', width=1), name=f"target {t * 1e3:.1f} mΩ")
+        if shown:                                          # the loaded curves set the range: a bare-planes curve
+            data = np.concatenate(shown)                   # reaching 1e11 ohm (a tiny cavity) runs off the top (I6)
+            data = data[np.isfinite(data) & (data > 0)]
+            if len(data):
+                lo, hi = min([data.min(), *targets]), max([data.max(), *targets])
+                self.zplot.setYRange(np.log10(lo / 3), np.log10(hi * 3), padding=0)

@@ -46,6 +46,9 @@ class PowerCircuitTab(QWidget):
         self.summary=QTextBrowser();self.log=QPlainTextEdit();self.log.setReadOnly(True)
         self.tabs.addTab(self.summary,'Results')
         wave=QWidget();wave_layout=QVBoxLayout(wave);self.signal_view=QComboBox();self.signal_view.addItems(['Winding currents','Bridge / coil voltages','Input filter currents','Bus voltages']);wave_layout.addWidget(self.signal_view)
+        # I1: the solver's own steps (edge spikes) instead of the uniform T/256-style samples, when the run saved them
+        self.steps_box=QCheckBox('Solver steps (switching-edge spikes)');self.steps_box.setToolTip('Plot the signals at ngspice\'s own timesteps, as bus_spike_pp_V is measured; the default view is the uniform resampling the settled ripple uses')
+        self.steps_box.toggled.connect(lambda *_:self.show_waveform());wave_layout.addWidget(self.steps_box)
         self.waveform=pg.PlotWidget();self.waveform.addLegend();self.waveform.showGrid(x=True,y=True,alpha=.2);wave_layout.addWidget(self.waveform);self.signal_view.currentIndexChanged.connect(self.show_waveform)
         self.tabs.addTab(wave,'Time-domain waveforms');self.tabs.addTab(self.log,'Log')
         self.status=QLabel('Ready. Top controls override the corresponding JSON settings when run.');root.addWidget(self.status)
@@ -169,7 +172,7 @@ class PowerCircuitTab(QWidget):
             rows.append(f'<tr><td>{c["frequency_Hz"]/1000:g}</td><td>{c["load_power_W"]:.3f}</td><td>{num("input_power_W",".3f")}</td><td>{100*c["efficiency"]:.2f}</td>'
                         f'<td>{c["phase_deg"]:.2f}</td><td>{c["primary_rms_A"]:.3f}</td><td>{num("bus_ripple_V",".2f")}</td><td>{num("bus_spike_pp_V",".2f")}</td><td>{num("runtime_s",".0f")}</td></tr>')
             self.case.addItem(f'{c["frequency_Hz"]/1000:g} kHz / {c["target_W"]:g} W',c['folder'])
-        self.summary.setHtml('<h3>Operational circuit results</h3><table cellspacing=8><tr><th>kHz</th><th>Load W</th><th>Input W</th><th>Efficiency %</th><th>Phase °</th><th>Primary RMS A</th><th>VHB ripple V*</th><th>VHB spikes p-p V†</th><th>Run s</th></tr>'+''.join(rows)+'</table><p>* Settled ripple: peak to peak of the final cycle sampled at T/256, as the waveforms below are. † Peak to peak at every solver timestep, switching-edge spikes included (older results report this as the ripple).</p><p>Receiver/load and unmeasured parasitics are model assumptions. See model.json and case.json for matching, settling and power checks.</p><p>Fields are band-limited copper-current inference; external coils, package filaments and environment coupling are omitted.</p>')
+        self.summary.setHtml('<h3>Operational circuit results</h3><table cellspacing=8><tr><th>kHz</th><th>Load W</th><th>Input W</th><th>Efficiency %</th><th>Phase °</th><th>Primary RMS A</th><th>VHB ripple V*</th><th>VHB spikes p-p V†</th><th>Run s</th></tr>'+''.join(rows)+'</table><p>* Settled ripple: peak to peak of the final cycle sampled at T/256, as the waveforms below are by default. † Peak to peak at every solver timestep, switching-edge spikes included (older results report this as the ripple); tick Solver steps under the waveforms to see them.</p><p>Receiver/load and unmeasured parasitics are model assumptions. See model.json and case.json for matching, settling and power checks.</p><p>Fields are band-limited copper-current inference; external coils, package filaments and environment coupling are omitted.</p>')
         self.tabs.setCurrentWidget(self.summary);self.open_btn.setEnabled(self.win is not None and any('field_inference' in c for c in res['cases']));self.status.setText('Completed' if res.get('complete') else 'Partial results')
 
     def show_waveform(self,*_):
@@ -178,6 +181,9 @@ class PowerCircuitTab(QWidget):
         try:
             r=next(r for r in self.result['cases'] if r['folder']==folder)
             with np.load(Path(folder)/'transient.npz') as data:v={k:data[k] for k in data.files}
+            steps=self.steps_box.isChecked() and 'steps.time_s' in v
+            self.steps_box.setEnabled('steps.time_s' in v)
+            if steps:v={**v,'time_s':v['steps.time_s'],**{k[6:]:x for k,x in v.items() if k.startswith('steps.')}}
             t=v['time_s'];take=t>=t[-1]-2/r['frequency_Hz'];xx=(t[take]-(t[-1]-2/r['frequency_Hz']))*1e6
             options=[(['PRIMARY.winding_I','SECONDARY.winding_I'],'A'),(['bridge.V','PRIMARY.V','SECONDARY.V'],'V'),(['L3.I','R9.I'],'A'),(['bus.V','input.V','supply.V'],'V')]
             keys,unit=options[self.signal_view.currentIndex()];self.waveform.clear()

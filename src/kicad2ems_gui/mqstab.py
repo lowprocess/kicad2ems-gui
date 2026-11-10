@@ -28,6 +28,20 @@ def mqs_argv(vals,board,out,desc,python=None,preview=False):
     return argv
 
 
+def converter_choices(candidates):
+    """[(label, values)] from `pcbqs.mqs --list-converters`: one choice per converter and input net (I5: a
+    regulator with several candidate inputs, VCC/VDD/VDRV on Jetson's bucks, would otherwise stop the run).
+    values: the form's converter, vin and capacitors."""
+    out=[]
+    for c in candidates:
+        for i in c.get('inputs',[]):
+            caps=i.get('capacitors',[])
+            label=(f"{c['converter']}: {i['vin']} (inductor {c.get('inductor','?')}, switch {c.get('switch','?')}; "
+                   f"{len(caps)} capacitor{'s' if len(caps)!=1 else ''}: {', '.join(caps[:6])}{'…' if len(caps)>6 else ''})")
+            out.append((label,dict(converter=c['converter'],vin=i['vin'],capacitors=','.join(caps))))
+    return out
+
+
 def load_result(out,preview=False):
     path=Path(out)/('mqs-preview.json' if preview else 'mqs.json')
     if not path.is_file():return None
@@ -73,6 +87,12 @@ class MqsTab(PdnTab):
         self.preview_btn.setEnabled('preview' in (self.desc or {}).get('features',[]))
         self.preview_btn.setToolTip('Build the selected crop mesh without filling matrices or solving')
         self.run_btn.parentWidget().layout().insertWidget(0,self.preview_btn)
+        self.find_btn=QPushButton('Find converters')
+        self.find_btn.setToolTip('List the board\'s converters and their candidate input nets, and pick one')
+        self.find_btn.clicked.connect(self.find_converters)
+        self.find_btn.setEnabled(self.desc is not None)
+        self.run_btn.parentWidget().layout().insertWidget(0,self.find_btn)
+        self._finding=None
         self.run_btn.setToolTip('Solve the converter input loop and scan its magnetic near field')
         if self.desc is None:
             self.run_btn.setEnabled(False);self.say(why_not())
@@ -99,6 +119,48 @@ class MqsTab(PdnTab):
 
     def preview(self):
         self.start(preview=True)
+
+    def find_converters(self):
+        """Run `pcbqs.mqs --list-converters` and offer each converter / input net (I5)."""
+        import sys
+        if self.proc is not None:return
+        board=self.board_path()
+        if not board or not os.path.isfile(board):
+            self.status.setText('Choose a board first');return
+        ground=self.values().get('ground') or 'GND'
+        self._finding=[]
+        argv=[sys.executable,'-m','pcbqs.mqs',board,'--list-converters','--ground',ground]
+        self.say('$ python '+' '.join(argv[1:]));self.status.setText('Finding converters…');self.busy.show()
+        self.run_btn.setEnabled(False);self.find_btn.setEnabled(False)
+        def output():
+            self._finding.append(bytes(self.proc.readAllStandardOutput()).decode(errors='replace'))
+        def finished(code,_status=None):
+            if self.proc is not None:
+                output();self.proc.deleteLater();self.proc=None
+            self.busy.hide();self.run_btn.setEnabled(True);self.find_btn.setEnabled(True)
+            text=''.join(self._finding)
+            try:
+                found=json.loads(text[text.index('['):]) if code==0 else None
+            except ValueError:
+                found=None
+            if found is None:
+                self.say(text);self.status.setText(f'Finding converters failed (exit {code}); see Log');return
+            self.pick_converter(converter_choices(found))
+        run_tool(self,argv,output,finished)
+
+    def pick_converter(self,choices):
+        if not choices:
+            self.status.setText('No converter found (an inductor on an IC\'s switch net, with input capacitors)');return
+        from PySide6.QtWidgets import QInputDialog
+        labels=[label for label,_ in choices]
+        if len(choices)==1:
+            pick=labels[0]
+        else:
+            pick,ok=QInputDialog.getItem(self,'Converters','Converter and input net:',labels,0,False)
+            if not ok:return
+        values=dict(choices)[pick]
+        self.set_values(values)
+        self.status.setText(f"{values['converter']} on {values['vin']}: set; Run or Preview mesh")
 
     def start(self,checked=False,preview=False):
         if self.proc is not None:return
@@ -130,7 +192,9 @@ class MqsTab(PdnTab):
         except (OSError,ValueError,KeyError) as exc:
             self.say(str(exc));res=None
         if res is None:
-            self.status.setText(f'Run failed (exit {code}); see Log');return
+            tail=self.log.toPlainText()[-400:]
+            hint=('; use Find converters' if 'candidates' in tail or 'ambiguous input supply' in tail else '')
+            self.status.setText(f'Run failed (exit {code}){hint}; see Log');return
         self.show_result(res);self.tabs.setCurrentWidget(self.layout if self._preview else self.summary);self.status.setText('Mesh preview ready' if self._preview else 'Done')
 
     def show_result(self,res):
