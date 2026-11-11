@@ -232,3 +232,26 @@ def test_a_page_tool_runs_from_the_window(window, monkeypatch, tmp_path):
     assert w.pdn.proc is None and w.job is None and w.study.state('pdn') == 'failed (exit 1)'
     assert 'failed' in w.pdn.status.text()
     w.close()
+
+
+def test_the_study_comes_back_after_a_layout_that_hid_it(window):
+    """A layout saved with the Study dock closed opened with it hidden and its View action disabled: no way to
+    choose a board. It is closable now (View toggles it) and shown when the window opens."""
+    w, app, MainWindow = window
+    d = w.settings_dock
+    assert d.toggleViewAction().isEnabled()
+    d.hide()
+    w.close()                                                       # the layout is saved with the dock hidden
+    again = MainWindow()
+    try:
+        assert not again.settings_dock.isHidden() and again.settings_dock.toggleViewAction().isEnabled()
+        again.show()
+        app.processEvents()
+        again.settings_dock.toggleViewAction().trigger()            # View > Study closes it and opens it again
+        assert again.settings_dock.isHidden()
+        again.settings_dock.toggleViewAction().trigger()
+        assert not again.settings_dock.isHidden()
+    finally:
+        again.system.stop()
+        again.meters.stop()
+        again.close()

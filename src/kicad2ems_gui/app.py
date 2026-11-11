@@ -1106,7 +1106,9 @@ class MainWindow(QMainWindow):
         sd = QDockWidget('Study', self)
         sd.setObjectName('Settings')                                # its name in saved layouts, from when it was
         sd.setWidget(self.setup)
-        sd.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        # closable, as the pages: not closable, its View action is disabled, and a layout saved with it hidden
+        # (or a floated dock the window manager closed) left no way to open it again
+        sd.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
         self.addDockWidget(Qt.LeftDockWidgetArea, sd)
         self.settings_dock = sd
         self.work = QMainWindow()
@@ -1324,6 +1326,10 @@ class MainWindow(QMainWindow):
             d.show()                                                # a page closed last time: back
         self._page_visibility(opening=True)
         self.docks[PANELS[0]].raise_()
+        if self.settings_dock.isHidden():                           # the study: always there when the window opens
+            if self.settings_dock.isFloating():
+                self.settings_dock.setFloating(False)
+            self.settings_dock.show()
 
     def _page_visibility(self, opening=False):
         """The pages that come and go: Filter Synthesis closed when the window opens (the toolbar's Filter, or
