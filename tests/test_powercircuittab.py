@@ -80,7 +80,7 @@ def test_opens_on_the_simple_template():
     assert tab.start_from.currentData()=='boost' and tab.start_from.count()==11 and tab.start_from.itemData(tab.start_from.count()-1)=='wpthb'
     sc=tab.schematic.scene
     assert set(sc.devices)=={'part:'+r for r in ('V1','C1','L1','Q1','D1','C2','R1')}
-    assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.copper)
+    assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.fields)
     assert 'drives.pwm.duty is adjusted until vout_avg' in tab.matching_note.text()
     tab.new_model('wpthb')
     assert any(p['ref']=='C25' for p in tab.values()['components'])
@@ -134,4 +134,40 @@ def test_general_results_table_loss_and_waveforms(tmp_path):
     tab.signal_view.setCurrentIndex(1);assert [i.name() for i in tab.waveform.listDataItems()]==['il']
     tab.signal_view.setCurrentIndex(3);assert [i.name() for i in tab.waveform.listDataItems()]==['L1.I']
     tab.signal_view.setCurrentIndex(4);assert [i.name() for i in tab.waveform.listDataItems()]==['Q1.V','D1.V']
+    tab.close()
+
+
+def test_a_general_model_runs_on_its_board(tmp_path,monkeypatch):
+    """The board's copper is offered for a general model too: the model's own board, or the one named."""
+    from PySide6.QtWidgets import QApplication
+    import kicad2ems_gui.powercircuittab as page
+    app=QApplication.instance() or QApplication([])
+    ran=[]
+    monkeypatch.setattr(page,'run_tool',lambda tab,argv,*a,**k:ran.append(argv))
+    tab=PowerCircuitTab();tab.outdir.setText(str(tmp_path/'out'))
+    assert tab.form.isRowVisible(tab.copper) and tab.form.isRowVisible(tab.board) and not tab.form.isRowVisible(tab.fields)
+    assert tab.copper.text().startswith("Include the board's copper")
+    tab.start();assert '--copper' not in ran[-1] and ran[-1][3]=='pcbqs.circuit'
+    tab.copper.setChecked(True);tab.start()
+    assert ran[-1][-3]=='--copper' and ran[-1][-2]=='--board' and ran[-1][-1].endswith('06_boost.kicad_pcb')
+    other=tmp_path/'mine.kicad_pcb';other.write_text('(kicad_pcb)');tab.board.setText(str(other));tab.start()
+    assert ran[-1][-1]==str(other)
+    tab.board.clear();c=tab.values();c.pop('board');tab.set_model(c);n=len(ran);tab.start()
+    assert len(ran)==n and 'Import KiCad' in tab.status.text()      # no board to take the copper from: said, not run
+    tab.new_model('wpthb');assert tab.copper.text()=='Include extracted PCB R/L in circuit' and tab.form.isRowVisible(tab.fields)
+    tab.close()
+
+
+def test_general_results_show_the_boards_copper(tmp_path):
+    from PySide6.QtWidgets import QApplication
+    app=QApplication.instance() or QApplication([])
+    tab=PowerCircuitTab()
+    parts=dict(V1=dict(type='source',power_W=-12.3),D1=dict(type='diode',power_W=.23,avg_A=.5,rms_A=.73,peak_A=3.8,peak_V=57.),R1=dict(type='load',power_W=11.99,avg_V=24,avg_A=.5))
+    copper=dict(loss_W=.0023,board='06_boost.kicad_pcb',fit_error=.03,ports=[dict(name='T0',terminal='C1.in',reference='J1.in',net='in',rms_A=.096)])
+    case=dict(name='run',folder=str(tmp_path),period_s=5e-6,sweep={},knobs={},measures={},source_power_W=12.3,load_power_W=11.99,loss_W=.31,efficiency=.975,
+              gate_drive_power_W=0.0,parts=parts,coupled=[],copper=copper,notes=[],periodic_error=2e-4,reltol=1e-4,runs=9,periods=3450,runtime_s=36.)
+    tab.show_result(dict(format=2,name='Boost',complete=True,cases=[case],failed=[]))
+    text=tab.summary.toPlainText()
+    assert 'board copper (06_boost.kicad_pcb)' in text and '0.0023' in text and 'Board copper' in text
+    assert text.index('C1')<text.index('J1') and '0.096' in text
     tab.close()

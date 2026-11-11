@@ -223,4 +223,34 @@ def test_general_model_parts_are_edited_added_and_removed(qapp):
     assert any(p['ref']=='C9' for p in ed.config['parts'])
     ed,M=general('flyback');ed.select('part:LS');ed.remove_part()
     assert ed.config['couplings']==[] and not ed.scene.couplings
-    ed.import_file();assert 'board-terminal model' in ed.note.text()
+
+
+def test_a_board_is_imported_into_a_general_model(qapp):
+    """Import KiCad… with a .kicad_pcb: the footprints with their values and their pads' nets, reviewed, then the
+    model's parts; the board becomes the model's."""
+    pytest.importorskip('kicad2ems')
+    from kicad2ems_gui.schematicview import ImportReview
+    ed,M=general('buck')
+    board=ed.config['board']['file']
+    model=M.template('buck');model['parts']=[p for p in model['parts'] if p['ref']!='D1']
+    next(p for p in model['parts'] if p['ref']=='C2')['value']='10u'
+    model.pop('board');ed.set_model(model)
+    assert 'part:D1' not in ed.scene.devices
+    asked=[]
+    def review(document,current):
+        dialog=ImportReview(document,current,ed);asked.append(dialog)
+        rows={dialog.table.item(r,1).text():r for r in range(dialog.table.rowCount())}
+        assert dialog.table.item(rows['D1'],7).text()=='New diode' and dialog.table.item(rows['D1'],0).checkState().name=='Checked'
+        assert dialog.table.item(rows['C2'],3).text()=='10u' and 'brought up to date' in dialog.table.item(rows['C2'],7).text()
+        assert dialog.table.item(rows['J1'],7).text().startswith('Not taken over') and not dialog.eligible[rows['J1']]
+        dialog.select('none');assert dialog.selected_refs()==[]
+        dialog.select('existing');assert 'D1' not in dialog.selected_refs() and 'C2' in dialog.selected_refs()
+        dialog.select('all');return dialog.selected_refs(),dialog.connections.isChecked()
+    ed.review=review
+    ed.import_path(board)
+    assert len(asked)==1 and 'Imported 5 selected components' in ed.note.text()
+    d1=next(p for p in ed.config['parts'] if p['ref']=='D1')
+    assert d1['type']=='diode' and d1['nodes']==['GND','sw'] and 'part:D1' in ed.scene.devices
+    assert next(p for p in ed.config['parts'] if p['ref']=='C2')['value']==pytest.approx(47e-6)
+    assert ed.config['board']['file']==board
+    ed.undo();assert 'part:D1' not in ed.scene.devices

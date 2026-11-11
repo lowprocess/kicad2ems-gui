@@ -110,22 +110,28 @@ class ImportReview(QDialog):
         layout=QVBoxLayout(self)
         note=QLabel('Choose the components to apply. Existing parasitics are retained unless matching numeric ESR/ESL/DCR fields are supplied.\nIC logic and gate-driver behavior require explicit simulation models. DNP/excluded parts are imported disabled.');note.setWordWrap(True);layout.addWidget(note)
         controls=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Filter reference, value, net or sheet');self.search.textChanged.connect(self.filter);controls.addWidget(self.search,1)
-        for label,mode in [('Existing only','existing'),('Supported passives','all'),('None','none')]:
+        for label,mode in [('Existing only','existing'),('Everything supported','all'),('None','none')]:
             b=QPushButton(label);b.clicked.connect(lambda _,m=mode:self.select(m));controls.addWidget(b)
         layout.addLayout(controls)
         self.table=QTableWidget(len(document['components']),8);self.table.setHorizontalHeaderLabels(['Apply','Reference','KiCad value','Simulation value','Model','Pins → nets','Sheet','Import status']);self.table.setEditTriggers(QTableWidget.NoEditTriggers);self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents);self.table.horizontalHeader().setSectionResizeMode(5,QHeaderView.Stretch)
         self.eligible=[]
+        self.general=config.get('format')==2
+        if self.general:note.setText('Choose the parts to take over: resistors, capacitors, inductors, diodes and MOSFETs, each between the two nets its pins are on.\n'
+                                     'Which connector is the source and which the load, and what drives the switches, KiCad does not say: add those in the schematic afterwards.')
         for row,c in enumerate(document['components']):
-            status,default=_api().import_status(c,config);eligible=c['supported_passive'] or (c['kind']=='mosfet' and any(s['ref']==c['ref'] for s in config.get('switches',[])));self.eligible.append(eligible)
+            if self.general:status,eligible,default=_kicad().status(c,config)
+            else:status,default=_api().import_status(c,config);eligible=c['supported_passive'] or (c['kind']=='mosfet' and any(s['ref']==c['ref'] for s in config.get('switches',[])))
+            self.eligible.append(eligible)
             check=QTableWidgetItem();check.setFlags(Qt.ItemIsUserCheckable|Qt.ItemIsEnabled if eligible else Qt.NoItemFlags);check.setCheckState(Qt.Checked if default else Qt.Unchecked);self.table.setItem(row,0,check)
-            existing=next((p for p in config['components'] if p['ref']==c['ref']),None)
-            present=_quantity(existing['value'],dict(resistor='Ω',capacitor='F',inductor='H')[existing['type']]) if existing else '—'
+            existing=next((p for p in config['parts' if self.general else 'components'] if p['ref']==c['ref']),None)
+            present=(_quantity(existing['value'],dict(resistor='Ω',capacitor='F',inductor='H')[existing['type']]) if existing and existing['type'] in ('resistor','capacitor','inductor') else existing['type'] if existing else '—')
             values=[c['ref'],c['value'],present,c['kind'],', '.join(f"{p['number']} ({p['name']}) → {p['net'] or 'unconnected'}" for p in c['pins']),c['sheet'],status]
             for col,value in enumerate(values,1):
                 item=QTableWidgetItem(value);item.setToolTip(value);self.table.setItem(row,col,item)
         layout.addWidget(self.table,1)
         self.connections=QCheckBox('Also update existing terminal connections from KiCad pins (review against the PCB before copper extraction)');layout.addWidget(self.connections)
+        if self.general:self.connections.setText("Also move the model's existing parts to the nets KiCad has them on");self.connections.setChecked(True)
         self.details=QPlainTextEdit();self.details.setReadOnly(True);self.details.setMaximumHeight(115);layout.addWidget(self.details)
         self.table.itemSelectionChanged.connect(self.show_details)
         buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);buttons.accepted.connect(self.accept);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
@@ -135,8 +141,8 @@ class ImportReview(QDialog):
 
     def select(self,mode):
         for i,c in enumerate(self.document['components']):
-            if mode=='existing':on=_api().import_status(c,self.config)[1]
-            elif mode=='all':on=self.eligible[i] and c['supported_passive'] and not c['dnp'] and not c['exclude_from_sim']
+            if mode=='existing':on=(self.eligible[i] and any(p['ref']==c['ref'] for p in self.config['parts'])) if self.general else _api().import_status(c,self.config)[1]
+            elif mode=='all':on=self.eligible[i] and (self.general or c['supported_passive']) and not c['dnp'] and not c['exclude_from_sim']
             else:on=False
             self.table.item(i,0).setCheckState(Qt.Checked if on else Qt.Unchecked)
 
@@ -578,6 +584,11 @@ def _model():
     return model
 
 
+def _kicad():
+    from pcbqs.circuit import kicad
+    return kicad
+
+
 GROUND=('0','GND','gnd')
 PART_FIELDS={                                       # the general model's parts: what the inspector offers for each
     'resistor':[('value','Value (Ω)')],
@@ -981,18 +992,25 @@ class SchematicEditor(QWidget):
                 if 'couplings' in c:c['couplings']=[k for k in c['couplings'] if ref not in k.get('inductors',[])]
                 if 'probes' in c:c['probes']={n:pr for n,pr in c['probes'].items() if pr.get('current')!=ref}
                 for section in ('positions','rotations'):c.get('schematic',{}).get(section,{}).pop(key,None)
+                c.get('board',{}).get('parts',{}).pop(ref,None)
             self.commit(change,'Removed '+ref);return
         if not key.startswith('part:'):self.message('Only explicit passive components can be removed here; bridge/coil roles are edited through their properties.');return
         self.commit(lambda c:c.update(components=[p for p in c['components'] if 'part:'+p['ref']!=key]),'Removed simulation component')
 
     def import_file(self):
-        if self.config.get('format')==2:self.message('KiCad import fills the board-terminal model (New: wpthb); a general model is edited here part by part.');return
-        path,_=QFileDialog.getOpenFileName(self,'Import KiCad information','','KiCad schematic / XML netlist (*.kicad_sch *.xml);;All files (*)')
+        general=self.config.get('format')==2
+        path,_=QFileDialog.getOpenFileName(self,'Import KiCad information','','KiCad board, schematic or XML netlist (*.kicad_pcb *.kicad_sch *.xml);;All files (*)' if general else
+                                           'KiCad schematic / XML netlist (*.kicad_sch *.xml);;All files (*)')
         if path:self.import_path(path)
 
     def import_path(self,path,view_only=False):
         try:self.base_model()
         except (ValueError,KeyError) as exc:self.message('Fix the model JSON before importing: '+str(exc));return
+        if str(path).lower().endswith('.kicad_pcb'):                 # a board: its footprints and their pads' nets, read here
+            if self.config.get('format')!=2:self.message('A board is imported into a general model (New: one of the examples); this one takes a schematic or a netlist.');return
+            try:document=_kicad().read(path)
+            except (ValueError,RuntimeError,OSError,ImportError) as exc:self.message('Could not read the board: '+str(exc));return
+            return self.import_ready(document,{},view_only)
         if self.job:self.job.cancel();self.job.deleteLater()
         self.job=KiCadJob(path,self);self.job.progress.connect(self.message);self.job.failed.connect(self.message);self.job.completed.connect(lambda doc,sheets:self.import_ready(doc,sheets,view_only));QTimer.singleShot(0,self.job.start)
 
@@ -1002,15 +1020,21 @@ class SchematicEditor(QWidget):
             if document.get('sha256')!=self.config.get('schematic',{}).get('source',{}).get('sha256'):self.message('Source file changed; re-import to review connectivity and values.')
             return
         try:
-            current=self.base_model();_api().validate_edit(current)
+            current=self.base_model();self.check(current)
         except (ValueError,KeyError,TypeError,ImportError) as exc:self.message('Fix the model before applying this import: '+str(exc));return
-        review=ImportReview(document,current,self)
-        if review.exec()!=QDialog.Accepted:return
-        refs=review.selected_refs()
+        review=self.review(document,current)
+        if review is None:return
+        refs,connections=review
         def change(c):
-            imported=_api().apply_import(c,document,refs,review.connections.isChecked());c.clear();c.update(imported)
+            imported=(_kicad().apply if c.get('format')==2 else _api().apply_import)(c,document,refs,connections);c.clear();c.update(imported)
         if self.commit(change,f'Imported {len(refs)} selected components; source has {len(document["components"])} components'):
             self.set_sheets(sheets)
+
+    def review(self,document,current):
+        """The parts to import and whether to move the existing ones: the review dialog's answer, or None."""
+        dialog=ImportReview(document,current,self)
+        if dialog.exec()!=QDialog.Accepted:return None
+        return dialog.selected_refs(),dialog.connections.isChecked()
 
     def set_sheets(self,sheets):
         self._sheets=sheets;self.sheet.blockSignals(True);self.sheet.clear();self.sheet.addItems(list(sheets));self.sheet.blockSignals(False)
@@ -1034,7 +1058,7 @@ class SchematicEditor(QWidget):
         if path:self.import_path(path,view_only=True)
 
     def refresh_source(self):
-        self.source_components=self.config.get('schematic',{}).get('source',{}).get('components',[]);self.source_table.setRowCount(len(self.source_components));configured={p['ref'] for p in [*self.config.get('components',[]),*self.config.get('switches',[])]}
+        self.source_components=self.config.get('schematic',{}).get('source',{}).get('components',[]);self.source_table.setRowCount(len(self.source_components));configured={p['ref'] for p in [*self.config.get('parts',[]),*self.config.get('components',[]),*self.config.get('switches',[])]}
         for row,c in enumerate(self.source_components):
             for col,value in enumerate([c['ref'],c['value'],c['kind'],', '.join(p['number']+' → '+(p['net'] or 'unconnected') for p in c['pins']),'Configured' if c['ref'] in configured else 'Not in simulation']):
                 item=QTableWidgetItem(value);item.setToolTip(value);self.source_table.setItem(row,col,item)

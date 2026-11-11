@@ -75,7 +75,7 @@ class PowerCircuitTab(QWidget):
         self.refresh_timer=QTimer(self);self.refresh_timer.setSingleShot(True);self.refresh_timer.setInterval(250);self.refresh_timer.timeout.connect(self.refresh_schematic)
         self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
         for control in [self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.sweep,*self.overrides.values()]:control.editingFinished.connect(self.refresh_schematic)
-        self.bridge_rows=[self.board,self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.model,self.copper,self.fields,*self.overrides.values()]
+        self.bridge_rows=[self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.model,self.fields,*self.overrides.values()]
         self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
@@ -149,6 +149,10 @@ class PowerCircuitTab(QWidget):
         for w in self.bridge_rows:self.form.setRowVisible(w,not general)
         for w in (self.params,self.sweep):self.form.setRowVisible(w,general)
         self.steps_box.setVisible(not general);self.open_btn.setVisible(not general)
+        self.copper.setText("Include the board's copper between the parts' pads" if general else 'Include extracted PCB R/L in circuit')
+        self.copper.setToolTip("Each pad a node of its own, joined by what the board has between them: the model's board (board.file), the PCB named above, or the study's board. "
+                               'The circuit alone is settled first, then run on its board' if general else '')
+        self.board.setPlaceholderText("the model's board, else the study's" if general else ("the study's board" if self._panel is not None else ''))
         views=['Probes: voltages','Probes: currents','Capacitor voltages','Inductor currents','Switch and diode voltages','Switch and diode currents'] if general else \
               ['Winding currents','Bridge / coil voltages','Input filter currents','Bus voltages']
         if [self.signal_view.itemText(i) for i in range(self.signal_view.count())]!=views:
@@ -264,12 +268,12 @@ class PowerCircuitTab(QWidget):
         except (ValueError,KeyError) as e:self.status.setText(str(e));return
         general=c.get('format')==2
         if not general:self.matching_note.setText(self.matching_text(c))
-        board=self.board_path()
-        if not general and self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction');return
+        board=self.board.text().strip() or (c.get('board') or {}).get('file','') or self.board_path() if general else self.board_path()
+        if self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction' if not general else "Choose the model's board: Import KiCad… a .kicad_pcb, or name one under PCB");return
         self.out=Path(self.outdir.text().strip() or ('circuit' if general else 'power-circuit')).expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
         model=self.out/'model-input.json';model.write_text(json.dumps(c,indent=2))
         argv=['-u','-m','pcbqs.circuit' if general else 'pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
-        if not general and self.copper.isChecked():argv+=['--copper','--board',board]
+        if self.copper.isChecked():argv+=['--copper','--board',board]
         if not general and self.fields.isChecked():argv+=['--fields']
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)
@@ -321,6 +325,7 @@ class PowerCircuitTab(QWidget):
             together={r for grp in c.get('coupled',[]) for r in grp['inductors']}
             loss=[(r,p['power_W']) for r,p in c['parts'].items() if p['type'] not in ('source','load') and r not in together]
             loss+=[(' + '.join(grp['inductors']),grp['power_W']) for grp in c.get('coupled',[])]
+            if c.get('copper'):loss.append((f"board copper ({c['copper'].get('board','')})",c['copper']['loss_W']))
             if c.get('gate_drive_power_W'):loss.append(('gate drives',-c['gate_drive_power_W']))
             total=max(c['loss_W'],1e-30)
             html+=f"<h4>{c['name']}: where the {g(c['loss_W'])} W goes</h4><table cellspacing=6><tr><th>Part</th><th>W</th><th>%</th></tr>"
@@ -330,6 +335,9 @@ class PowerCircuitTab(QWidget):
             html+=''.join(f"<tr><td>{r}</td><td>{g(p.get('avg_A'))}</td><td>{g(p.get('rms_A'))}</td><td>{g(p.get('peak_A'))}</td><td>{g(p.get('peak_V'))}</td><td>{g(p.get('avg_V'))}</td>"
                           f"<td>{g(p['ripple_V'])+' V' if 'ripple_V' in p else g(p['ripple_A'])+' A' if 'ripple_A' in p else '–'}</td></tr>" for r,p in stress)+'</table>'
             for note in c.get('notes',[]):html+=f'<p><b>Note.</b> {note}</p>'
+            if c.get('copper') and c['copper'].get('ports'):
+                html+='<h4>Board copper</h4><table cellspacing=6><tr><th>Pad</th><th>Net</th><th>to</th><th>RMS A</th></tr>'
+                html+=''.join(f"<tr><td>{p['terminal'].rsplit('.',1)[0]}</td><td>{p['net']}</td><td>{p['reference'].rsplit('.',1)[0]}</td><td>{g(p.get('rms_A'))}</td></tr>" for p in c['copper']['ports'])+'</table>'
             html+=f"<p>Settled to {100*c.get('periodic_error',0):.2g} % period to period; solver tolerance {g(c.get('reltol'))}; {c.get('periods','–')} periods simulated.</p>"
         self.summary.setHtml(html)
 
