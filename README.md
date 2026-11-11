@@ -12,6 +12,18 @@ The settings form is made from kicad2ems's option tables and its solver registry
 `kicad2ems` process (`kicad2ems.runs`), so the window needs nothing of a solver's and closing it never loses a
 run. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/docs/gui.md) covers using it.
 
+## The study
+
+The dock on the left is the study: the board (one for every analysis), the **Analyses** and the settings of the
+analysis selected there. S-parameters is kicad2ems's own run with the solvers ticked under Solvers; Power integrity,
+Near field and Circuit are pcbqs's tools, whose pages keep their results while their settings are in the dock.
+
+**Preview** and **Run** act on the ticked analyses, one after the other; the Run page lists them with each one's
+state, time and log. Run > *Run the selected analysis alone* (or the list's context menu) runs one whatever is ticked.
+An analysis that starts from another's results (`needs` in `study.py`) runs after it and ticks it: Thermal is listed
+that way, after Power integrity, whose DC solve gives it the copper's loss. It has no solver yet, so it cannot be
+ticked.
+
 ## Install
 
     python -m pip install 'kicad2ems[gui]'              # kicad2ems with its window
@@ -26,7 +38,8 @@ It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 2611
 
 | Module | Contents |
 |---|---|
-| `app.py` | `MainWindow`: the panels, a run and its events |
+| `app.py` | `MainWindow`: the study dock, the pages, a run of the ticked analyses and its events |
+| `study.py` | the analyses a board can have, what follows what, the list in the Study dock |
 | `runner.py` | the settings form without Qt: fields, sections, solver tick boxes, configs read and written back |
 | `runfolders.py` | a folder per run and one per board's preview |
 | `planview.py`, `meshpick.py` | the board seen from above, with the line model and the meshes (the KiCad plugin's map too) |

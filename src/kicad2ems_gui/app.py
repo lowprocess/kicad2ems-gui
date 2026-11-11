@@ -1,17 +1,20 @@
 """
-kicad2ems GUI (PySide6 + pyqtgraph): set up a run, preview it, watch it, see the results. The window has the
-settings on the left and five pages:
+kicad2ems GUI (PySide6 + pyqtgraph): set up a study, preview it, watch it, see the results. The window has the
+study on the left (the board, the analyses made of it and the settings of the one selected: study.py) and its pages:
 
     Viewer   the board in 3D or from above, a solver's mesh, the line model coloured by Z0 (pick a section to read
              it), field dumps in place or as cuts (live while the run goes), the far field, the run's plots
-    Run      progress, openEMS's energy decay and mom25d's adaptive sweep, the log
+    Run      the analyses of the run and where each is, openEMS's energy decay and mom25d's adaptive sweep, the
+             log of each
     Results  S-parameters and antenna results as Cartesian, Smith and polar plots you add and remove
     Filter Synthesis
              design a microstrip filter with dfsynth, validate and tune it on the solvers, open its board here
-    Power Integrity
-             a power rail's DC drop (maps, each load's voltage, via currents) and PDN impedance with its decaps,
-             from pcbqs's power-integrity tool (python -m pcbqs.pdn)
+    Power Integrity, Near field, Circuit
+             the results of pcbqs's tools (python -m pcbqs.pdn, .mqs, .power_circuit): a rail's DC drop and PDN
+             impedance, a converter's input loop and its magnetic field, ngspice operating points. Their settings
+             are in the study, and the toolbar's Run starts them with the rest
 
+Run starts the analyses ticked in the study one after the other (run_study), each after the one it starts from.
 Every run is the command-line tool started as a separate process with --events; the GUI follows its event
 stream, so a closed window never kills a simulation's results and the GUI needs no openEMS of its own. The
 window's size, its docks and splitters, and the Results plots are remembered between sessions.
@@ -24,7 +27,8 @@ from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
                                QLineEdit, QCheckBox, QComboBox, QPushButton, QLabel, QPlainTextEdit, QProgressBar,
                                QFileDialog, QScrollArea, QMessageBox, QDockWidget, QToolBar, QStyle, QToolButton,
-                               QDialog, QTabWidget, QApplication)
+                               QDialog, QTabWidget, QApplication, QTreeWidget, QTreeWidgetItem, QHeaderView,
+                               QStackedWidget)
 import pyqtgraph as pg
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, Run, EventTail, stop_runs, settings_values,
                      extra_values, find_results, save_config, solvers_from_form, solver_ticks)
@@ -39,6 +43,7 @@ from .filtertab import FilterTab
 from .pdntab import PdnTab
 from .mqstab import MqsTab
 from .powercircuittab import PowerCircuitTab
+from .study import StudyList, ANALYSES, BY_KEY, run_order, dependents
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
@@ -51,8 +56,10 @@ COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e3
 
 
 class SetupTab(QWidget):
-    """The settings: one collapsible section per group (collapsed when the window opens; the header counts the
-    settings set), in a scroll area. Open / Save / Preview / Run are the window's toolbar."""
+    """The study's settings, in a scroll area: the board (one for every analysis), the analyses (study.StudyList,
+    once the window gave its pages: set_study) and the settings of the analysis selected there. Each group is a
+    collapsible section (collapsed when the window opens; the header counts the settings set). Open / Save /
+    Preview / Run are the window's toolbar."""
     def __init__(self, win):
         super().__init__()
         from kicad2ems.api.frontend import Settings
@@ -64,6 +71,10 @@ class SetupTab(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         left = QVBoxLayout()
         left.setSpacing(2)
+        rf = QVBoxLayout()                                          # the S-parameter run's own sections
+        rf.setContentsMargins(0, 0, 0, 0)
+        rf.setSpacing(2)
+        top_of = lambda group: left if group == 'Board' else rf     # the board: above the analyses, for all
         groups, self.sections, self.group_of, self.solver_boxes, self.solver_labels = {}, {}, {}, {}, {}
         self.parents = {}                                           # 'openEMS': (its section, the layout of its subs)
         self.field_labels = {}                                      # key: its label (greyed with the field)
@@ -75,7 +86,7 @@ class SetupTab(QWidget):
                 sub.setContentsMargins(0, 0, 0, 0)
                 sub.setSpacing(2)
                 self.parents[top] = (Section(SECTION_TITLES.get(top, top), holder), sub)
-                left.addWidget(self.parents[top][0])
+                rf.addWidget(self.parents[top][0])
             if group not in groups:
                 box = QWidget()
                 groups[group] = QFormLayout(box)
@@ -91,7 +102,7 @@ class SetupTab(QWidget):
                     extra.clicked.connect(lambda: self.win.show_solvers())
                     self.help_btn = extra
                 self.sections[group] = Section(group.split('/')[-1], box, extra=extra)
-                (self.parents[group.split('/')[0]][1] if '/' in group else left).addWidget(self.sections[group])
+                (self.parents[group.split('/')[0]][1] if '/' in group else top_of(group)).addWidget(self.sections[group])
             self.group_of[key] = group
             if kind == 'bool':
                 w = QCheckBox()
@@ -136,7 +147,20 @@ class SetupTab(QWidget):
                 note.setWordWrap(True)
                 note.setEnabled(False)                              # greyed: a note, not a setting
                 groups[top].insertRow(0, note)
+        self.study = None                                           # the analyses' list (set_study)
+        self.study_slot = QVBoxLayout()
+        self.study_slot.setContentsMargins(0, 0, 0, 0)
+        left.addLayout(self.study_slot)
+        self.panel_title = QLabel('')                               # whose settings follow
+        self.panel_title.setStyleSheet('font-weight: bold; padding: 8px 4px 2px 4px;')
+        self.panel_title.hide()
+        left.addWidget(self.panel_title)
+        self.rf_box = QWidget()
+        self.rf_box.setLayout(rf)
+        self.panels = {'rf': self.rf_box}                           # analysis: its settings (one shown)
+        left.addWidget(self.rf_box)
         left.addStretch(1)
+        self._left = left
         lw = QWidget()
         lw.setLayout(left)
         scroll = QScrollArea()
@@ -145,10 +169,69 @@ class SetupTab(QWidget):
         # the form wraps its rows instead of scrolling sideways: as wide as its narrowest layout, plus room for
         # the vertical scroll bar (a long form shows it, and without that room a sideways one appeared too)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        bar = scroll.verticalScrollBar().sizeHint().width()
-        scroll.setMinimumWidth(max(270, lw.minimumSizeHint().width() + bar + 2 * scroll.frameWidth() + 2))
+        self.scroll, self._lw = scroll, lw
+        self._fit_width()
         outer.addWidget(scroll)
         self._update_sections()                                     # before any config: nothing ticked, all greyed
+
+    def _fit_width(self):
+        """The dock at least as wide as its widest settings (the hidden analyses' too: selecting one must not
+        cut its fields off, the form having no sideways scroll bar)."""
+        bar = self.scroll.verticalScrollBar().sizeHint().width()
+        need = max([self._lw.minimumSizeHint().width()] + [p.minimumSizeHint().width() for p in self.panels.values()])
+        self.scroll.setMinimumWidth(max(270, min(need, 420) + bar + 2 * self.scroll.frameWidth() + 2))
+
+    def set_study(self, study, panels):
+        """The analyses' list under the board, and each analysis's settings {key: widget} (a page's own form,
+        moved here): the selected analysis's are the ones shown."""
+        from .study import ANALYSES
+        self.study = study
+        holder = QWidget()
+        hl = QVBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addWidget(study)
+        self.study_note = QLabel('ticked: Preview and Run include it')
+        self.study_note.setWordWrap(True)
+        self.study_note.setEnabled(False)                           # greyed: a note, not a setting
+        hl.addWidget(self.study_note)
+        self.study_section = Section('Analyses', holder, expanded=True)
+        self.study_slot.addWidget(self.study_section)
+        at = self._left.indexOf(self.rf_box) + 1
+        for a in ANALYSES:
+            w = panels.get(a.key)
+            if w is None or a.key in self.panels:
+                continue
+            self.panels[a.key] = w
+            self._left.insertWidget(at, w)
+            at += 1
+        study.selected.connect(self.show_settings)
+        study.ticks_changed.connect(self._ticks)
+        self._fit_width()
+        self.show_settings(study.current())
+        self._solvers_text()
+        self._ticks()
+
+    def show_settings(self, key):
+        """The settings of one analysis under the list, the others' hidden."""
+        from .study import BY_KEY
+        for k, w in self.panels.items():
+            w.setVisible(k == key)
+        a = BY_KEY.get(key)
+        self.panel_title.setText(f"{a.title} settings" if a else '')
+        self.panel_title.setVisible(a is not None and self.study is not None)
+
+    def _solvers_text(self):
+        """The S-parameters analysis's With in the list: the solvers ticked under Solvers."""
+        if self.study is not None:
+            on = [n for n, w in self.solver_boxes.items() if w.isChecked()]
+            self.study.set_tool('rf', ', '.join(on) if on else 'no solver ticked')
+
+    def _ticks(self):
+        from .study import ANALYSES
+        n = len(self.study.ticked())
+        self.study_section.head.setText(f"Analyses  ({n} of {len(ANALYSES)})")
+        if hasattr(self.win, 'ticks_changed'):
+            self.win.ticks_changed()
 
     def set_availability(self, info):
         """The machine's solvers (sysinfo): a solver that cannot run here says why on its tick box."""
@@ -195,6 +278,7 @@ class SetupTab(QWidget):
         """A solver's section (and the shared ones) greyed while none of its solvers is ticked: auto may run
         openEMS, mom25d and the line model."""
         from kicad2ems.api.frontend import registry
+        self._solvers_text()
         ticked = {n for n, w in self.solver_boxes.items() if w.isChecked()}
         auto = self.edits.get(f"{TICK}auto", (None,))[0]
         if auto is not None and auto.isChecked():                   # the solvers auto may run, the line model's
@@ -430,6 +514,17 @@ class RunTab(QWidget):
         self.stop_btn.clicked.connect(win.stop)
         top.addWidget(self.stop_btn)
         lay.addLayout(top)
+        self.jobs = QTreeWidget()                                   # a study run's analyses: state and time
+        self.jobs.setHeaderLabels(['Analysis', 'State', 'Time'])
+        self.jobs.setRootIsDecorated(False)
+        self.jobs.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.jobs.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.jobs.header().setStretchLastSection(False)
+        self.jobs.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.jobs.hide()
+        self.jobs.currentItemChanged.connect(lambda cur, _old: cur is not None and self.show_log(cur.data(0, Qt.UserRole)))
+        self.job_rows = {}
+        lay.addWidget(self.jobs)
         self.bars_box = QVBoxLayout()
         lay.addLayout(self.bars_box)
         self.bars, self.curves, self.hist, self._tol = {}, {}, {}, None
@@ -451,7 +546,75 @@ class RunTab(QWidget):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
-        lay.addWidget(self.log, 1)
+        row = QHBoxLayout()                                         # whose log: the S-parameter run's, a page's
+        self.log_label = QLabel('Log of')
+        self.log_of = QComboBox()
+        self.log_of.addItem(BY_KEY['rf'].title, 'rf')
+        self.log_of.currentIndexChanged.connect(lambda i: self.logs.setCurrentIndex(max(i, 0)))
+        row.addWidget(self.log_label)
+        row.addWidget(self.log_of)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.logs = QStackedWidget()
+        self.logs.addWidget(self.log)
+        lay.addWidget(self.logs, 1)
+        self.log_label.hide()
+        self.log_of.hide()
+
+    def add_log(self, key, title, log):
+        """Another analysis's log beside the S-parameter run's: a view of its page's own (the same document)."""
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setDocument(log.document())
+        view.setFont(log.font())
+        bar = view.verticalScrollBar()
+        log.document().contentsChanged.connect(lambda: bar.setValue(bar.maximum()))      # follows, as the page's
+        self.logs.addWidget(view)
+        self.log_of.addItem(title, key)
+        self.log_label.show()
+        self.log_of.show()
+
+    def show_log(self, key):
+        i = self.log_of.findData(key)
+        if i >= 0:
+            self.log_of.setCurrentIndex(i)
+
+    def set_jobs(self, jobs):
+        """The analyses of a study run [(key, title)], queued; one alone: no list (the page as it was)."""
+        self.jobs.clear()
+        self.job_rows = {}
+        for key, title in jobs:
+            it = QTreeWidgetItem([title, 'queued', ''])
+            it.setData(0, Qt.UserRole, key)
+            self.jobs.addTopLevelItem(it)
+            self.job_rows[key] = it
+        self.jobs.setVisible(len(jobs) > 1)
+        if jobs:
+            rows = len(jobs)
+            self.jobs.setFixedHeight(self.jobs.sizeHintForRow(0) * rows + self.jobs.header().sizeHint().height()
+                                     + 2 * self.jobs.frameWidth() + 4)
+
+    def job_state(self, key, text, seconds=None):
+        it = self.job_rows.get(key)
+        if it is None:
+            return
+        it.setText(1, text)
+        it.setToolTip(1, text)
+        f = it.font(1)
+        f.setBold(text == 'running')
+        it.setFont(1, f)
+        if seconds is not None:
+            it.setText(2, f"{int(seconds // 60)}:{int(seconds % 60):02d}")
+        if text == 'running':
+            self.jobs.setCurrentItem(it)                            # its log below
+
+    def own_plots(self, on):
+        """kicad2ems's own run's plots and bars: away while another analysis runs (its log has the page)."""
+        if not on:
+            for b in self.bars.values():
+                b.hide()
+            self.plot.hide()
+            self.sweep.hide()
 
     def reset(self):
         for b in self.bars.values():
@@ -786,6 +949,7 @@ class MainWindow(QMainWindow):
         self.pdn = PdnTab(self)
         self.mqs = MqsTab(self)
         self.circuit = PowerCircuitTab(self)
+        self._study()
         self.fields, self.volume = self.viewer.cuts, self.viewer.volume      # the field views, inside the viewer
         if getattr(self.volume, 'steer', None) is not None:          # its Far field section steers too
             self.results.link_steering(self.volume.steer)
@@ -796,9 +960,10 @@ class MainWindow(QMainWindow):
         self.system.ready.connect(lambda *_: self.update_estimate())
         self._est_basis = None                                      # the settings the estimates were made with
         self.solvers_dialog = SolversDialog(self, self.system)
-        # the settings: a dock of the window; the pages: Viewer, Run, Results (tabbed, split or floated)
-        sd = QDockWidget('Settings', self)
-        sd.setObjectName('Settings')
+        # the study (the board, the analyses, the selected one's settings): a dock of the window; the pages:
+        # Viewer, Run, Results and each analysis's own (tabbed, split or floated)
+        sd = QDockWidget('Study', self)
+        sd.setObjectName('Settings')                                # its name in saved layouts, from when it was
         sd.setWidget(self.setup)
         sd.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, sd)
@@ -824,6 +989,9 @@ class MainWindow(QMainWindow):
             if self.docks:
                 self.work.tabifyDockWidget(self.docks[PANELS[0]], d)
             self.docks[name] = d
+            key = next((a.key for a in ANALYSES if a.page == name), None)
+            if key:                                                 # an analysis's page in front: its settings
+                d.visibilityChanged.connect(lambda on, k=key: on and self._study_ready and self.study.select(k))
         self.docks[PANELS[0]].raise_()
         self.setCentralWidget(self.work)
         self._toolbar()
@@ -833,8 +1001,142 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.poll)
         self._restore_shape()
         self.update_title()
+        self._study_ready = True
         if config:
             self.setup.load(config)
+
+    # ---- the study: the analyses, which a Run includes, their settings in the dock ----
+    def _study(self):
+        """The analyses' list into the settings dock, with each page's own settings under it (the pages keep
+        their results); the ticks of the last session (the first time: S-parameters, as Run always did)."""
+        from . import pdntab, mqstab
+        self._study_ready = False
+        self.queue, self.job, self._job_t0, self._queue_preview, self._queue_stopped = [], None, 0.0, False, False
+        self.pages = {'pdn': self.pdn, 'mqs': self.mqs, 'circuit': self.circuit}
+        self.study = StudyList()
+        panels = {k: p.settings_panel() for k, p in self.pages.items()}
+        for a in ANALYSES:
+            if a.planned:                                           # no tool, so no settings: what it will be
+                note = QLabel(a.note)
+                note.setWordWrap(True)
+                note.setEnabled(False)
+                note.setContentsMargins(6, 0, 6, 0)
+                panels[a.key] = note
+        self.setup.set_study(self.study, panels)
+        for key, mod in (('pdn', pdntab), ('mqs', mqstab)):
+            if self.pages[key].desc is None:
+                self.study.set_available(key, False, mod.why_not() or pdntab.QS_PIP)
+        if not self.circuit.run_btn.isEnabled():                    # its template could not be made: why
+            self.study.set_available('circuit', False, self.circuit.status.text())
+        for key, page in self.pages.items():
+            self.runtab.add_log(key, BY_KEY[key].title, page.log)
+        saved = self.qsettings.value('study/ticked')
+        saved = ['rf'] if saved is None else ([saved] if isinstance(saved, str) else list(saved))
+        self.study.set_ticked([k for k in saved if k in BY_KEY])
+        self.study.opened.connect(self.show_analysis)
+        self.study.run_one.connect(lambda k: self.run_study(only=k))
+
+    def ticks_changed(self):
+        if getattr(self, '_study_ready', False):
+            self.qsettings.setValue('study/ticked', self.study.ticked() or '')
+
+    def show_analysis(self, key):
+        """An analysis's page in front (S-parameters: Results), its settings in the dock."""
+        self.study.select(key)
+        if key in BY_KEY and not BY_KEY[key].planned:
+            self.show_panel(BY_KEY[key].page or 'Results')
+
+    def busy(self):
+        """A run of the window's or a tool of a page's is going."""
+        return (self.proc is not None or self.job is not None or bool(self.queue)
+                or any(p.proc is not None for p in self.pages.values()))
+
+    def run_study(self, preview=False, only=None):
+        """Run (preview) the ticked analyses, one after the other, each after what it starts from; only: that
+        analysis alone. One that cannot start (a setting missing) says why in the list, and the rest go on,
+        except those that start from it."""
+        if self.busy():
+            QMessageBox.information(self, 'Busy', 'A run is going: stop it first')
+            return
+        keys = [only] if only else run_order(self.study.ticked(), preview, self.study.available())
+        if only and (only in self.study.why or (preview and not BY_KEY[only].preview)):
+            keys = []
+        if not keys:
+            QMessageBox.warning(self, 'Study', 'None of the ticked analyses has a preview: tick S-parameters or '
+                                'Near field under Analyses' if preview else 'Tick an analysis under Analyses first')
+            return
+        self.queue, self._queue_preview, self._queue_stopped = list(keys), preview, False
+        self.runtab.set_jobs([(k, BY_KEY[k].title) for k in keys])
+        for k in keys:
+            self.study.set_state(k, 'queued', 'gray')
+        self._next_job()
+
+    def _next_job(self):
+        import time
+        if self.job is not None:                                    # one at a time
+            return
+        while self.queue:
+            key = self.queue.pop(0)
+            self.job, self._job_t0 = key, time.monotonic()
+            why = self._start_job(key, self._queue_preview)
+            if why is None:
+                self._job_state(key, 'running')
+                self.acts['Stop'].setEnabled(True)
+                self.runtab.stop_btn.setEnabled(True)
+                self.show_panel('Run', front=not self._queue_preview)
+                return
+            self._job_state(key, f"not started: {why}", bad=True)
+            self._drop_after(key)
+        self.job = None
+        self.acts['Stop'].setEnabled(self.proc is not None)
+        self.runtab.stop_btn.setEnabled(self.proc is not None)
+
+    def _start_job(self, key, preview):
+        """Start one analysis; None, or why it did not start."""
+        if key == 'rf':
+            return self.start(preview)
+        page = self.pages[key]
+        page.start(preview=True) if preview else page.start()
+        proc = page.proc
+        if proc is None:                                            # the page said why on its status line
+            return page.status.text() or 'see its page'
+        proc.finished.connect(lambda code, _st=None, k=key: self._job_done(k, code))
+        proc.errorOccurred.connect(lambda err, k=key: err == QProcess.FailedToStart and self._job_done(k, -1))
+        return None
+
+    def _job_state(self, key, text, bad=False, seconds=None):
+        self.runtab.job_state(key, text, seconds)
+        self.study.set_state(key, text, 'bad' if bad else '')
+        if key != 'rf':                                             # kicad2ems's own run says its stages itself
+            self.runtab.stage.setText(f"{BY_KEY[key].title}: {text}")
+            if text == 'running':
+                self.runtab.own_plots(False)
+
+    def _drop_after(self, key):
+        """The queued analyses that start from one that failed: not run."""
+        for k in [k for k in self.queue if k in dependents(key)]:
+            self.queue.remove(k)
+            self._job_state(k, f"not run: {BY_KEY[key].title} did not finish", bad=True)
+
+    def _job_done(self, key, code):
+        """An analysis of the queue ended: its state and time, then the next (the last one's page in front)."""
+        import time
+        if self.job != key:
+            return
+        took = time.monotonic() - self._job_t0
+        if code == 0:
+            self._job_state(key, f"done {time.strftime('%H:%M')}", seconds=took)
+        else:
+            self._job_state(key, 'stopped' if self._queue_stopped else f"failed (exit {code})",
+                            bad=not self._queue_stopped, seconds=took)
+            self._drop_after(key)
+        self.job = None
+        if self.queue:                                              # after this one's own end is dealt with
+            QTimer.singleShot(0, self._next_job)
+            return
+        self._next_job()                                            # none left: the toolbar's Stop
+        if key != 'rf' and code == 0:                               # S-parameters: _finished chose its page
+            self.show_panel(BY_KEY[key].page)
 
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
@@ -910,10 +1212,10 @@ class MainWindow(QMainWindow):
                 ('Save', 'SP_DialogSaveButton', 'Save the config (Ctrl+S)', self.setup.save),
                 ('Save as', 'SP_DriveFDIcon', 'Save the config as (Ctrl+Shift+S)', self.setup.save_as),
                 (None, None, None, None),
-                ('Preview', 'SP_FileDialogContentsView', 'The model, mesh and line model, no full-wave solve (Ctrl+P)',
-                 self.preview),
-                ('Run', 'SP_MediaPlay', 'Run the solvers (Ctrl+R)', self.run),
-                ('Stop', 'SP_MediaStop', 'Stop the run (Ctrl+.)', self.stop),
+                ('Preview', 'SP_FileDialogContentsView', 'The ticked analyses\' models and meshes (the line model too), '
+                 'no solve (Ctrl+P)', self.preview),
+                ('Run', 'SP_MediaPlay', 'Run the ticked analyses, one after the other (Ctrl+R)', self.run),
+                ('Stop', 'SP_MediaStop', 'Stop the run and what is queued after it (Ctrl+.)', self.stop),
                 (None, None, None, None),
                 ('Results', 'SP_DirOpenIcon', 'Open a results folder', self.results._load),
                 ('Report', 'SP_FileDialogInfoView', 'Open the HTML report of the results', self.results.open_report),
@@ -1015,6 +1317,8 @@ class MainWindow(QMainWindow):
         vm.addAction(a)
         rm = self.menuBar().addMenu('&Run')
         for text, key, slot in (('&Preview', 'Ctrl+P', self.preview), ('&Run', 'Ctrl+R', self.run),
+                                ('Run the selected &analysis alone', 'Ctrl+Shift+R',
+                                 lambda: self.run_study(only=self.study.current())),
                                 ('&Stop', 'Ctrl+.', self.stop)):
             a = QAction(text, self)
             a.setShortcut(QKeySequence(key))
@@ -1161,8 +1465,8 @@ class MainWindow(QMainWindow):
     def _auto_preview(self):
         """The preview a newly opened config gets: only in a window on the screen (not a test's), when idle."""
         board = self.setup.values().get('board')
-        if self.isVisible() and board and os.path.exists(board) and self.proc is None:
-            self.preview()
+        if self.isVisible() and board and os.path.exists(board) and not self.busy():
+            self.start(True)                                        # kicad2ems's own: the board, whatever is ticked
 
     def refresh_runs(self, select=None):
         """The Results of choice: this board's preview and runs, the newest first; select: the folder to show
@@ -1199,16 +1503,19 @@ class MainWindow(QMainWindow):
         return default_out(board) if board else os.path.join(os.getcwd(), 'out')
 
     def start(self, preview):
+        """Start kicad2ems's own run (the S-parameters analysis) or its preview; None, or why it did not start
+        (said in a dialog too when the user started it alone)."""
+        def no(title, why):
+            if self.job != 'rf' or not self.queue:                  # alone: a dialog; in a queue: the list says it
+                (QMessageBox.information if title == 'Busy' else QMessageBox.warning)(self, title, why)
+            return why
         if self.proc is not None:
-            QMessageBox.information(self, 'Busy', 'A run is going: stop it first')
-            return
+            return no('Busy', 'A run is going: stop it first')
         vals = self.setup.values()
         if not vals.get('board'):
-            QMessageBox.warning(self, 'Setup', 'Choose a board first')
-            return
+            return no('Setup', 'Choose a board first')
         if not preview and vals.get('solvers') == []:
-            QMessageBox.warning(self, 'Setup', 'Choose a solver under Solvers (or Preview)')
-            return
+            return no('Setup', 'Choose a solver under Solvers (or Preview)')
         from .runfolders import run_dir, preview_dir
         base = self.out_dir(vals)                                   # each run in a folder of its own
         self.current = Run(vals, preview_dir(base, vals['board']) if preview else run_dir(base, vals['board']), preview)
@@ -1228,20 +1535,31 @@ class MainWindow(QMainWindow):
         self.runtab.stop_btn.setEnabled(True)
         self.acts['Stop'].setEnabled(True)
         self.runtab.stage.setText('starting…')
+        self.runtab.show_log('rf')
         self.show_panel('Run', front=not preview)
         self.timer.start(300)
+        return None
 
     def preview(self):
-        self.start(True)
+        self.run_study(preview=True)
 
     def run(self):
-        self.start(False)
+        self.run_study()
 
     def stop(self):
-        """First press: ask the run to stop (stop.py: mom25d after the frequency it is solving, openEMS at once
-        with what it has, later solvers skipped). Second press: end the process."""
+        """What is queued: not run. The analysis running: a page's tool ends at once; kicad2ems's own run is
+        asked to stop at the first press (stop.py: mom25d after the frequency it is solving, openEMS at once
+        with what it has, later solvers skipped) and its process ended at the second."""
+        for k in self.queue:
+            self._job_state(k, 'not run: stopped')
+        self.queue = []
+        if self.job in self.pages:
+            self._queue_stopped = True
+            self.pages[self.job].stop()
+            return
         if not (self.current and self.proc):
             return
+        self._queue_stopped = True
         if self._stopping:
             self.runtab.log.appendPlainText("stop: ending the process")
             self.proc.kill()
@@ -1308,6 +1626,7 @@ class MainWindow(QMainWindow):
             self.show_panel('Viewer' if seen else 'Run')
         else:
             self.show_panel('Results' if (has_s or ant) else ('Viewer' if seen else 'Run'))
+        self._job_done('rf', code)                                  # in a study run: the next analysis
 
 
 def main(argv=None):

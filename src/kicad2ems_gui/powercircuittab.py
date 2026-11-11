@@ -12,11 +12,13 @@ from PySide6.QtCore import Qt
 
 
 class PowerCircuitTab(QWidget):
+    _panel=None                                                     # the operating settings, once in the Study dock
+
     def __init__(self,win=None):
         super().__init__();self.win=win;self.proc=None;self.out=None;self._syncing=False
         root=QVBoxLayout(self);settings=QWidget();form=QFormLayout(settings)
         self.settings_toggle=QPushButton('Operating settings');self.settings_toggle.setCheckable(True);root.addWidget(self.settings_toggle)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);scroll.setMinimumHeight(180);scroll.setMaximumHeight(310);root.addWidget(scroll);scroll.hide();self.settings_toggle.toggled.connect(scroll.setVisible)
+        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);scroll.setMinimumHeight(180);scroll.setMaximumHeight(310);root.addWidget(scroll);scroll.hide();self.settings_toggle.toggled.connect(scroll.setVisible);self._settings_scroll=scroll
         self.board=QLineEdit();self.outdir=QLineEdit();self.frequencies=QLineEdit('90000,110000');self.powers=QLineEdit('5,10,20,30');self.coupling=QLineEdit('0.4')
         for label,w in [('PCB (optional)',self.board),('Output folder',self.outdir),('Frequencies (Hz)',self.frequencies),('Receiver powers (W)',self.powers),('Coupling k',self.coupling)]:form.addRow(label,w)
         self.receiver_C=QLineEdit();self.receiver_C.setPlaceholderText('Blank: tune at each frequency')
@@ -65,6 +67,23 @@ class PowerCircuitTab(QWidget):
             p=subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template'],capture_output=True,text=True,timeout=30,check=True)
             self.set_model(json.loads(p.stdout))
         except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False);self.schematic.setEnabled(False)
+
+    def settings_panel(self):
+        """The operating settings out of the page, for the window's Study dock (its Run starts the cases then,
+        so the page's Run and Stop are hidden); the PCB is the study's board unless one is named here."""
+        if self._panel is None:
+            self._panel=self._settings_scroll.takeWidget()
+            self._settings_scroll.hide();self.settings_toggle.hide();self.run_btn.hide();self.stop_btn.hide()
+            self.board.setPlaceholderText("the study's board")
+        return self._panel
+
+    def board_path(self):
+        """The PCB named here, else the study's board (the window's settings)."""
+        p=self.board.text().strip()
+        if not p and self.win is not None and hasattr(self.win,'setup'):
+            try:p=self.win.setup.values().get('board') or ''
+            except (ValueError,KeyError,TypeError):p=''
+        return p
 
     def matching_text(self,c):
         cap=f'fixed {c["secondary_C_F"]*1e9:g} nF' if c.get('secondary_C_F') is not None else 'tuned per frequency'
@@ -135,11 +154,12 @@ class PowerCircuitTab(QWidget):
         try:c=self.values()
         except (ValueError,KeyError) as e:self.status.setText(str(e));return
         self.matching_note.setText(self.matching_text(c))
-        if self.copper.isChecked() and not Path(self.board.text()).is_file():self.status.setText('Choose a PCB for copper extraction');return
+        board=self.board_path()
+        if self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction');return
         self.out=Path(self.outdir.text().strip() or 'power-circuit').expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
         model=self.out/'model-input.json';model.write_text(json.dumps(c,indent=2))
         argv=['-u','-m','pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
-        if self.copper.isChecked():argv+=['--copper','--board',self.board.text()]
+        if self.copper.isChecked():argv+=['--copper','--board',board]
         if self.fields.isChecked():argv+=['--fields']
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)

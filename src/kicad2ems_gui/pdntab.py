@@ -175,7 +175,9 @@ class FitImages(ImagePanel if QWidget is not object else object):
 
 
 class PdnTab(QWidget):
-    """The tool's settings on the left; the impedance, the maps, the summary and the log on the right."""
+    """The tool's settings on the left; the impedance, the maps, the summary and the log on the right. In the
+    window the settings are in its Study dock instead (settings_panel) and its Run starts the tool."""
+    _panel = None                                       # the settings, once moved out of the page
 
     def __init__(self, win=None):
         super().__init__()
@@ -209,7 +211,8 @@ class PdnTab(QWidget):
         self.outdir = QLineEdit()
         self.outdir.setPlaceholderText('pdn_<rail> beside the board')
         f.addRow('Output folder', self.outdir)
-        v.addWidget(Section('Board', files, True))
+        self._files = Section('Board', files, True)
+        v.addWidget(self._files)
         groups = {}
         for o in (self.desc or {}).get('options', []):
             groups.setdefault(o['group'], []).append(o)
@@ -253,7 +256,33 @@ class PdnTab(QWidget):
         sc = QScrollArea(); sc.setWidgetResizable(True); sc.setWidget(box)
         left = QWidget(); lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
         lv.addWidget(sc, 1); lv.addWidget(foot)
+        self._form_scroll, self._form_foot, self._form_left = sc, foot, left
         return left
+
+    def run_buttons(self):
+        """The page's own Run and Stop: hidden once the window's toolbar runs the tool."""
+        return [self.run_btn, self.stop_btn]
+
+    def settings_panel(self):
+        """The settings out of the page, for the window's Study dock: the sections, then the status line. The
+        page keeps its results and takes the whole of itself for them. Run and Stop are the window's then; the
+        board is the study's unless one is named here."""
+        if self._panel is None:
+            box = self._form_scroll.takeWidget()
+            self._panel = QWidget()
+            v = QVBoxLayout(self._panel)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(2)
+            v.addWidget(box)
+            v.addWidget(self._form_foot)
+            for b in self.run_buttons():
+                b.hide()
+            self._form_left.hide()
+            self.board.setPlaceholderText("the study's board")
+            self.board.setToolTip('.kicad_pcb (or a run\'s <name>_board.json); empty: the board under Board, above')
+            self._files.title = 'Files'
+            self._files.set_count(0)
+        return self._panel
 
     def _browse(self):
         p, _ = QFileDialog.getOpenFileName(self, 'Board', '', 'KiCad board (*.kicad_pcb);;kicad2ems board (*.json)')

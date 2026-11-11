@@ -97,6 +97,9 @@ class MqsTab(PdnTab):
         if self.desc is None:
             self.run_btn.setEnabled(False);self.say(why_not())
 
+    def run_buttons(self):
+        return [self.run_btn,self.stop_btn,self.preview_btn]          # Find converters stays: it fills the form
+
     def _views(self):
         self.tabs=QTabWidget()
         from .planview import PlanView
