@@ -75,9 +75,9 @@ def test_opens_on_the_simple_template():
     app=QApplication.instance() or QApplication([])
     tab=PowerCircuitTab()
     c=tab.values()
-    assert c['name']=='simple full bridge' and len(c['components'])+len(c['switches'])==8
+    assert c['name']=='simple full bridge' and len(c['components'])+len(c['switches'])==9
     sc=tab.schematic.scene
-    assert len(sc.devices)==13                                        # the 8; the supply, coils, receiver C and load
+    assert len(sc.devices)==14                                        # the 9; the supply, coils, receiver C and load
     assert {sc.devices[k].record['group'] for k in ('part:R1','part:L1')}=={'input'}
     tab.new_model('wpthb')
     assert any(p['ref']=='C25' for p in tab.values()['components'])
