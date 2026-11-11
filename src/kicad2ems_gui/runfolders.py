@@ -95,4 +95,7 @@ def tool_runs(base, board):
             d = os.path.dirname(f)
             when = datetime.datetime.fromtimestamp(os.path.getmtime(f))
             out.append((when, d, kind, f"{TOOL_TITLES[kind]}: {os.path.basename(d)[len(kind) + 1:]}, {when:%Y-%m-%d %H:%M:%S}"))
-    return [(d, kind, label) for _when, d, kind, label in sorted(out, key=lambda r: r[0], reverse=True)]
+    tools = list(TOOL_TITLES)
+    out.sort(key=lambda r: (tools.index(r[2]), r[3]))                   # runs of one moment: in the tools' order
+    out.sort(key=lambda r: r[0], reverse=True)                          # newest first (a stable sort keeps the rest)
+    return [(d, kind, label) for _when, d, kind, label in out]
