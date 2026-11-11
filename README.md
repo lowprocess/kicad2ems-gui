@@ -24,6 +24,15 @@ An analysis that starts from another's results (`needs` in `study.py`) runs afte
 that way, after Power integrity, whose DC solve gives it the copper's loss. It has no solver yet, so it cannot be
 ticked.
 
+**Results of** (the toolbar) lists every result of the board: the preview, the S-parameter runs, and each Power
+integrity and Near field run, which now get a folder of their own under the output folder. Choosing one fills the
+pages: S-parameters or the analysis's curves on the Results page, its maps and fields in the Viewer, its summary on
+its page. Results > **Compare with** lays other runs of the same kind over the one shown, and View > **A second
+Viewer** opens another run's maps in a window of its own. Power integrity's maps need pcbqs 261111 or later.
+
+Filter Synthesis opens from the toolbar's Filter (it is closed when the window opens); Circuit is there while Circuit
+is ticked. The Circuit page starts from pcbqs's simple full-bridge model; wpthb's is a choice away.
+
 ## Install
 
     python -m pip install 'kicad2ems[gui]'              # kicad2ems with its window
@@ -40,6 +49,7 @@ It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 2611
 |---|---|
 | `app.py` | `MainWindow`: the study dock, the pages, a run of the ticked analyses and its events |
 | `study.py` | the analyses a board can have, what follows what, the list in the Study dock |
+| `curves.py`, `curveplot.py` | other analyses' curves on the Results page (a rail's impedance, a near field's spectrum), other runs over them |
 | `runner.py` | the settings form without Qt: fields, sections, solver tick boxes, configs read and written back |
 | `runfolders.py` | a folder per run and one per board's preview |
 | `planview.py`, `meshpick.py` | the board seen from above, with the line model and the meshes (the KiCad plugin's map too) |

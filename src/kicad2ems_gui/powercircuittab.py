@@ -35,7 +35,7 @@ class PowerCircuitTab(QWidget):
         for key,label in [('rise_s','Gate rise/fall override (ns)'),('dead_time_s','Dead-time override (ns)'),('Cds_F','Switch Cds override (pF)'),('cap_ESR','All-capacitor ESR override (mΩ)'),('cap_ESL','All-capacitor ESL override (nH)'),('filter_DCR','L3 DCR override (mΩ)')]:
             w=QLineEdit();w.setPlaceholderText('Blank keeps per-part JSON values');self.overrides[key]=w;form.addRow(label,w)
         self.matching_note=QLabel();root.addWidget(self.matching_note)
-        row=QHBoxLayout();root.addLayout(row)
+        row=QHBoxLayout();root.addLayout(row);self.top_row=row
         for text,slot in [('Load model…',self.load_model),('Save model…',self.save_model),('Choose PCB…',self.choose_board)]:
             b=QPushButton(text);b.clicked.connect(slot);row.addWidget(b)
         self.run_btn=QPushButton('Run circuit cases');self.run_btn.clicked.connect(self.start);row.addWidget(self.run_btn)
@@ -63,10 +63,26 @@ class PowerCircuitTab(QWidget):
         self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
-        try:
-            p=subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template'],capture_output=True,text=True,timeout=30,check=True)
-            self.set_model(json.loads(p.stdout))
+        self.start_from=QComboBox();self.start_from.addItem('New: simple full bridge','simple');self.start_from.addItem('New: wpthb (board terminals)','wpthb')
+        self.start_from.setToolTip('Replace the model with one to start from: a bare full bridge with its tank and receiver, or the wpthb board\'s, whose terminals are its pads')
+        self.start_from.activated.connect(lambda i:self.new_model(self.start_from.itemData(i)))
+        self.top_row.insertWidget(0,self.start_from)
+        try:self.set_model(self.template('simple'))                  # a small circuit to open on, not a board's
         except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False);self.schematic.setEnabled(False)
+
+    @staticmethod
+    def template(name):
+        """pcbqs's model to start from; a pcbqs without named templates gives its only one (wpthb's)."""
+        run=lambda *a:subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template',*a],capture_output=True,text=True,timeout=30)
+        p=run(name)
+        if p.returncode and 'argument --template' not in p.stderr and 'unrecognized' not in p.stderr:p.check_returncode()
+        if p.returncode:p=run()                                     # older pcbqs: --template takes no name
+        p.check_returncode()
+        return json.loads(p.stdout)
+
+    def new_model(self,name):
+        try:self.set_model(self.template(name));self.status.setText(f'Started from the {name} template.')
+        except (OSError,ValueError,subprocess.SubprocessError) as e:self.status.setText('Template unavailable: '+str(e))
 
     def settings_panel(self):
         """The operating settings out of the page, for the window's Study dock (its Run starts the cases then,

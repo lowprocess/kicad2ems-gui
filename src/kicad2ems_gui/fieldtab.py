@@ -177,6 +177,8 @@ class FieldsTab(QWidget):
         i = self.dump.currentIndex()
         self.src = self.srcs[i] if 0 <= i < len(self.srcs) else None
         self.lim = None
+        if self.src is not None and self.src.field == 'V':          # a drop or a rise: linear, as volts are
+            self.log.setChecked(False)
         keep=self.layout_layer.currentText()
         self.layout_layer.blockSignals(True);self.layout_layer.clear()
         cu=(self.src.geometry if self.src else {}).get('cu_z',{})

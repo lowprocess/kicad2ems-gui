@@ -28,12 +28,14 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
                                QLineEdit, QCheckBox, QComboBox, QPushButton, QLabel, QPlainTextEdit, QProgressBar,
                                QFileDialog, QScrollArea, QMessageBox, QDockWidget, QToolBar, QStyle, QToolButton,
                                QDialog, QTabWidget, QApplication, QTreeWidget, QTreeWidgetItem, QHeaderView,
-                               QStackedWidget)
+                               QStackedWidget, QMenu)
 import pyqtgraph as pg
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, Run, EventTail, stop_runs, settings_values,
                      extra_values, find_results, save_config, solvers_from_form, solver_ticks)
 from kicad2ems.api.frontend import G_DUMP
 from .splot import SPlot, default_layout
+from .curveplot import CurvePlot
+from .curves import load_curves
 from .panels import Section, FlowLayout
 from .systempanel import SystemPanel
 from .viewer import Viewer, VIEWS
@@ -50,6 +52,8 @@ DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
 PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit')
 TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
+ON_DEMAND = ('Filter',)                         # pages closed when the window opens: the toolbar's Filter opens it
+FOLLOWS_TICK = {'Circuit': 'circuit'}           # pages shown while their analysis is ticked (or opened by hand)
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
@@ -710,7 +714,9 @@ def run_notes(sm):
 class ResultsTab(QWidget):
     """The Results page: the S-parameters of every solver and, for an antenna, its gain, efficiency and pattern
     cuts, as subplots you add and remove (splot.SPlot). The plots of a page are remembered: one layout for
-    S-parameters, one for antennas."""
+    S-parameters, one for antennas. Results that are curves of another kind (a rail's impedance, a near field's
+    spectrum: curves.py) take the page instead (curveplot.CurvePlot). Compare with lays other runs of the same
+    kind over the one shown."""
     def __init__(self, win):
         super().__init__()
         self.win = win
@@ -738,14 +744,15 @@ class ResultsTab(QWidget):
             lambda i: self.load_antenna(self.out, self.which.itemData(i)) if i >= 0 and self.out else None)
         self.which.hide()
         top.addWidget(self.which)
-        self.add_btn = QPushButton('Add results folder…')
-        self.add_btn.setToolTip('Overlay the S-parameters of another run (another folder), labelled by its folder')
-        self.add_btn.clicked.connect(self._add)
-        top.addWidget(self.add_btn)
-        self.clear_btn = QPushButton('Remove added')
-        self.clear_btn.clicked.connect(self._clear_added)
-        self.clear_btn.setEnabled(False)
-        top.addWidget(self.clear_btn)
+        self.cmp_btn = QToolButton()                                # other runs over this one
+        self.cmp_btn.setText('Compare with')
+        self.cmp_btn.setToolTip("Lay other runs of this board over the one shown, each labelled by its folder: "
+                                "their S-parameters, or the same kind of curves (a rail's impedance, a spectrum)")
+        self.cmp_btn.setPopupMode(QToolButton.InstantPopup)
+        self.cmp_menu = QMenu(self.cmp_btn)
+        self.cmp_menu.aboutToShow.connect(self._fill_compare)
+        self.cmp_btn.setMenu(self.cmp_menu)
+        top.addWidget(self.cmp_btn)
         self.folder_btn = QPushButton('Open folder')
         self.folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.win.out_dir())))
         top.addWidget(self.folder_btn)
@@ -757,8 +764,13 @@ class ResultsTab(QWidget):
         self.link_steering(self.steer)
         self.splot = SPlot()
         self.splot.layout_changed.connect(self._save_layout)
-        lay.addWidget(self.splot, 1)
+        self.curveplot = CurvePlot()
+        self.views = QStackedWidget()                               # the S-parameter plots, or an analysis's curves
+        self.views.addWidget(self.splot)
+        self.views.addWidget(self.curveplot)
+        lay.addWidget(self.views, 1)
         self.report, self.added, self._files, self.out, self._mode = None, [], [], None, None
+        self.curves, self.added_curves = None, []                   # the curves shown (None: S-parameters), others'
         self._restore_layout('sparams')
 
     # ---- the plots a page has: remembered per kind of result ----
@@ -784,17 +796,100 @@ class ResultsTab(QWidget):
 
     def _add(self):
         d = QFileDialog.getExistingDirectory(self, 'Another results folder to overlay', self.win.out_dir())
-        if d:
-            files = find_results(d)
-            if not files:
-                QMessageBox.information(self, 'Results', f"No S-parameters in {d}")
-                return
-            self.added.append((os.path.basename(os.path.normpath(d)) or d, files))
+        if d and not self.add_folder(d):
+            QMessageBox.information(self, 'Results', f"No {'S-parameters' if self.curves is None else self.curves.title.lower()} in {d}")
+
+    def kind(self):
+        """What the page shows: 'rf' (S-parameters, antenna) or the analysis its curves are of ('pdn', 'mqs')."""
+        return self.curves.kind if self.curves is not None else 'rf'
+
+    def compared(self):
+        """The folders laid over the run shown (of its kind)."""
+        if self.curves is not None:
+            return [o.folder for o in self.added_curves if o.kind == self.curves.kind]
+        return [d for _label, _files, d in self.added]
+
+    def add_folder(self, d):
+        """Another run over the one shown: its S-parameters, or its curves when the page shows an analysis's
+        (the same kind only). False: nothing of that kind in the folder."""
+        d = os.path.abspath(d)
+        if d in self.compared():
+            return True
+        if self.curves is not None:
+            cs = load_curves(d)
+            if cs is None or cs.kind != self.curves.kind:
+                return False
+            self.added_curves.append(cs)
+            self._show_curves()
+            return True
+        files = find_results(d)
+        if not files:
+            return False
+        self.added.append((os.path.basename(os.path.normpath(d)) or d, files, d))
+        self.show(self._files)
+        return True
+
+    def remove_folder(self, d=None):
+        """One compared run off the page (None: all of the kind shown)."""
+        if self.curves is not None:
+            self.added_curves = [o for o in self.added_curves if o.kind != self.curves.kind or (d and o.folder != d)]
+            self._show_curves()
+        else:
+            self.added = [a for a in self.added if d and a[2] != d]
             self.show(self._files)
 
-    def _clear_added(self):
-        self.added = []
-        self.show(self._files)
+    def _fill_compare(self):
+        """The Compare with menu: this board's other runs of the kind shown (ticked: laid over), another folder,
+        none."""
+        m = self.cmp_menu
+        m.clear()
+        kind, on = self.kind(), self.compared()
+        here = os.path.abspath(self.out) if self.out else None
+        srcs = self.win.sources() if hasattr(self.win, 'sources') else []
+        listed = set()
+        for src in srcs:
+            d = os.path.abspath(src['folder'])
+            if src['kind'] != kind or d == here:
+                continue
+            a = m.addAction(src['label'])
+            a.setCheckable(True)
+            a.setChecked(d in on)
+            a.toggled.connect(lambda tick, d=d: (self.add_folder(d) if tick else self.remove_folder(d)))
+            listed.add(d)
+        for d in on:                                                # added from elsewhere
+            if d not in listed:
+                a = m.addAction(os.path.basename(d))
+                a.setCheckable(True)
+                a.setChecked(True)
+                a.toggled.connect(lambda tick, d=d: None if tick else self.remove_folder(d))
+        if not m.actions():
+            a = m.addAction('no other run of this kind for this board yet')
+            a.setEnabled(False)
+        m.addSeparator()
+        m.addAction('Another folder…').triggered.connect(self._add)
+        a = m.addAction('None')
+        a.setEnabled(bool(on))
+        a.triggered.connect(lambda: self.remove_folder(None))
+
+    def load_curves(self, out_dir):
+        """A folder's curves (curves.load_curves) onto the page in place of the S-parameter plots; False: it has
+        none, and the page shows S-parameters."""
+        self.curves = load_curves(os.path.abspath(out_dir)) if out_dir else None
+        self._show_curves()
+        return self.curves is not None
+
+    def _show_curves(self):
+        cs = self.curves
+        self.views.setCurrentWidget(self.curveplot if cs is not None else self.splot)
+        if cs is None:
+            return
+        others = [o for o in self.added_curves if o.kind == cs.kind and o.folder != cs.folder]
+        self.curveplot.set_sets(cs, others)
+        self.which.hide()
+        self.steer.hide()
+        self.set_notes([], [])
+        self.report = None
+        self.info.setText(cs.info + (f"  ·  with {', '.join(o.label for o in others)}" if others else ''))
 
     def _load(self):
         d = QFileDialog.getExistingDirectory(self, 'A results folder (the run\'s output folder)', self.win.out_dir())
@@ -886,8 +981,9 @@ class ResultsTab(QWidget):
         """The S-parameters of a run's files (openEMS, mom25d, line model) and a compare file."""
         from .traces import load_traces
         self._files = list(files)
+        if self.curves is not None:                                 # an analysis's curves have the page
+            return
         self.report = next((p for l, p in files if p.endswith('_report.html')), None)
-        self.clear_btn.setEnabled(bool(self.added))
         z0 = 50.0
         summary = next((p for l, p in files if p.endswith(('_run.json', '_openems.json'))), None)
         self.set_notes([], [])
@@ -905,7 +1001,7 @@ class ResultsTab(QWidget):
             compare = self.win.setup.values().get('compare')
         try:
             traces = load_traces(files, compare)
-            for label, fs in self.added:                             # other runs: their solvers under the folder's name
+            for label, fs, _d in self.added:                         # other runs: their solvers under the folder's name
                 for tr in load_traces(fs):
                     tr.source = f"{label}: {tr.source}"
                     traces.append(tr)
@@ -934,6 +1030,51 @@ class SolversDialog(QDialog):
         row.addWidget(b)
         lay.addLayout(row)
         self.resize(780, 660)
+
+
+class ViewerWindow(QWidget):
+    """A second Viewer, its own window: another run of the board beside the one the main Viewer shows (a drop
+    map against the last one's, an S-parameter run's fields against another's). Its runs are the main window's
+    Results of choice, refreshed when it opens."""
+    def __init__(self, win):
+        super().__init__(None, Qt.Window)
+        self.win = win
+        self.setWindowTitle('Viewer - kicad2ems')
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel('Results of'))
+        self.runs = QComboBox()
+        self.runs.setMinimumWidth(320)
+        self.runs.activated.connect(lambda i: self.show_run(self.runs.itemData(i)))
+        row.addWidget(self.runs, 1)
+        lay.addLayout(row)
+        self.viewer = Viewer(win)
+        lay.addWidget(self.viewer, 1)
+        self.resize(1100, 760)
+
+    def refresh(self, select=None):
+        keep = select or self.runs.currentData()
+        self.runs.clear()
+        for src in self.win.sources():
+            self.runs.addItem(src['label'], src['folder'])
+        i = self.runs.findData(keep) if keep else -1
+        if i < 0:                                                   # the run before the one the main Viewer shows
+            here = self.win.runs_box.currentData()
+            i = next((k + 1 for k in range(self.runs.count() - 1) if self.runs.itemData(k) == here), 0)
+            i = min(i, self.runs.count() - 1)
+        if i >= 0:
+            self.runs.setCurrentIndex(i)
+            self.show_run(self.runs.itemData(i))
+
+    def show_run(self, folder):
+        if folder and os.path.isdir(folder):
+            self.viewer.load(folder)
+            if self.win.viewer.view() in self.viewer.buttons and self.viewer.buttons[self.win.viewer.view()].isEnabled():
+                self.viewer.set_view(self.win.viewer.view())        # the same view as the main one
+            here = self.win.viewer.cuts.src
+            if here is not None:                                    # and the same dump, when it has it
+                self.viewer.show_dump(here.label)
+            self.setWindowTitle(f"{self.runs.currentText()} - Viewer - kicad2ems")
 
 
 class MainWindow(QMainWindow):
@@ -1039,6 +1180,7 @@ class MainWindow(QMainWindow):
     def ticks_changed(self):
         if getattr(self, '_study_ready', False):
             self.qsettings.setValue('study/ticked', self.study.ticked() or '')
+            self._page_visibility()
 
     def show_analysis(self, key):
         """An analysis's page in front (S-parameters: Results), its settings in the dock."""
@@ -1126,6 +1268,10 @@ class MainWindow(QMainWindow):
         took = time.monotonic() - self._job_t0
         if code == 0:
             self._job_state(key, f"done {time.strftime('%H:%M')}", seconds=took)
+            out = getattr(self.pages.get(key), 'out', None)
+            if key in ('pdn', 'mqs') and out and os.path.isdir(str(out)):   # its maps and curves, its summary
+                self.refresh_runs(select=str(out))
+                self.open_results(str(out), quiet=True, front=False)
         else:
             self._job_state(key, 'stopped' if self._queue_stopped else f"failed (exit {code})",
                             bad=not self._queue_stopped, seconds=took)
@@ -1136,7 +1282,11 @@ class MainWindow(QMainWindow):
             return
         self._next_job()                                            # none left: the toolbar's Stop
         if key != 'rf' and code == 0:                               # S-parameters: _finished chose its page
-            self.show_panel(BY_KEY[key].page)
+            if key == 'mqs' and self._queue_preview:                # a mesh preview: the mesh, in the plan
+                self.viewer.set_view('Plan')
+                self.show_panel('Viewer')
+            else:
+                self.show_panel(BY_KEY[key].page)
 
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
@@ -1172,7 +1322,24 @@ class MainWindow(QMainWindow):
                 self.work.addDockWidget(Qt.TopDockWidgetArea, d)
                 self.work.tabifyDockWidget(self.docks[PANELS[0]], d)
             d.show()                                                # a page closed last time: back
+        self._page_visibility(opening=True)
         self.docks[PANELS[0]].raise_()
+
+    def _page_visibility(self, opening=False):
+        """The pages that come and go: Filter Synthesis closed when the window opens (the toolbar's Filter, or
+        View, opens it); Circuit there while Circuit is ticked under Analyses, and gone when it is unticked."""
+        if opening:
+            for name in ON_DEMAND:
+                self.docks[name].hide()
+        ticked = set(self.study.ticked())
+        for name, key in FOLLOWS_TICK.items():
+            d = self.docks[name]
+            if key in ticked and d.isHidden():
+                if d.isFloating() and not opening:
+                    d.setFloating(False)
+                d.show()
+            elif key not in ticked and not d.isHidden() and not (self.job == key or self.queue and key in self.queue):
+                d.hide()
 
     def _save_shape(self):
         q = self.qsettings
@@ -1194,6 +1361,7 @@ class MainWindow(QMainWindow):
             d.show()
         for name in PANELS[1:]:
             self.work.tabifyDockWidget(self.docks[PANELS[0]], self.docks[name])
+        self._page_visibility(opening=True)
         self.docks[PANELS[0]].raise_()
         self.viewer.split.setSizes([880, 380])
         self.results.splot.split.setSizes([220, 1000])
@@ -1253,7 +1421,11 @@ class MainWindow(QMainWindow):
         d = self.docks[name]
         if d.isFloating() and not d.isVisible():
             d.setFloating(False)
+        closed = d.isHidden()
         d.show()
+        if closed and not d.isFloating() and name != PANELS[0] and \
+                d not in self.work.tabifiedDockWidgets(self.docks[PANELS[0]]):    # a page that starts closed: tabbed
+            self.work.tabifyDockWidget(self.docks[PANELS[0]], d)            # with the others, not beside them
         if front:
             d.raise_()
 
@@ -1265,6 +1437,15 @@ class MainWindow(QMainWindow):
         d.resize(w, h)
         c = self.frameGeometry().center()
         d.move(max(scr.x(), min(c.x() - w // 2, scr.right() - w)), max(scr.y(), min(c.y() - h // 2, scr.bottom() - h)))
+
+    def second_viewer(self):
+        """A Viewer window of its own, showing another run of the board (ViewerWindow); one at a time."""
+        if getattr(self, '_viewer2', None) is None:
+            self._viewer2 = ViewerWindow(self)
+        self._viewer2.refresh()
+        self._viewer2.show()
+        self._viewer2.raise_()
+        return self._viewer2
 
     def show_solvers(self):
         """The Solvers window: what can run here, the GPU, the memory, the last preview's estimates."""
@@ -1311,6 +1492,12 @@ class MainWindow(QMainWindow):
             a = QAction(f"Viewer: {name}", self)
             a.triggered.connect(lambda _=False, n=name: (self.show_panel('Viewer'), self.viewer.set_view(n)))
             vm.addAction(a)
+        vm.addSeparator()
+        a = QAction('A second &Viewer…', self)
+        a.setShortcut(QKeySequence('Ctrl+Shift+V'))
+        a.setToolTip('another run of this board in a window of its own, beside the Viewer')
+        a.triggered.connect(self.second_viewer)
+        vm.addAction(a)
         vm.addSeparator()
         a = QAction('&Reset layout', self)
         a.triggered.connect(self.reset_layout)
@@ -1424,28 +1611,61 @@ class MainWindow(QMainWindow):
             self.system.stop()
             self.meters.stop()
             self.solvers_dialog.close()
+            if getattr(self, '_viewer2', None) is not None:
+                self._viewer2.close()
             ev.accept()
         else:
             ev.ignore()
 
     # ---- results into the pages ----
-    def open_results(self, out_dir, quiet=False):
-        """The results already in a folder: the viewer (board, meshes, line model, dumps, far field) and the
-        results page (S-parameters, antenna); the page with something new in front."""
+    def open_results(self, out_dir, quiet=False, front=True):
+        """The results already in a folder, whatever analysis wrote them: the viewer (board, meshes, line model,
+        dumps, far field), the results page (S-parameters and antenna, or the analysis's curves) and, for a
+        Power integrity or Near field result, its page's summary; front: the page with something new in front."""
+        from .runfolders import tool_kind
         files = find_results(out_dir)
         ant = self.results.load_antenna(out_dir)                    # first: it decides the page's plots
+        curves = self.results.load_curves(out_dir)                  # an analysis's curves: the page is theirs
         if files:
             self.results.show(files)
         seen = self.viewer.load(out_dir)
+        kind = tool_kind(out_dir)
+        if kind in self.pages:
+            self._show_tool_result(kind, out_dir)
         if self.system.load_estimates(out_dir):
             self.new_estimates(self.system.est)
         self.acts['Report'].setEnabled(bool(self.results.report))
-        if files or ant:
+        i = self.runs_box.findData(out_dir)
+        if i >= 0:
+            self.runs_box.setCurrentIndex(i)
+        if front and (files or ant):
             self.show_panel('Results')
-        elif seen:
+        elif front and seen:
             self.show_panel('Viewer')
-        if not quiet and not (files or seen or ant):
+        elif front and curves:
+            self.show_panel('Results')
+        if not quiet and not (files or seen or ant or curves):
             QMessageBox.information(self, 'Results', f"No results in {out_dir}")
+
+    def _show_tool_result(self, kind, out_dir):
+        """A Power integrity or Near field folder: its page's summary, and in the viewer the map to start from
+        (the rail's drop on the layer that drops most; the near field's own mesh in the plan)."""
+        from . import pdntab, mqstab
+        page = self.pages[kind]
+        try:
+            res = (pdntab if kind == 'pdn' else mqstab).load_result(out_dir)
+        except (OSError, ValueError, KeyError):
+            res = None
+        if res is None:
+            return
+        page.out = out_dir
+        page.show_result(res)
+        if kind == 'pdn':
+            drops = [s for s in self.viewer.cuts.srcs if s.field == 'V' and s.run == 'power']
+            if drops:
+                self.viewer.show_dump(max(drops, key=lambda s: float(abs(s.load(0)[1]).max())).label)
+        elif self.viewer.plan.mesh.findData('mqs') >= 0:
+            self.viewer.plan.mesh.setCurrentIndex(self.viewer.plan.mesh.findData('mqs'))
 
     # ---- this board's runs: a folder each (runfolders.py) ----
     def board_loaded(self):
@@ -1468,29 +1688,63 @@ class MainWindow(QMainWindow):
         if self.isVisible() and board and os.path.exists(board) and not self.busy():
             self.start(True)                                        # kicad2ems's own: the board, whatever is ticked
 
-    def refresh_runs(self, select=None):
-        """The Results of choice: this board's preview and runs, the newest first; select: the folder to show
-        as chosen. Returns the runs [(folder, label)]."""
-        from .runfolders import runs, preview_dir
-        vals = self.setup.values()
+    def sources(self):
+        """This board's results, as the Results of box lists them: [{folder, kind, label}], kind 'preview', 'rf'
+        (a run of kicad2ems's own), 'pdn' or 'mqs'; each kind's newest first."""
+        from .runfolders import runs, preview_dir, tool_runs
+        try:
+            vals = self.setup.values()
+        except ValueError:                                          # a field half typed
+            return []
         board = vals.get('board')
+        if not board:
+            return []
         base = self.out_dir(vals)
-        rs = runs(base, board) if board else []
+        out = []
+        pv = preview_dir(base, board)
+        if os.path.isdir(pv):
+            out.append(dict(folder=pv, kind='preview', label='preview'))
+        out += [dict(folder=d, kind='rf', label=f"run {label}") for d, label in runs(base, board)]
+        out += [dict(folder=d, kind=kind, label=label) for d, kind, label in tool_runs(base, board)]
+        return out
+
+    def refresh_runs(self, select=None):
+        """The Results of choice: this board's preview and runs, then its Power integrity and Near field results,
+        each kind's newest first; select: the folder to show as chosen. Returns the runs [(folder, label)]."""
+        srcs = self.sources()
+        keep = select or self.runs_box.currentData()
         self.runs_box.blockSignals(True)
         self.runs_box.clear()
-        pv = preview_dir(base, board) if board else None
-        if pv and os.path.isdir(pv):
-            self.runs_box.addItem('preview', pv)
-        for d, label in rs:
-            self.runs_box.addItem(f"run {label}", d)
-        i = self.runs_box.findData(select) if select else -1
+        last = None
+        for src in srcs:
+            group = 'rf' if src['kind'] in ('preview', 'rf') else src['kind']
+            if last is not None and group != last:
+                self.runs_box.insertSeparator(self.runs_box.count())
+            last = group
+            self.runs_box.addItem(src['label'], src['folder'])
+        i = self.runs_box.findData(keep) if keep else -1
         self.runs_box.setCurrentIndex(i if i >= 0 else 0)
         self.runs_box.blockSignals(False)
-        return rs
+        return [(src['folder'], src['label'][4:]) for src in srcs if src['kind'] == 'rf']
+
+    def tool_out(self, kind, board, name, preview=False):
+        """Where a page's tool writes a run started here: a folder of its own under the output folder (the
+        board's 'out', or the Output setting), so earlier runs stay to compare with; a preview: one per board."""
+        from kicad2ems.api.frontend import default_out
+        from .runfolders import tool_dir, tool_preview_dir
+        try:
+            base = self.setup.values().get('out')
+        except ValueError:
+            base = None
+        base = base or default_out(board)
+        return tool_preview_dir(base, board, kind) if preview else tool_dir(base, board, kind, name)
 
     def _pick_run(self, folder):
+        """Results of: a run of kicad2ems's own brings its page forward, as it did; another analysis's results
+        go into the pages as they stand (the one in front is usually the one being compared)."""
+        from .runfolders import tool_kind
         if folder and os.path.isdir(folder):
-            self.open_results(folder, quiet=True)
+            self.open_results(folder, quiet=True, front=tool_kind(folder) is None)
 
     def out_dir(self, vals=None):
         """The output folder: the form's, else 'out' next to the board (where a run writes), else in the working

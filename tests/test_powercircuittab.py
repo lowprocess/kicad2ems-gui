@@ -6,7 +6,7 @@ from kicad2ems_gui.powercircuittab import PowerCircuitTab
 def test_component_and_operating_overrides():
     from PySide6.QtWidgets import QApplication
     app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();tab.frequencies.setText('90000,110000');tab.powers.setText('5,30');tab.coupling.setText('.4');tab.model.setCurrentText('vdmos')
+    tab=PowerCircuitTab();tab.new_model('wpthb');tab.frequencies.setText('90000,110000');tab.powers.setText('5,30');tab.coupling.setText('.4');tab.model.setCurrentText('vdmos')
     c=json.loads(tab.editor.toPlainText());next(p for p in c['components'] if p['ref']=='L3')['DCR_ohm']=.075
     next(p for p in c['components'] if p['ref']=='C19').update(type='resistor',value=100)
     tab.editor.setPlainText(json.dumps(c));v=tab.values()
@@ -67,3 +67,17 @@ def test_solver_steps_view(tmp_path):
     tab.steps_box.setChecked(True)
     stepped=tab.waveform.listDataItems()[0].getData()
     assert tab.steps_box.isEnabled() and len(stepped[0])>len(uniform[0]) and stepped[1].max()==25
+
+
+def test_opens_on_the_simple_template():
+    """A small circuit to start from, not a board's; the board's a choice away."""
+    from PySide6.QtWidgets import QApplication
+    app=QApplication.instance() or QApplication([])
+    tab=PowerCircuitTab()
+    c=tab.values()
+    assert c['name']=='simple full bridge' and len(c['components'])+len(c['switches'])==8
+    sc=tab.schematic.scene
+    assert len(sc.devices)==13                                        # the 8; the supply, coils, receiver C and load
+    assert {sc.devices[k].record['group'] for k in ('part:R1','part:L1')}=={'input'}
+    tab.new_model('wpthb')
+    assert any(p['ref']=='C25' for p in tab.values()['components'])

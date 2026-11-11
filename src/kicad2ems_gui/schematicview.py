@@ -159,40 +159,99 @@ class ZoomView(QGraphicsView):
         event.accept()
 
     def fit(self):
-        if self.scene() and self.scene().items():self.fitInView(self.scene().itemsBoundingRect().adjusted(-45,-45,45,45),Qt.KeepAspectRatio)
+        if self.scene() and self.scene().items():
+            self.fitInView(self.scene().itemsBoundingRect().adjusted(-30,-30,30,30),Qt.KeepAspectRatio)
+            if self.transform().m11()>1.6:self.resetTransform();self.scale(1.6,1.6)   # a small circuit: not huge
+
+
+GROUPS=[('input','Input filter'),('dc','DC bus'),('bridgeA','Leg A'),('bridgeB','Leg B'),('tank','Tank'),
+        ('primary','Primary'),('receiver','Receiver'),('other','Other')]      # the columns, in the power's order
+PITCH_X,PITCH_Y=200,76                                                 # a card is 124 x 40, its rail flags below
+PIN_X,PIN_Y=70,6
+INK,NET,PICK='#235e85','#5f6f7a','#d2860b'          # parts; every net, wire or flag; what the selection touches
+MUTED=NET
+KINDS={'capacitor':('#0072b2','#e6f1f8','Capacitor'),'inductor':('#00876a','#e3f4ee','Inductor / coil'),
+       'coil':('#00876a','#e3f4ee','Inductor / coil'),'resistor':('#9a4f22','#f6ece5','Resistor'),
+       'switch':('#7b3fa0','#f1e9f6','Switch'),'supply':('#333333','#f0f0f0','Source')}   # outline/ink, fill, legend
+
+
+def kind_colors(kind):
+    """A part kind's ink and fill (colour-blind-safe hues; amber is kept for the selection)."""
+    ink,fill,_=KINDS.get(kind,(INK,'#f2f7fb',''))
+    return ink,fill
+CHANNEL=8                                          # wires run this far outside a column's pins, and in the row gaps,
+LANE=5                                             # each net in a lane of its own, LANE apart (LANES of them)
+LANES=4
+ROW_GAP=35                                         # below a card's centre: the first lane under its flags (to +32)
+
+
+def rails_of(records,threshold=4):
+    """The nets drawn as flags at their pins instead of wires: ground, and any net on `threshold` pins or more."""
+    count={}
+    for r in records:
+        for n in r['nets']:count[n]=count.get(n,0)+1
+    return {n for n,k in count.items() if k>=threshold or n in ('GND','0')}
 
 
 class DeviceItem(QGraphicsObject):
+    """A part: its reference and value over its symbol, a pin each side; a pin on a rail carries the rail's flag
+    (ground's symbol, else its name), so the busiest nets need no wires."""
     def __init__(self,record,scene):
         super().__init__();self.record=record;self.owner=scene;self.setFlags(QGraphicsItem.ItemIsMovable|QGraphicsItem.ItemIsSelectable|QGraphicsItem.ItemSendsGeometryChanges);self.setZValue(2)
-        self.setToolTip(record['ref']+'\n'+record.get('details','')+'\n'+'\n'.join(record['endpoints']))
+        self.setToolTip(record['ref']+' '+record.get('label','')+('\n'+record['details'] if record.get('details') else '')+'\n'+'  ·  '.join(f"{e} ({n})" for e,n in zip(record['endpoints'],record['nets'])))
 
-    def boundingRect(self):return QRectF(-105,-57,210,130)
+    def boundingRect(self):return QRectF(-PIN_X-30,-24,2*PIN_X+60,64)
 
-    def pin(self,index):return self.mapToScene(QPointF(-100 if index==0 else 100,8))
+    def pin(self,index):return self.mapToScene(QPointF(-PIN_X if index==0 else PIN_X,PIN_Y))
 
     def paint(self,painter,option,widget=None):
-        r=self.record;enabled=r.get('enabled',True);color=QColor('#235e85' if enabled else '#999999')
-        painter.setPen(QPen(QColor('#d18a00') if self.isSelected() else color,2 if self.isSelected() else 1.2));painter.setBrush(QColor('#fff2ce') if self.isSelected() else QColor('#f2f7fb') if enabled else QColor('#f5f5f5'));painter.drawRoundedRect(QRectF(-90,-52,180,104),7,7)
-        font=QFont();font.setPointSize(10);font.setBold(True);painter.setFont(font);painter.setPen(color);painter.drawText(QRectF(-85,-46,170,20),Qt.AlignHCenter,r['ref'])
-        font.setBold(False);font.setPointSize(8);painter.setFont(font);painter.drawText(QRectF(-85,-27,170,18),Qt.AlignHCenter,r.get('label',''))
-        painter.setPen(QPen(color,1.8));y=8;painter.drawLine(-100,y,-32,y);painter.drawLine(32,y,100,y)
-        kind=r['kind'];path=QPainterPath();path.moveTo(-32,y)
+        r=self.record;enabled=r.get('enabled',True);sel=self.isSelected();ink,fill=kind_colors(r['kind'])
+        color=QColor(ink if enabled else '#999999')
+        lit=self.owner.lit
+        painter.setPen(QPen(QColor(PICK) if sel else color,2 if sel else 1.2));painter.setBrush(QColor('#fff2ce') if sel else QColor(fill) if enabled else QColor('#f5f5f5'))
+        painter.drawRoundedRect(QRectF(-62,-20,124,40),5,5)
+        font=QFont();font.setPixelSize(12);font.setBold(True);painter.setFont(font);painter.setPen(color)
+        if painter.fontMetrics().horizontalAdvance(r['ref'])>66:font.setPixelSize(10);painter.setFont(font)   # a long name: smaller
+        rw=min(painter.fontMetrics().horizontalAdvance(r['ref'])+4,72)   # the reference first, the value in the rest
+        painter.drawText(QRectF(-57,-19,rw,15),Qt.AlignLeft|Qt.AlignVCenter,painter.fontMetrics().elidedText(r['ref'],Qt.ElideRight,rw))
+        font.setBold(False);font.setPixelSize(10);painter.setFont(font);room=114-rw-6
+        painter.drawText(QRectF(57-room,-19,room,15),Qt.AlignRight|Qt.AlignVCenter,painter.fontMetrics().elidedText(r.get('label',''),Qt.ElideRight,room))
+        y=PIN_Y
+        for k,(x0,x1) in enumerate(((-PIN_X,-24),(24,PIN_X))):
+            on=r['nets'][k] in lit
+            painter.setPen(QPen(QColor(PICK) if on else color,2.2 if on else 1.4));painter.drawLine(QPointF(x0,y),QPointF(x1,y))
+        painter.setPen(QPen(color,1.4));painter.setBrush(Qt.NoBrush)
+        kind=r['kind'];path=QPainterPath();path.moveTo(-24,y)
         if kind=='resistor':
-            for x,dy in [(-25,0),(-20,-8),(-12,8),(-4,-8),(4,8),(12,-8),(20,8),(25,0),(32,0)]:path.lineTo(x,y+dy)
+            for x,dy in [(-18,0),(-14,-5),(-7,5),(0,-5),(7,5),(14,-5),(18,0),(24,0)]:path.lineTo(x,y+dy)
             painter.drawPath(path)
         elif kind=='capacitor':
-            painter.drawLine(-32,y,-7,y);painter.drawLine(7,y,32,y);painter.drawLine(-7,y-13,-7,y+13);painter.drawLine(7,y-13,7,y+13)
+            painter.drawLine(QPointF(-24,y),QPointF(-4,y));painter.drawLine(QPointF(4,y),QPointF(24,y))
+            painter.drawLine(QPointF(-4,y-8),QPointF(-4,y+8));painter.drawLine(QPointF(4,y-8),QPointF(4,y+8))
         elif kind in ('inductor','coil'):
-            for x in [-32,-16,0,16]:path.cubicTo(x,y-19,x+16,y-19,x+16,y)
+            for x in [-24,-12,0,12]:path.cubicTo(x,y-12,x+12,y-12,x+12,y)
             painter.drawPath(path)
         elif kind=='switch':
-            painter.drawLine(-32,y,-17,y);painter.drawLine(-17,y,18,y-13);painter.drawLine(18,y,32,y);painter.drawEllipse(QPointF(-17,y),2.3,2.3);painter.drawEllipse(QPointF(18,y),2.3,2.3)
+            painter.drawLine(QPointF(-24,y),QPointF(-12,y));painter.drawLine(QPointF(-12,y),QPointF(13,y-9));painter.drawLine(QPointF(13,y),QPointF(24,y))
+            painter.drawEllipse(QPointF(-12,y),2,2);painter.drawEllipse(QPointF(13,y),2,2)
         else:
-            painter.setBrush(Qt.NoBrush);painter.drawEllipse(QPointF(0,y),20,20);painter.drawLine(-32,y,-20,y);painter.drawLine(20,y,32,y);painter.drawText(QRectF(-16,y-15,32,30),Qt.AlignCenter,'+' if kind=='supply' else '↔')
-        font.setPointSize(7);painter.setFont(font);painter.drawText(QRectF(-86,30,172,16),Qt.AlignHCenter,r.get('details','')[:38])
-        painter.drawText(QRectF(-104,54,102,16),Qt.AlignLeft,r['nets'][0]);painter.drawText(QRectF(2,54,102,16),Qt.AlignRight,r['nets'][1])
-        if not enabled:painter.drawLine(-82,-40,82,43)
+            painter.drawEllipse(QPointF(0,y),11,11);painter.drawLine(QPointF(-24,y),QPointF(-11,y));painter.drawLine(QPointF(11,y),QPointF(24,y))
+            painter.drawText(QRectF(-10,y-10,20,20),Qt.AlignCenter,'+' if kind=='supply' else '~')
+        for k in (0,1):                                             # the pin ends, and a rail's flag under one
+            x=-PIN_X if k==0 else PIN_X;net=r['nets'][k];on=net in lit
+            painter.setPen(Qt.NoPen);painter.setBrush(QColor(PICK) if on else color);painter.drawEllipse(QPointF(x,y),2.2,2.2)
+            if net not in self.owner.rails:continue
+            c=QColor(PICK) if on else QColor(NET)
+            painter.setPen(QPen(c,1.6 if on else 1));painter.drawLine(QPointF(x,y),QPointF(x,y+12))
+            inward=1 if k==0 else -1                                # under the card: the channels stay clear
+            if net in ('GND','0'):
+                for w,dy in ((7,12),(4.5,15),(2,18)):painter.drawLine(QPointF(x-w,y+dy),QPointF(x+w,y+dy))
+            else:
+                font.setPixelSize(10);font.setBold(on);painter.setFont(font)
+                tw=painter.fontMetrics().horizontalAdvance(net)+8
+                box=QRectF(x-4 if inward>0 else x-tw+4,y+12,tw,14)
+                painter.setBrush(QColor('#fff2ce') if on else QColor('#ffffff'));painter.drawRect(box);painter.drawText(box,Qt.AlignCenter,net)
+        if not enabled:painter.setPen(QPen(QColor('#999999'),1));painter.drawLine(QPointF(-56,-16),QPointF(56,16))
 
     def itemChange(self,change,value):
         if change==QGraphicsItem.ItemPositionHasChanged and not self.owner.loading:self.owner.update_connections()
@@ -204,11 +263,14 @@ class DeviceItem(QGraphicsObject):
 
 
 class CircuitScene(QGraphicsScene):
+    """The parts in columns by where they sit in the power path (GROUPS), the rails as flags at their pins, the
+    other nets as wires from pin to pin, each with its name; selecting a part lights its nets."""
     selected=Signal(str)
     moved=Signal(dict)
 
     def __init__(self,parent=None):
-        super().__init__(parent);self.devices={};self.links=[];self.loading=False;self.last_positions={};self.selectionChanged.connect(self._selected)
+        super().__init__(parent);self.devices={};self.links=[];self.rails=set();self.lit=set();self.headers=[]
+        self.loading=False;self.last_positions={};self.coupling=None;self.selectionChanged.connect(self._selected)
 
     def _selected(self):
         if self.loading:return
@@ -216,28 +278,56 @@ class CircuitScene(QGraphicsScene):
         self.selected.emit(items[0].record['id'] if items else '')
         self.highlight(items[0].record['nets'] if items else [])
 
+    @staticmethod
+    def default_positions(records):
+        """Columns in GROUPS' order (the empty ones left out), a part under another; the supply heads its column,
+        a bridge leg's high side above its low side."""
+        cols=[g for g,_ in GROUPS if any(r['group']==g for r in records)]
+        cols+=sorted({r['group'] for r in records}-set(cols))
+        first={'supply':0,'secondary':0,'receiver_cap':1,'load':2}           # the coupled coil heads the receiver
+        order=lambda r:(first.get(r['id'],9),'VIN' not in r['nets'],'low-side' in r.get('details',''),_natural(r['ref']))
+        out={}
+        for c,g in enumerate(cols):
+            for row,r in enumerate(sorted((r for r in records if r['group']==g),key=order)):out[r['id']]=(c*PITCH_X,row*PITCH_Y)
+        return out,cols
+
     def load(self,records,positions):
-        self.loading=True;self.clear();self.devices={};self.links=[]
-        counters={}
+        self.loading=True;self.clear();self.devices={};self.links=[];self.headers=[];self.lit=set()
+        self.rails=rails_of(records)
+        defaults,cols=self.default_positions(records)
         for r in records:
             item=DeviceItem(r,self);self.addItem(item);self.devices[r['id']]=item
-            group=r['group'];row=counters.get(group,0);counters[group]=row+1
-            defaults={'input':(100,row*155),'dc':(440,row*155),'bridgeA':(790,row*300+150),'bridgeB':(1110,row*300+150),'tank':(1470,row*155),'primary':(1810,330),'receiver':(2150,row*180+330),'other':(1810,row*160+650)}
-            default=(100,-180) if r['id']=='supply' else defaults.get(group,(100,row*160))
-            x,y=positions.get(r['id'],default);item.setPos(x,y)
+            x,y=positions.get(r['id'],defaults[r['id']]);item.setPos(x,y)
+        if not positions:                                           # the columns' names, over the arrangement
+            self.legend([r['kind'] for r in records])
+            names=dict(GROUPS);font=QFont();font.setPixelSize(12);font.setBold(True)
+            for c,g in enumerate(cols):
+                t=self.addSimpleText(names.get(g,g),font);t.setBrush(QColor(MUTED));t.setPos(c*PITCH_X-t.boundingRect().width()/2,-62);self.headers.append(t)
         nets={}
         for item in self.devices.values():
             for index,net in enumerate(item.record['nets']):nets.setdefault(net,[]).append((item,index))
-        for index,(net,pins) in enumerate(sorted(nets.items())):
-            # Named hubs make topology explicit; only the selected net is emphasized.
-            x=min(p.pin(i).x() for p,i in pins)-35-(index%3)*15;y=min(p.pin(i).y() for p,i in pins)-35
-            hub=self.addEllipse(-4,-4,8,8,QPen(QColor('#8199aa')),QBrush(QColor('#8199aa')));hub.setPos(x,y);hub.setZValue(-1)
-            label=self.addSimpleText(net);label.setBrush(QColor('#567083'));label.setPos(x+7,y-17);label.setZValue(0)
-            for item,pin in pins:
-                wire=self.addPath(QPainterPath(),QPen(QColor('#a8bac8'),.8));wire.setZValue(-2);self.links.append((net,wire,item,pin,hub))
-        if 'primary' in self.devices and 'secondary' in self.devices:
-            a=self.devices['primary'];b=self.devices['secondary'];line=self.addLine(a.x(),a.y()+68,b.x(),b.y()+68,QPen(QColor('#9561a9'),1.5,Qt.DashLine));line.setZValue(-1)
-        self.loading=False;self.update_connections();self.last_positions=self.positions();self.setSceneRect(self.itemsBoundingRect().adjusted(-100,-100,100,100))
+        for net,pins in sorted(nets.items()):
+            if net in self.rails or len(pins)<2:continue
+            for (a,i),(b,j) in zip(pins,pins[1:]):
+                wire=self.addPath(QPainterPath(),QPen(QColor(NET),1.1));wire.setZValue(-2)
+                font=QFont();font.setPixelSize(10);label=self.addSimpleText(net,font);label.setBrush(QColor(NET));label.setZValue(-1)
+                self.links.append((net,wire,(a,i),(b,j),label))
+        self.coupling=self.coupling_label=None
+        if 'primary' in self.devices and 'secondary' in self.devices:     # the coils' coupling: dashed, labelled
+            self.coupling=self.addPath(QPainterPath(),QPen(QColor(NET),1.2,Qt.DashLine));self.coupling.setZValue(-1)
+            font=QFont();font.setPixelSize(10);k=self.devices['primary'].record.get('details','').split(';')[0]
+            self.coupling_label=self.addSimpleText(k or 'coupled',font);self.coupling_label.setBrush(QColor(NET))
+        self.loading=False;self.update_connections();self.last_positions=self.positions();self.setSceneRect(self.itemsBoundingRect().adjusted(-60,-60,60,60))
+
+    def legend(self,kinds):
+        """A swatch per kind of part shown, in a row over the columns."""
+        font=QFont();font.setPixelSize(11);x=-62;seen=[]
+        for k in ('supply','resistor','capacitor','inductor','coil','switch'):
+            if k not in kinds or KINDS[k][2] in seen:continue
+            seen.append(KINDS[k][2]);ink,fill=kind_colors(k)
+            sw=self.addRect(x,-96,12,12,QPen(QColor(ink),1.2),QBrush(QColor(fill)))
+            t=self.addSimpleText(KINDS[k][2],font);t.setBrush(QColor(ink));t.setPos(x+17,-98)
+            self.headers+= [sw,t];x+=17+t.boundingRect().width()+18
 
     def positions(self):return {key:[item.x(),item.y()] for key,item in self.devices.items()}
 
@@ -245,19 +335,54 @@ class CircuitScene(QGraphicsScene):
         values=self.positions()
         if values!=self.last_positions:self.last_positions=values;self.moved.emit(values)
 
+    @staticmethod
+    def route(p,i,q,j,lane=0):
+        """A wire's corners from pin p (side i: 0 left, 1 right) to pin q, through free space only: out of each
+        pin to its channel (CHANNEL beyond the pin, between the columns); two pins facing across one gap meet in
+        it; else the wire runs along the gap under the upper pin's row, which no card or flag reaches."""
+        out=CHANNEL+LANE*lane                                       # this net's lane, in channels and gaps alike
+        cp=p.x()+(out if i==1 else -out);cq=q.x()+(out if j==1 else -out)
+        lo,hi=min(p.x(),q.x()),max(p.x(),q.x())
+        facing=(i==1 and j==0 and q.x()>p.x()) or (i==0 and j==1 and p.x()>q.x())
+        if facing and hi-lo<2*PIN_X:                                # neighbours: straight across the gap
+            mx=(p.x()+q.x())/2+LANE*(lane-LANES/2+.5);return [p,QPointF(mx,p.y()),QPointF(mx,q.y()),q]
+        if abs(cp-cq)<1:                                            # one channel: down it
+            return [p,QPointF(cp,p.y()),QPointF(cq,q.y()),q]
+        gy=min(p.y(),q.y())-PIN_Y+ROW_GAP+LANE*lane                 # the gap below the upper row (next card: +56)
+        return [p,QPointF(cp,p.y()),QPointF(cp,gy),QPointF(cq,gy),QPointF(cq,q.y()),q]
+
     def update_connections(self):
-        for _,wire,item,index,hub in self.links:
-            a,b=hub.scenePos(),item.pin(index);path=QPainterPath(a);mid=(a.x()+b.x())/2;path.lineTo(mid,a.y());path.lineTo(mid,b.y());path.lineTo(b);wire.setPath(path)
+        lanes={n:k%LANES for k,n in enumerate(sorted({l[0] for l in self.links}))}
+        for net,wire,(a,i),(b,j),label in self.links:
+            pts=self.route(a.pin(i),i,b.pin(j),j,lanes[net])
+            path=QPainterPath(pts[0])
+            for pt in pts[1:]:path.lineTo(pt)
+            wire.setPath(path)
+            segs=[(u,v) for u,v in zip(pts,pts[1:]) if abs(u.x()-v.x())+abs(u.y()-v.y())>1]
+            u,v=max(segs,key=lambda s:abs(s[0].x()-s[1].x())+abs(s[0].y()-s[1].y()))   # the label on its longest run
+            if abs(u.x()-v.x())>abs(u.y()-v.y()):label.setPos((u.x()+v.x())/2-label.boundingRect().width()/2,u.y()-13)
+            else:                                                   # beside a vertical, on its outer side
+                w=label.boundingRect().width();left=u.x()<min(pts[0].x(),pts[-1].x())
+                label.setPos(u.x()-w-3 if left else u.x()+3,(u.y()+v.y())/2-6)
+        if self.coupling is not None:
+            a,b=self.devices['primary'],self.devices['secondary']
+            p,q=a.mapToScene(QPointF(0,-20)),b.mapToScene(QPointF(0,-20));top=min(p.y(),q.y())-14
+            path=QPainterPath(p);path.lineTo(p.x(),top);path.lineTo(q.x(),top);path.lineTo(q);self.coupling.setPath(path)
+            self.coupling_label.setPos((p.x()+q.x())/2-self.coupling_label.boundingRect().width()/2,top-14)
 
     def highlight(self,nets):
-        for net,wire,*_ in self.links:
-            on=net in nets;wire.setPen(QPen(QColor('#d2860b') if on else QColor('#a8bac8'),2 if on else .8));wire.setOpacity(1 if on or not nets else .16)
+        self.lit=set(nets)
+        for net,wire,*_rest,label in self.links:
+            on=net in self.lit;wire.setPen(QPen(QColor(PICK) if on else QColor(NET),2 if on else 1.1))
+            wire.setOpacity(1 if on or not self.lit else .25);label.setOpacity(1 if on or not self.lit else .3)
+            label.setBrush(QColor(PICK if on else NET))
+        for item in self.devices.values():item.update()
 
     def focus(self,key):
         if key not in self.devices:return
         self.clearSelection();item=self.devices[key];item.setSelected(True)
         for view in self.views():
-            if view.transform().m11()<.7:view.resetTransform();view.scale(.85,.85)
+            if view.transform().m11()<.9:view.resetTransform();view.scale(1.1,1.1)
             view.centerOn(item)
 
 
@@ -268,7 +393,7 @@ def records(config):
         out.append(dict(id=key,ref=ref,kind=kind,label=label,endpoints=ends,nets=[api.terminal_net(config,t) for t in ends],group=group,details=details,enabled=enabled))
     for p in config.get('components',[]):
         kind=p.get('type','resistor');unit=dict(resistor='Ω',capacitor='F',inductor='H').get(kind,'');nets=[api.terminal_net(config,p[k]) for k in ['a','b']]
-        group='tank' if set(nets)==bank_nets else 'dc' if set(nets)=={'GND','VHB'} else 'input' if p['ref'].startswith('CA') or p['ref'] in ('L3','R9') else 'other'
+        group='tank' if set(nets)==bank_nets else 'dc' if set(nets)=={'GND','VHB'} else 'input' if set(nets)&{'VIN','VBUS'} or p['ref'].startswith('CA') else 'other'   # by the nets it joins
         paras=' · '.join(f"{k.split('_')[0]} {_quantity(p[k],'H' if k.endswith('_H') else 'Ω')}" for k in ['ESR_ohm','ESL_H','DCR_ohm'] if p.get(k))
         add('part:'+p['ref'],p['ref'],kind,_quantity(p.get('value',''),unit),[p['a'],p['b']],group,paras,p.get('enabled',True))
     for p in config.get('switches',[]):

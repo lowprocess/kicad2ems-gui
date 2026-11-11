@@ -174,6 +174,13 @@ class Viewer(QWidget):
         self._fit()
         return any(has.values())
 
+    def show_dump(self, label):
+        """The dump of that label as the one the Cut and 3D views show (a folder's default is its first)."""
+        for view in (self.cuts, self.volume):
+            labels = [s.label for s in view.srcs]
+            if label in labels and view.dump.currentIndex() != labels.index(label):
+                view.dump.setCurrentIndex(labels.index(label))
+
     def follow(self, out_dir):
         """A running simulation's newest field frames (the Cut view's live mode)."""
         self.cuts.follow(out_dir)

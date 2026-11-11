@@ -3,6 +3,10 @@ The PDN page: a power rail's DC drop and PDN impedance (pcbqs's power-integrity 
 rail, its loads and the regulator on the left; the impedance each load sees, the drop and current maps, the summary
 (the rail tree, each load's voltage, the plane pairs, each part's connection) and the log on the right.
 
+In the window the page is the summary alone (settings_panel): the settings are in the Study dock, the impedance on
+the Results page (curves.py), the maps in the Viewer (the tool writes them as field dumps, pcbqs 261111 on) and the
+log on the Run page; a run that failed says why in the summary.
+
 The tool runs as a separate process, as kicad2ems runs and dfsynth do: the page follows its output and reads what it
 wrote when it ends (<out>/pdn.json, its figures). Its options come from `python -m pcbqs.pdn --describe --json`, so
 the page never imports pcbqs.
@@ -178,6 +182,7 @@ class PdnTab(QWidget):
     """The tool's settings on the left; the impedance, the maps, the summary and the log on the right. In the
     window the settings are in its Study dock instead (settings_panel) and its Run starts the tool."""
     _panel = None                                       # the settings, once moved out of the page
+    KIND = 'pdn'                                        # its run folders' (runfolders.tool_dir)
 
     def __init__(self, win=None):
         super().__init__()
@@ -282,7 +287,49 @@ class PdnTab(QWidget):
             self.board.setToolTip('.kicad_pcb (or a run\'s <name>_board.json); empty: the board under Board, above')
             self._files.title = 'Files'
             self._files.set_count(0)
+            self.outdir.setPlaceholderText('a folder per run, in the output folder')
+            self.summary_only()
         return self._panel
+
+    def summary_only(self):
+        """The page as the window has it: the summary. The other tabs' content is on the Results page, in the
+        Viewer and on the Run page (their widgets stay, filled or not, for the page used alone)."""
+        for w in list(self.extra_tabs()):
+            i = self.tabs.indexOf(w)
+            if i >= 0:
+                self.tabs.removeTab(i)
+        self.tabs.tabBar().hide()
+        self.tabs.setDocumentMode(True)
+        self.summary.setPlaceholderText(self.EMPTY)
+
+    EMPTY = ("Tick Power integrity under Analyses, name the rail and its loads, and Run. The summary comes here; "
+             "the impedance each load sees is on the Results page and the drop and current maps are in the Viewer.")
+
+    def extra_tabs(self):
+        return [self.zplot, self.maps, self.log]
+
+    def _front(self, w):
+        """A tab in front, when the page still has it."""
+        if self.tabs.indexOf(w) >= 0:
+            self.tabs.setCurrentWidget(w)
+
+    def default_out(self, board, name, preview=False):
+        """Where a run goes when no folder is named: in the window a folder per run under its output folder
+        (MainWindow.tool_out), alone <kind>_<name> beside the board, as before."""
+        if self.win is not None and hasattr(self.win, 'tool_out'):
+            return self.win.tool_out(self.KIND, board, name, preview)
+        base = os.path.join(os.path.dirname(os.path.abspath(board)),
+                            f"{self.KIND}_" + ''.join(c if c.isalnum() else '_' for c in name))
+        return os.path.join(base, 'preview') if preview else base
+
+    def failed_html(self, code):
+        """A failed run in the summary: the tool's own error lines (else its last ones), where the log is."""
+        lines = [l for l in self.log.toPlainText().splitlines() if l.strip()]
+        errs = [l for l in lines if 'error' in l.lower() or l.startswith(('Traceback', 'RuntimeError', 'ValueError'))]
+        show = (errs or lines)[-6:]
+        where = 'the Run page (Log of)' if self.tabs.indexOf(self.log) < 0 else 'the Log tab'
+        return (f"<h3>The run failed (exit {code})</h3><pre>{html.escape(chr(10).join(show))}</pre>"
+                f"<p style='color:gray'>The whole log: {where}.</p>")
 
     def _browse(self):
         p, _ = QFileDialog.getOpenFileName(self, 'Board', '', 'KiCad board (*.kicad_pcb);;kicad2ems board (*.json)')
@@ -360,13 +407,12 @@ class PdnTab(QWidget):
         if not vals.get('rail'):
             self.status.setText('name the rail (its net)')
             return
-        out = self.outdir.text().strip() or os.path.join(os.path.dirname(os.path.abspath(board)),
-                                                          'pdn_' + ''.join(c if c.isalnum() else '_' for c in vals['rail']))
+        out = self.outdir.text().strip() or self.default_out(board, vals['rail'])
         self.out = os.path.abspath(out)
         argv = pdn_argv(vals, board, self.out, self.desc)
         self.log.clear()
         self.say('$ python ' + ' '.join(argv[1:]))
-        self.tabs.setCurrentWidget(self.log)
+        self._front(self.log)
         self.run_btn.setEnabled(False); self.stop_btn.setEnabled(True); self.busy.show()
         self.status.setText('running…')
         run_tool(self, argv, self._stdout, self._finished)
@@ -390,14 +436,18 @@ class PdnTab(QWidget):
         res = load_result(self.out) if code == 0 else None
         if res is None:
             self.status.setText(f'the run failed (exit {code}): see the Log')
+            self.summary.setHtml(self.failed_html(code))
+            self._front(self.summary)
             return
         self.show_result(res)
         self.status.setText(f"done in {res['seconds'].get('total', '?')} s")
-        self.tabs.setCurrentWidget(self.summary)
+        self._front(self.summary)
 
     def show_result(self, res):
         self.result = res
         self.summary.setHtml(summary_html(res))
+        if self.tabs.indexOf(self.zplot) < 0:               # the window's page: the Results page and the Viewer
+            return                                          # have the curves and the maps
         self.maps.show_images([os.path.join(res['_dir'], f['file']) for f in res.get('figures', []) if f['side'] != 'pdn'])
         self.zplot.clear()
         p = res.get('pdn')

@@ -1,4 +1,7 @@
-"""Near-field page: the MQS CLI owns options and physics; Qt runs it in a subprocess."""
+"""Near-field page: the MQS CLI owns options and physics; Qt runs it in a subprocess.
+
+In the window the page is the summary alone, as the PDN page: the layout, the mesh and the fields are the Viewer's
+(the same views, the same folder), the spectrum is on the Results page and the log on the Run page."""
 import html
 import json
 import os
@@ -70,6 +73,10 @@ def summary_html(res):
 
 class MqsTab(PdnTab):
     """Reuse the PDN option form and process controls, with MQS-specific results."""
+    KIND='mqs'
+    EMPTY=("Tick Near field under Analyses, pick the converter (Find converters lists them) and Run. The summary "
+           "comes here; the layout, the mesh and the fields are in the Viewer and the spectrum is on the Results page.")
+
     def __init__(self,win=None):
         QWidget.__init__(self)
         self.win,self.proc,self.out,self.result=win,None,None,None
@@ -100,6 +107,19 @@ class MqsTab(PdnTab):
     def run_buttons(self):
         return [self.run_btn,self.stop_btn,self.preview_btn]          # Find converters stays: it fills the form
 
+    def extra_tabs(self):
+        return [self.layout,self.spectrum,self.maps,self.log]
+
+    def summary_only(self):
+        """The summary alone; the hand-over of the input rail goes with the settings (the Study dock), and the
+        Viewer shows a finished run's fields without being asked."""
+        super().summary_only()
+        self.open_btn.hide()
+        self.pdn_btn.setText('Copy the input rail to Power integrity')
+        self.pdn_btn.setToolTip("The converter's input net, its ground and its voltage into Power integrity's "
+                                "settings, after a run or a mesh preview; the source and the loads are yours to give")
+        self._form_foot.layout().insertWidget(0,self.pdn_btn)
+
     def _views(self):
         self.tabs=QTabWidget()
         from .planview import PlanView
@@ -122,6 +142,10 @@ class MqsTab(PdnTab):
 
     def preview(self):
         self.start(preview=True)
+
+    @staticmethod
+    def same_board(a,b):
+        return bool(a) and bool(b) and os.path.abspath(a)==os.path.abspath(b)
 
     def find_converters(self):
         """Run `pcbqs.mqs --list-converters` and offer each converter / input net (I5)."""
@@ -171,12 +195,12 @@ class MqsTab(PdnTab):
         if not board or not os.path.isfile(board):
             self.status.setText('Choose a board first');return
         vals=self.values();ref=vals.get('converter') or 'auto'
-        folder='mqs_'+''.join(c if c.isalnum() else '_' for c in ref)
-        base=os.path.abspath(self.outdir.text().strip() or os.path.join(os.path.dirname(os.path.abspath(board)),folder))
         self._preview=preview
-        self.out=os.path.join(base,'preview') if preview else base
+        named=self.outdir.text().strip()
+        self.out=os.path.abspath((os.path.join(named,'preview') if preview else named) if named
+                                 else self.default_out(board,ref,preview))
         argv=mqs_argv(vals,board,self.out,self.desc,preview=preview)
-        self.log.clear();self.say('$ python '+' '.join(argv[1:]));self.tabs.setCurrentWidget(self.log)
+        self.log.clear();self.say('$ python '+' '.join(argv[1:]));self._front(self.log)
         self.run_btn.setEnabled(False);self.preview_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.busy.show()
         self.open_btn.setEnabled(False);self.status.setText('Running…')
         run_tool(self,argv,self._stdout,self._finished)
@@ -197,11 +221,15 @@ class MqsTab(PdnTab):
         if res is None:
             tail=self.log.toPlainText()[-400:]
             hint=('; use Find converters' if 'candidates' in tail or 'ambiguous input supply' in tail else '')
-            self.status.setText(f'Run failed (exit {code}){hint}; see Log');return
-        self.show_result(res);self.tabs.setCurrentWidget(self.layout if self._preview else self.summary);self.status.setText('Mesh preview ready' if self._preview else 'Done')
+            self.status.setText(f'Run failed (exit {code}){hint}; see Log')
+            self.summary.setHtml(self.failed_html(code));self._front(self.summary);return
+        self.show_result(res);self._front(self.layout if self._preview and self.tabs.indexOf(self.layout)>=0 else self.summary)
+        self.status.setText('Mesh preview ready' if self._preview else 'Done')
 
     def show_result(self,res):
         self.result=res;self.summary.setHtml(summary_html(res))
+        self.pdn_btn.setEnabled(self.win is not None and hasattr(self.win,'pdn'))
+        if self.tabs.indexOf(self.layout)<0:return                    # the window's page: the Viewer has the rest
         self.layout.load(res['_dir'])
         if self.layout.mesh.findData('mqs')>=0:self.layout.mesh.setCurrentIndex(self.layout.mesh.findData('mqs'))
         self.open_btn.setText('Open layout in Viewer' if res.get('preview') else 'Open fields in Viewer')
@@ -222,7 +250,9 @@ class MqsTab(PdnTab):
     def open_pdn(self):
         if self.win is None or self.result is None or not hasattr(self.win,'pdn'):return
         r=self.result;s=r['selection'];pdn=self.win.pdn
-        pdn.board.setText(r.get('source_path') or self.board_path())
+        src=r.get('source_path') or self.board_path()
+        if self._panel is None or not self.same_board(src,pdn.board_path()):   # the study's board: already its
+            pdn.board.setText(src)
         vals={o['key']:o['default'] for o in (pdn.desc or {}).get('options',[])}
         vals.update(rail=s['vin'],ground=s['ground'],ground_source=s['converter'],load='')
         voltage=r.get('settings',{}).get('vin_volts',0)

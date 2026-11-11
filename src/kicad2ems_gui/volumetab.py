@@ -490,6 +490,8 @@ class VolumeTab(QWidget):
         i = self.dump.currentIndex()
         if i < 0 or i >= len(self.srcs):
             return
+        if self.srcs[i].field == 'V':                               # a drop or a rise: linear
+            self.log.setChecked(False)
         self.src = self.srcs[i].refresh()
         self.frame.blockSignals(True)
         self.frame.clear()

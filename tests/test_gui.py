@@ -897,8 +897,8 @@ def test_filter_page(tmp_path):
 
 
 def test_new_page_docks_into_an_older_layout(monkeypatch, tmp_path):
-    """A layout saved before a page existed (the Filter page): the page comes up tabbed with the others, not
-    floating; and the toolbar opens it."""
+    """A layout saved before a page existed (the Filter page): the page is docked, not floating, and the toolbar
+    opens it tabbed with the others (it is closed when the window opens)."""
     pytest.importorskip('PySide6')
     pytest.importorskip('pyqtgraph')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -914,10 +914,10 @@ def test_new_page_docks_into_an_older_layout(monkeypatch, tmp_path):
     w.close()                                                       # saves the layout, the page floating
     QSettings('kicad2ems', 'gui').setValue('work/pages', ['Viewer', 'Run', 'Results'])   # saved before it existed
     w = MainWindow()
-    assert not w.docks['Filter'].isFloating()
-    assert w.docks['Filter'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
+    assert not w.docks['Filter'].isFloating() and w.docks['Filter'].isHidden()     # closed until asked for
     w.acts['Filter'].trigger()
     assert w.docks['Filter'].isVisibleTo(w)
+    assert w.docks['Filter'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])     # with the others
     if w.filter.desc is not None:
         assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
     w.setup.dirty = False

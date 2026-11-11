@@ -8,7 +8,7 @@ from kicad2ems_gui.schematicview import ImportReview,KiCadJob
 
 @pytest.fixture
 def tab():
-    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab();yield widget;widget.close();app.processEvents()
+    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab();widget.new_model('wpthb');yield widget;widget.close();app.processEvents()
 
 
 def test_component_edit_and_undo_redo_reach_json_and_run_values(tab):
