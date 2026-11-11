@@ -105,6 +105,38 @@ def test_copper_solids_face_outward():
     assert (radial[~inner] > 0).all() and (radial[inner] < 0).all()
 
 
+def test_an_opengl_start_that_fails_stays_in_the_view(monkeypatch):
+    """pyqtgraph raises in initializeGL without a usable OpenGL. The exception must not leave Qt's override: under
+    PySide 6.11 that drops a reference to the class's paintGL, and a later garbage collection crashed on the freed
+    function (the GUI tests segfaulted once a test showed a window with the 3D view)."""
+    pytest.importorskip('PySide6')
+    gl = pytest.importorskip('pyqtgraph.opengl')
+    pytest.importorskip('OpenGL')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    import gc, sys
+    from PySide6.QtWidgets import QApplication
+    from kicad2ems_gui.volumetab import VolumeTab
+    app = QApplication.instance() or QApplication([])
+    mixin = sys.modules[gl.GLViewWidget.__module__].GLViewMixin
+
+    def no_gl(self):
+        raise RuntimeError('pyqtgraph.opengl: Requires >= OpenGL 2.1')
+    monkeypatch.setattr(mixin, 'initializeGL', no_gl)
+    held = {k: sys.getrefcount(mixin.__dict__[k]) for k in ('paintGL', 'paint')}
+    for _ in range(3):
+        w = VolumeTab()
+        w.resize(800, 500)
+        w.show()
+        app.processEvents()
+        w.view.repaint()
+        app.processEvents()
+        assert w.view.gl_error.startswith('RuntimeError') and 'could not start OpenGL' in w.status.text()
+        w.close()
+        del w
+        gc.collect()
+    assert {k: sys.getrefcount(mixin.__dict__[k]) for k in held} == held
+
+
 def test_volume_panel(volume_run, tmp_path):
     pytest.importorskip('PySide6')
     pytest.importorskip('pyqtgraph')

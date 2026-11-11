@@ -127,14 +127,39 @@ def copper_shader():
 
 
 def _view_class(gl):
-    """GLViewWidget that reports each new OpenGL context (after the first paint is set up)."""
+    """GLViewWidget that reports each new OpenGL context (after the first paint is set up), and a context it
+    could not set up (on_error(why); it then draws nothing).
+
+    No exception may leave initializeGL or paintGL: when one leaves a Python override of QOpenGLWidget's,
+    PySide 6.11 drops a reference to the class's methods, and a later garbage collection crashes on the freed
+    function (pyqtgraph raises there when it finds no usable OpenGL, as on the offscreen platform the tests use)."""
     class View(gl.GLViewWidget):
         on_init = None
+        on_error = None
+        gl_error = ''
+
+        def _failed(self, e):
+            self.gl_error = f'{type(e).__name__}: {e}'
+            if self.on_error is not None:
+                QTimer.singleShot(0, lambda: self.on_error(self.gl_error))
 
         def initializeGL(self):
-            super().initializeGL()
+            try:
+                super().initializeGL()
+            except Exception as e:
+                self._failed(e)
+                return
+            self.gl_error = ''
             if self.on_init is not None:
                 QTimer.singleShot(0, self.on_init)
+
+        def paintGL(self):
+            if self.gl_error:
+                return
+            try:
+                super().paintGL()
+            except Exception as e:
+                self._failed(e)
     return View
 
 
@@ -377,6 +402,8 @@ class VolumeTab(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view = _view_class(self.gl)()
         self.view.on_init = self._new_context
+        self.view.on_error = lambda why: self.status.setText(f'The 3D view could not start OpenGL ({why}): '
+                                                             'the Plan view still works.')
         self.view.setBackgroundColor('w')
         self.split = QSplitter()
         self.split.setObjectName('viewer3d')
