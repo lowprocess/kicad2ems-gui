@@ -109,27 +109,42 @@ else:
 
 
 def test_rotating_a_part(tab):
-    """R (or the menu, or Rotate) turns the selected part: its pins and wires follow, the angle stays with the model,
-    Undo turns it back, Arrange stands every part upright again."""
-    from PySide6.QtCore import QPointF
+    """R (or the menu, or Rotate) turns the selected part from how it stands: its pins and wires follow, the angle
+    stays with the model, Undo turns it back, Arrange leaves every part to the generator again."""
     view=tab.schematic;sc=view.scene;view.select('part:L3')
-    item=sc.devices['part:L3'];left=item.pin(0)
-    assert item.facing(0)==(-1,0) and item.facing(1)==(1,0)
+    start=sc.devices['part:L3'].rot
+    assert start in (0,180) and not sc.devices['part:L3'].chosen     # the generator's: along the flow, either way
     view.rotate_part('part:L3',90)
     item=sc.devices['part:L3']                                       # rebuilt
-    assert item.rot==90 and item.facing(0)==(0,-1) and item.facing(1)==(0,1)    # clockwise: left pin now on top
-    assert abs(item.pin(0).x()-item.pos().x())<1e-6 and item.pin(0).y()<item.pos().y()
-    assert tab.values()['schematic']['rotations']=={'part:L3':90}
+    assert item.rot==(start+90)%360 and item.chosen and item.facing(0)[0]==0 and item.facing(1)==tuple(-v for v in item.facing(0))
+    assert abs(item.pin(0).x()-item.pos().x())<1e-6
+    assert tab.values()['schematic']['rotations']=={'part:L3':(start+90)%360}
     assert sc.devices['part:L3'].isSelected()
     for net,wire,(a,i),(b,j),label in sc.links:                       # every wire starts and ends on its pins
         path=wire.path();assert path.elementCount()>=4
         ends={(round(path.elementAt(0).x),round(path.elementAt(0).y)),(round(path.elementAt(path.elementCount()-1).x),round(path.elementAt(path.elementCount()-1).y))}
         assert ends=={(round(a.pin(i).x()),round(a.pin(i).y())),(round(b.pin(j).x()),round(b.pin(j).y()))}
-    view.rotate_part('part:L3',90)
-    assert sc.devices['part:L3'].facing(0)==(1,0)                    # 180°: the pins swapped sides
-    view.undo();assert sc.devices['part:L3'].rot==90
-    view.rotate_part('part:L3',-90);assert 'rotations' not in tab.values().get('schematic',{})
+    view.undo();assert sc.devices['part:L3'].rot==start and 'rotations' not in tab.values().get('schematic',{})
+    view.rotate_part('part:L3',180);assert sc.devices['part:L3'].rot==(start+180)%360
+    view.rotate_part('part:L3',0);assert not sc.devices['part:L3'].chosen and 'rotations' not in tab.values()['schematic']
     view.rotate_part('switch:Q2',270);view.arrange()
-    assert all(d.rot==0 for d in sc.devices.values()) and 'rotations' not in tab.values()['schematic']
+    assert not any(d.chosen for d in sc.devices.values()) and 'rotations' not in tab.values()['schematic']
     tab.set_model(dict(tab.values(),schematic=dict(format=1,rotations={'part:C25':90})))
-    assert sc.devices['part:C25'].rot==90                             # a saved model's angle, when loaded
+    assert sc.devices['part:C25'].rot==90 and sc.devices['part:C25'].chosen     # a saved model's angle, when loaded
+
+
+def test_generated_orientation(tab):
+    """The generator: coils stand up, a part faces the parts it connects to (no wire round its own card), and
+    ground is drawn downward whichever way its pin points."""
+    view=tab.schematic;sc=view.scene
+    assert sc.devices['primary'].rot in (90,270) and sc.devices['secondary'].rot in (90,270)
+    assert sc.devices['load'].rot in (90,270)                         # the load too, across the output
+    assert sc.devices['part:R9'].rot in (0,180)
+    # a part put to the left of the only part it is wired to turns its wired pin to the right
+    pos=sc.positions();sup=sc.devices['supply'];k=sup.record['nets'].index('VIN')
+    other=next(d for key,d in sc.devices.items() if key!='supply' and 'VIN' in d.record['nets'])
+    ox,oy=other.x(),other.y()                                         # (the parts are rebuilt at every edit)
+    pos['supply']=[ox-400,oy];view.save_positions(pos)
+    assert sc.devices['supply'].facing(k)==(1,0)
+    pos['supply']=[ox+400,oy];view.save_positions(pos)
+    assert sc.devices['supply'].facing(k)==(-1,0)

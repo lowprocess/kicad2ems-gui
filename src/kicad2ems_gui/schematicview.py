@@ -165,7 +165,7 @@ class ZoomView(QGraphicsView):
 
 
 GROUPS=[('input','Input filter'),('dc','DC bus'),('bridgeA','Leg A'),('bridgeB','Leg B'),('tank','Tank'),
-        ('primary','Primary'),('receiver','Receiver'),('other','Other')]      # the columns, in the power's order
+        ('primary','Primary'),('receiver','Receiver'),('load','Load'),('other','Other')]   # the columns, in the power's order
 PITCH_X,PITCH_Y=200,76                                                 # a card is 124 x 40, its rail flags below
 PIN_X,PIN_Y=70,6
 INK,NET,PICK='#235e85','#5f6f7a','#d2860b'          # parts; every net, wire or flag; what the selection touches
@@ -182,6 +182,8 @@ def kind_colors(kind):
 CHANNEL=8                                          # wires run this far outside a column's pins, and in the row gaps,
 LANE=5                                             # each net in a lane of its own, LANE apart (LANES of them)
 LANES=4
+TALL_DROP=27                                       # a part stood up sits this far below its row: its lower pin's wires
+                                                   # run in the gap under the next row, its upper pin's above every card
 ROW_GAP=35                                         # below a card's centre: the first lane under its flags (to +32)
 
 
@@ -196,9 +198,16 @@ def rails_of(records,threshold=4):
 class DeviceItem(QGraphicsObject):
     """A part: its reference and value over its symbol, a pin each side; a pin on a rail carries the rail's flag
     (ground's symbol, else its name), so the busiest nets need no wires."""
-    def __init__(self,record,scene,rotation=0):
-        super().__init__();self.record=record;self.owner=scene;self.rot=int(rotation)%360//90*90;self.setFlags(QGraphicsItem.ItemIsMovable|QGraphicsItem.ItemIsSelectable|QGraphicsItem.ItemSendsGeometryChanges);self.setZValue(2)
+    def __init__(self,record,scene,rotation=None):
+        super().__init__();self.record=record;self.owner=scene;self.chosen=rotation is not None     # by the user, not by load()
+        self.rot=int(rotation if self.chosen else self.natural(record))%360//90*90;self.setFlags(QGraphicsItem.ItemIsMovable|QGraphicsItem.ItemIsSelectable|QGraphicsItem.ItemSendsGeometryChanges);self.setZValue(2)
         self.setToolTip(record['ref']+' '+record.get('label','')+('\n'+record['details'] if record.get('details') else '')+'\n'+'  ·  '.join(f"{e} ({n})" for e,n in zip(record['endpoints'],record['nets'])))
+
+    @staticmethod
+    def natural(record):
+        """How a part stands before anyone turns it: a coil upright (its winding vertical) and the load across the
+        receiver's output, the rest along the flow."""
+        return 90 if record['kind']=='coil' or record['id']=='load' else 0
 
     @property
     def upright(self):
@@ -234,7 +243,7 @@ class DeviceItem(QGraphicsObject):
         m=QMenu()
         for text,d in (('Rotate 90° clockwise\tR',90),('Rotate 90° anticlockwise\tShift+R',-90),('Rotate 180°',180)):
             m.addAction(text).triggered.connect(lambda _=False,d=d:self.owner.rotate.emit(self.record['id'],d))
-        if self.rot:m.addAction('Upright (0°)').triggered.connect(lambda:self.owner.rotate.emit(self.record['id'],-self.rot))
+        if self.chosen:m.addAction('Automatic (the way its wires are shortest)').triggered.connect(lambda:self.owner.rotate.emit(self.record['id'],0))
         m.exec(event.screenPos());event.accept()
 
     def paint(self,painter,option,widget=None):
@@ -255,7 +264,7 @@ class DeviceItem(QGraphicsObject):
             painter.drawText(QRectF(card.left()+3,card.top()+2,card.width()-6,15),Qt.AlignHCenter|Qt.AlignVCenter,painter.fontMetrics().elidedText(r['ref'],Qt.ElideRight,int(card.width()-6)))
             font.setBold(False);font.setPixelSize(10);painter.setFont(font)
             painter.drawText(QRectF(card.left()+3,card.bottom()-17,card.width()-6,15),Qt.AlignHCenter|Qt.AlignVCenter,painter.fontMetrics().elidedText(r.get('label',''),Qt.ElideRight,int(card.width()-6)))
-        flags=[]                                                    # (where a rail's stem ends, its way, the net, lit)
+        flags,grounds=[],[]                                         # (where a rail's stem ends, its way, the net, lit)
         painter.save();painter.setTransform(self.turn(),True)
         y=PIN_Y
         for k,(x0,x1) in enumerate(((-PIN_X,-24),(24,PIN_X))):
@@ -283,13 +292,18 @@ class DeviceItem(QGraphicsObject):
             painter.setPen(Qt.NoPen);painter.setBrush(QColor(PICK) if on else color);painter.drawEllipse(QPointF(x,y),2.2,2.2)
             if net not in self.owner.rails:continue
             c=QColor(PICK) if on else QColor(NET)
+            if net in ('GND','0'):grounds.append((self.turn().map(QPointF(x,y)),self.facing(k),on));continue
             painter.setPen(QPen(c,1.6 if on else 1));painter.drawLine(QPointF(x,y),QPointF(x,y+12))
-            if net in ('GND','0'):                                  # ground's symbol turns with the part
-                for w,dy in ((7,12),(4.5,15),(2,18)):painter.drawLine(QPointF(x-w,y+dy),QPointF(x+w,y+dy))
-            else:
-                e=self.turn().map(QPointF(x,y+12));o=self.turn().map(QPointF(x,y))
-                flags.append((e,(round((e.x()-o.x())/12),round((e.y()-o.y())/12)),net,on,1 if k==0 else -1))
+            e=self.turn().map(QPointF(x,y+12));o=self.turn().map(QPointF(x,y))
+            flags.append((e,(round((e.x()-o.x())/12),round((e.y()-o.y())/12)),net,on,1 if k==0 else -1))
         painter.restore()
+        for at,(dx,dy),on in grounds:                               # ground: always downward, however the part is turned
+            painter.setPen(QPen(QColor(PICK) if on else QColor(NET),1.8 if on else 1.3))
+            foot=QPointF(at.x(),at.y()+11)
+            if dy<0:                                                # a pin pointing up: beside it, then down
+                side=QPointF(at.x()+14,at.y());painter.drawLine(at,side);foot=QPointF(side.x(),side.y()+11);painter.drawLine(side,foot)
+            else:painter.drawLine(at,foot)
+            for w,d in ((11,0),(7,4),(3,8)):painter.drawLine(QPointF(foot.x()-w,foot.y()+d),QPointF(foot.x()+w,foot.y()+d))
         for e,(dx,dy),net,on,inward in flags:                       # a rail's name: upright, past its stem's end
             font.setPixelSize(10);font.setBold(on);painter.setFont(font)
             tw=painter.fontMetrics().horizontalAdvance(net)+8;c=QColor(PICK) if on else QColor(NET)
@@ -331,13 +345,18 @@ class CircuitScene(QGraphicsScene):
     def default_positions(records):
         """Columns in GROUPS' order (the empty ones left out), a part under another; the supply heads its column,
         a bridge leg's high side above its low side."""
-        cols=[g for g,_ in GROUPS if any(r['group']==g for r in records)]
-        cols+=sorted({r['group'] for r in records}-set(cols))
+        col=lambda r:'load' if r['id']=='load' else r['group']         # the load beside the receiver, not under it:
+        cols=[g for g,_ in GROUPS if any(col(r)==g for r in records)]   # its wires then pass no card
+        cols+=sorted({col(r) for r in records}-set(cols))
         first={'supply':0,'secondary':0,'receiver_cap':1,'load':2}           # the coupled coil heads the receiver
         order=lambda r:(first.get(r['id'],9),'VIN' not in r['nets'],'low-side' in r.get('details',''),_natural(r['ref']))
         out={}
         for c,g in enumerate(cols):
-            for row,r in enumerate(sorted((r for r in records if r['group']==g),key=order)):out[r['id']]=(c*PITCH_X,row*PITCH_Y)
+            row=0
+            for r in sorted((r for r in records if col(r)==g),key=order):
+                if DeviceItem.natural(r) in (90,270):               # stood up: two rows, its lower pin just over the gap
+                    out[r['id']]=(c*PITCH_X,row*PITCH_Y+TALL_DROP);row+=2
+                else:out[r['id']]=(c*PITCH_X,row*PITCH_Y);row+=1
         return out,cols
 
     def keyPressEvent(self,event):
@@ -351,13 +370,14 @@ class CircuitScene(QGraphicsScene):
         self.rails=rails_of(records)
         defaults,cols=self.default_positions(records)
         for r in records:
-            item=DeviceItem(r,self,(rotations or {}).get(r['id'],0));self.addItem(item);self.devices[r['id']]=item
+            item=DeviceItem(r,self,(rotations or {}).get(r['id']));self.addItem(item);self.devices[r['id']]=item
             x,y=positions.get(r['id'],defaults[r['id']]);item.setPos(x,y)
+        self.orient()
         if not positions:                                           # the columns' names, over the arrangement
             self.legend([r['kind'] for r in records])
             names=dict(GROUPS);font=QFont();font.setPixelSize(12);font.setBold(True)
             for c,g in enumerate(cols):
-                t=self.addSimpleText(names.get(g,g),font);t.setBrush(QColor(MUTED));t.setPos(c*PITCH_X-t.boundingRect().width()/2,-62);self.headers.append(t)
+                t=self.addSimpleText(names.get(g,g),font);t.setBrush(QColor(MUTED));t.setPos(c*PITCH_X-t.boundingRect().width()/2,-86);self.headers.append(t)
         nets={}
         for item in self.devices.values():
             for index,net in enumerate(item.record['nets']):nets.setdefault(net,[]).append((item,index))
@@ -380,9 +400,28 @@ class CircuitScene(QGraphicsScene):
         for k in ('supply','resistor','capacitor','inductor','coil','switch'):
             if k not in kinds or KINDS[k][2] in seen:continue
             seen.append(KINDS[k][2]);ink,fill=kind_colors(k)
-            sw=self.addRect(x,-96,12,12,QPen(QColor(ink),1.2),QBrush(QColor(fill)))
-            t=self.addSimpleText(KINDS[k][2],font);t.setBrush(QColor(ink));t.setPos(x+17,-98)
+            sw=self.addRect(x,-120,12,12,QPen(QColor(ink),1.2),QBrush(QColor(fill)))
+            t=self.addSimpleText(KINDS[k][2],font);t.setBrush(QColor(ink));t.setPos(x+17,-122)
             self.headers+= [sw,t];x+=17+t.boundingRect().width()+18
+
+    def orient(self):
+        """The parts nobody turned, each the way round (as it stands, or flipped) that brings its pins nearest the
+        parts they connect to, so a wire does not wrap round its own part; rails count for nothing (a flag)."""
+        on={}
+        for item in self.devices.values():
+            for net in item.record['nets']:on.setdefault(net,[]).append(item)
+        def reach(item):
+            total=0.0
+            for k,net in enumerate(item.record['nets']):
+                others=[o for o in on[net] if o is not item]
+                if net in self.rails or not others:continue
+                pin=item.pin(k);cx=sum(o.x() for o in others)/len(others);cy=sum(o.y() for o in others)/len(others)
+                total+=abs(pin.x()-cx)+abs(pin.y()-cy)
+            return total
+        for item in self.devices.values():
+            if item.chosen:continue
+            base=item.natural(item.record);item.rot=base;a=reach(item);item.rot=(base+180)%360;b=reach(item)
+            item.prepareGeometryChange();item.rot=base if a<=b+1e-6 else (base+180)%360
 
     def positions(self):return {key:[item.x(),item.y()] for key,item in self.devices.items()}
 
@@ -402,7 +441,7 @@ class CircuitScene(QGraphicsScene):
             if dp[1] and dq[1]:                                     # both up or down: a level past both, else between
                 my=max(sp.y(),sq.y()) if dp[1]>0 and dq[1]>0 else min(sp.y(),sq.y()) if dp[1]<0 and dq[1]<0 else (sp.y()+sq.y())/2
                 return [p,sp,QPointF(sp.x(),my),QPointF(sq.x(),my),sq,q]
-            corner=QPointF(sq.x(),sp.y()) if dp[0] else QPointF(sp.x(),sq.y())
+            corner=QPointF(sp.x(),sq.y()) if dp[0] else QPointF(sq.x(),sp.y())   # level at the turned pin's stub, upright in the other's channel
             return [p,sp,corner,sq,q]
         i,j=(1 if dp[0]>0 else 0),(1 if dq[0]>0 else 0)               # 180°: the pins have swapped sides
         cp=p.x()+(out if i==1 else -out);cq=q.x()+(out if j==1 else -out)
@@ -430,9 +469,17 @@ class CircuitScene(QGraphicsScene):
                 label.setPos(u.x()-w-3 if left else u.x()+3,(u.y()+v.y())/2-6)
         if self.coupling is not None:
             a,b=self.devices['primary'],self.devices['secondary']
-            p,q=a.mapToScene(QPointF(0,-20)),b.mapToScene(QPointF(0,-20));top=min(p.y(),q.y())-14
-            path=QPainterPath(p);path.lineTo(p.x(),top);path.lineTo(q.x(),top);path.lineTo(q);self.coupling.setPath(path)
-            self.coupling_label.setPos((p.x()+q.x())/2-self.coupling_label.boundingRect().width()/2,top-14)
+            if a.x()>b.x():a,b=b,a
+            ra,rb=a.card().translated(a.pos()),b.card().translated(b.pos())
+            if rb.left()-ra.right()>4 and min(ra.bottom(),rb.bottom())-max(ra.top(),rb.top())>20:   # side by side: straight across
+                y=(max(ra.top(),rb.top())+min(ra.bottom(),rb.bottom()))/2
+                path=QPainterPath(QPointF(ra.right(),y));path.lineTo(rb.left(),y)
+                self.coupling_label.setPos((ra.right()+rb.left())/2-self.coupling_label.boundingRect().width()/2,y-15)
+            else:                                                   # else over their tops
+                p,q=QPointF(ra.center().x(),ra.top()),QPointF(rb.center().x(),rb.top());top=min(p.y(),q.y())-34
+                path=QPainterPath(p);path.lineTo(p.x(),top);path.lineTo(q.x(),top);path.lineTo(q)
+                self.coupling_label.setPos((p.x()+q.x())/2-self.coupling_label.boundingRect().width()/2,top-14)
+            self.coupling.setPath(path)
 
     def highlight(self,nets):
         self.lit=set(nets)
@@ -536,13 +583,14 @@ class SchematicEditor(QWidget):
         self.commit(lambda c:c.setdefault('schematic',dict(format=1)).update(positions=positions),'Schematic arrangement saved')
 
     def rotate_part(self,key,degrees):
-        """Turn a part by `degrees` (clockwise, a multiple of 90): kept with the model (schematic.rotations), undoable."""
+        """Turn a part by `degrees` (clockwise, a multiple of 90) from how it stands; 0: leave it to the generator
+        again. Kept with the model (schematic.rotations, only the parts turned by hand), undoable."""
         if not key or key not in self.scene.devices:self.message('Select a part to rotate');return
+        shown=self.scene.devices[key].rot                           # as it stands (the generator may have flipped it)
         def change(c):
             rot=c.setdefault('schematic',dict(format=1)).setdefault('rotations',{})
-            new=(rot.get(key,0)+degrees)%360
-            if new:rot[key]=new
-            else:rot.pop(key,None)
+            if degrees%360:rot[key]=(shown+degrees)%360             # a turn: from then on the part stays as turned
+            else:rot.pop(key,None)                                  # 0: the generator's choice again
             if not rot:c['schematic'].pop('rotations')
         if self.commit(change,f"{self.scene.devices[key].record['ref']} rotated"):
             item=self.scene.devices.get(key)
