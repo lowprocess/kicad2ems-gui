@@ -106,3 +106,30 @@ else:
     QTimer.singleShot(50,job.cancel);stopped=QSignalSpy(proc.finished)
     assert stopped.wait(5000) and proc.state()==QProcess.NotRunning and done.count()==0
     assert not Path(job.temp.name).exists() and source.read_text()=='original untouched'
+
+
+def test_rotating_a_part(tab):
+    """R (or the menu, or Rotate) turns the selected part: its pins and wires follow, the angle stays with the model,
+    Undo turns it back, Arrange stands every part upright again."""
+    from PySide6.QtCore import QPointF
+    view=tab.schematic;sc=view.scene;view.select('part:L3')
+    item=sc.devices['part:L3'];left=item.pin(0)
+    assert item.facing(0)==(-1,0) and item.facing(1)==(1,0)
+    view.rotate_part('part:L3',90)
+    item=sc.devices['part:L3']                                       # rebuilt
+    assert item.rot==90 and item.facing(0)==(0,-1) and item.facing(1)==(0,1)    # clockwise: left pin now on top
+    assert abs(item.pin(0).x()-item.pos().x())<1e-6 and item.pin(0).y()<item.pos().y()
+    assert tab.values()['schematic']['rotations']=={'part:L3':90}
+    assert sc.devices['part:L3'].isSelected()
+    for net,wire,(a,i),(b,j),label in sc.links:                       # every wire starts and ends on its pins
+        path=wire.path();assert path.elementCount()>=4
+        ends={(round(path.elementAt(0).x),round(path.elementAt(0).y)),(round(path.elementAt(path.elementCount()-1).x),round(path.elementAt(path.elementCount()-1).y))}
+        assert ends=={(round(a.pin(i).x()),round(a.pin(i).y())),(round(b.pin(j).x()),round(b.pin(j).y()))}
+    view.rotate_part('part:L3',90)
+    assert sc.devices['part:L3'].facing(0)==(1,0)                    # 180°: the pins swapped sides
+    view.undo();assert sc.devices['part:L3'].rot==90
+    view.rotate_part('part:L3',-90);assert 'rotations' not in tab.values().get('schematic',{})
+    view.rotate_part('switch:Q2',270);view.arrange()
+    assert all(d.rot==0 for d in sc.devices.values()) and 'rotations' not in tab.values()['schematic']
+    tab.set_model(dict(tab.values(),schematic=dict(format=1,rotations={'part:C25':90})))
+    assert sc.devices['part:C25'].rot==90                             # a saved model's angle, when loaded
