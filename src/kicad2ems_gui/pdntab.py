@@ -33,12 +33,13 @@ def why_not(python=None):
     return describe_tool(python, ('-m', 'pcbqs.pdn'), 'pcbqs', QS_PIP)[1]
 
 
-def pdn_argv(vals, board, out, desc=None, python=None):
+def pdn_argv(vals, board, out, desc=None, python=None, module='pcbqs.pdn'):
     """[python, -m, pcbqs.pdn, board, --out, out, ...] for the page's values {key: text or bool}: an option left
     empty (or at its default) is not passed; a list ('load', 'cap') is lines, or REF=... items joined by commas
-    (a comma inside one, CA1=47e-6,0.02,1e-9, stays in it)."""
+    (a comma inside one, CA1=47e-6,0.02,1e-9, stays in it). module: another pcbqs tool with the same kind of
+    options table (pcbqs.thermal); board None: none given (that tool finds it)."""
     opts = {o['key']: o for o in (desc or {}).get('options', [])}
-    argv = [python or sys.executable, '-m', 'pcbqs.pdn', board, '--out', out]
+    argv = [python or sys.executable, '-m', module, *([board] if board else []), '--out', out]
     for key, v in vals.items():
         o = opts.get(key)
         if o is None:
@@ -183,6 +184,7 @@ class PdnTab(QWidget):
     window the settings are in its Study dock instead (settings_panel) and its Run starts the tool."""
     _panel = None                                       # the settings, once moved out of the page
     KIND = 'pdn'                                        # its run folders' (runfolders.tool_dir)
+    OPEN = ('Rail',)                                    # the settings' sections open at first
 
     def __init__(self, win=None):
         super().__init__()
@@ -239,7 +241,7 @@ class PdnTab(QWidget):
                 wid.setToolTip(f"{o['flag']}: {o['help']}")
                 self.w[o['key']] = wid
                 fl.addRow(o['key'].replace('_', ' ').capitalize() if o['kind'] != 'bool' else '', wid)
-            v.addWidget(Section(g, inner, g in ('Rail',)))
+            v.addWidget(Section(g, inner, g in self.OPEN))
         v.addStretch(1)
         foot = QWidget()
         fv = QVBoxLayout(foot)

@@ -16,16 +16,17 @@ run. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/do
 
 The dock on the left is the study: the board (one for every analysis), the **Analyses** and the settings of the
 analysis selected there. S-parameters is kicad2ems's own run with the solvers ticked under Solvers; Power integrity,
-Near field and Circuit are pcbqs's tools, whose pages keep their results while their settings are in the dock.
+Near field, Circuit and Thermal are pcbqs's tools, whose pages keep their results while their settings are in the dock.
 
 **Preview** and **Run** act on the ticked analyses, one after the other; the Run page lists them with each one's
 state, time and log. Run > *Run the selected analysis alone* (or the list's context menu) runs one whatever is ticked.
-An analysis that starts from another's results (`needs` in `study.py`) runs after it and ticks it: Thermal is listed
-that way, after Power integrity, whose DC solve gives it the copper's loss. It has no solver yet, so it cannot be
-ticked.
+They run in the list's order, so **Thermal** (`pcbqs.thermal`: the board's steady temperature, each part's and the
+maps) runs after Circuit. Its losses are typed under Heat (REF=W), or, when none are, the Circuit page's latest run's,
+on that run's board. An analysis that starts from another's results (`needs` in `study.py`) runs after it and ticks
+it. Thermal needs pcbqs 261111 or later (its options from `python -m pcbqs.thermal --describe --json`).
 
 **Results of** (the toolbar) lists every result of the board: the preview, the S-parameter runs, and each Power
-integrity and Near field run, which now get a folder of their own under the output folder. Choosing one fills the
+integrity, Near field and Thermal run, which now get a folder of their own under the output folder. Choosing one fills the
 pages: S-parameters or the analysis's curves on the Results page, its maps and fields in the Viewer, its summary on
 its page. Results > **Compare with** lays other runs of the same kind over the one shown, and View > **A second
 Viewer** opens another run's maps in a window of its own. Power integrity's maps need pcbqs 261111 or later.

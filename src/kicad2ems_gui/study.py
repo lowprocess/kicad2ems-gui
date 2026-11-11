@@ -9,8 +9,9 @@ The study: one board, the analyses made of it, and which of them a Run includes.
 
 An analysis is a tool of its own behind one of the window's pages (kicad2ems itself for S-parameters, pcbqs's
 tools for the power ones): the list only says which to run and shows which settings; the pages still start their
-tools and read their results. `needs` is how one analysis follows another: Thermal starts from Power integrity's DC
-solve (the copper's loss is its heat source), so ticking it ticks Power integrity and it runs after it.
+tools and read their results. `needs` is how one analysis follows another (none does now); the list's order is the
+run's, so Thermal, which takes its losses from the Circuit page's latest run unless they are typed, runs after
+Circuit.
 """
 from dataclasses import dataclass
 
@@ -32,14 +33,15 @@ ANALYSES = (
              note="kicad2ems's run: the solvers ticked under Solvers, their S-parameters, fields and antenna results"),
     Analysis('pdn', 'Power integrity', 'pcbqs.pdn', page='PDN',
              note="a rail's DC drop and the impedance its loads see"),
-    Analysis('thermal', 'Thermal', '', needs=('pdn',), planned=True,
-             note="starts from Power integrity's DC solve: the copper's loss is its heat source (the parts' own "
-                  "dissipation later). No thermal solver yet"),
     Analysis('mqs', 'Near field', 'pcbqs.mqs', page='Near field', preview=True,
              note="a converter's input loop and its magnetic near field"),
     Analysis('circuit', 'Circuit', 'pcbqs.circuit', page='Circuit',
              note="ngspice runs of the Circuit page's model: any circuit of parts, nodes and drives, settled, with "
                   "its targets met; the board's full bridge (the wpthb model) with the copper it extracts when asked"),
+    Analysis('thermal', 'Thermal', 'pcbqs.thermal', page='Thermal',
+             note="the board's steady temperature from its parts' losses: typed (REF=W), or the Circuit page's "
+                  "latest run when none are (it runs after Circuit when both are ticked); each part's temperature "
+                  "and the maps"),
 )
 BY_KEY = {a.key: a for a in ANALYSES}
 

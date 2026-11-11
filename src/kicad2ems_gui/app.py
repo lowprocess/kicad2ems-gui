@@ -43,6 +43,7 @@ from .statusbar import MemoryMeters, EstimateButton
 from .meters import duration
 from .filtertab import FilterTab
 from .pdntab import PdnTab
+from .thermaltab import ThermalTab
 from .mqstab import MqsTab
 from .powercircuittab import PowerCircuitTab
 from .study import StudyList, ANALYSES, BY_KEY, run_order, dependents
@@ -50,10 +51,10 @@ from .study import StudyList, ANALYSES, BY_KEY, run_order, dependents
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
-PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit')
+PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit', 'Thermal')
 TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
 ON_DEMAND = ('Filter',)                         # pages closed when the window opens: the toolbar's Filter opens it
-FOLLOWS_TICK = {'Circuit': 'circuit'}           # pages shown while their analysis is ticked (or opened by hand)
+FOLLOWS_TICK = {'Circuit': 'circuit', 'Thermal': 'thermal'}           # pages shown while their analysis is ticked (or opened by hand)
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
@@ -1088,6 +1089,7 @@ class MainWindow(QMainWindow):
         self.viewer = Viewer(self)
         self.filter = FilterTab(self)
         self.pdn = PdnTab(self)
+        self.thermal = ThermalTab(self)
         self.mqs = MqsTab(self)
         self.circuit = PowerCircuitTab(self)
         self._study()
@@ -1119,7 +1121,7 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         self.docks = {}
-        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs, self.circuit)):
+        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs, self.circuit, self.thermal)):
             d = QDockWidget(TITLES.get(name, name), self.work)
             d.setObjectName(name)
             d.setWidget(w)
@@ -1152,10 +1154,10 @@ class MainWindow(QMainWindow):
     def _study(self):
         """The analyses' list into the settings dock, with each page's own settings under it (the pages keep
         their results); the ticks of the last session (the first time: S-parameters, as Run always did)."""
-        from . import pdntab, mqstab
+        from . import pdntab, mqstab, thermaltab
         self._study_ready = False
         self.queue, self.job, self._job_t0, self._queue_preview, self._queue_stopped = [], None, 0.0, False, False
-        self.pages = {'pdn': self.pdn, 'mqs': self.mqs, 'circuit': self.circuit}
+        self.pages = {'pdn': self.pdn, 'mqs': self.mqs, 'circuit': self.circuit, 'thermal': self.thermal}
         self.study = StudyList()
         panels = {k: p.settings_panel() for k, p in self.pages.items()}
         for a in ANALYSES:
@@ -1166,7 +1168,7 @@ class MainWindow(QMainWindow):
                 note.setContentsMargins(6, 0, 6, 0)
                 panels[a.key] = note
         self.setup.set_study(self.study, panels)
-        for key, mod in (('pdn', pdntab), ('mqs', mqstab)):
+        for key, mod in (('pdn', pdntab), ('mqs', mqstab), ('thermal', thermaltab)):
             if self.pages[key].desc is None:
                 self.study.set_available(key, False, mod.why_not() or pdntab.QS_PIP)
         if not self.circuit.run_btn.isEnabled():                    # its template could not be made: why
@@ -1271,7 +1273,7 @@ class MainWindow(QMainWindow):
         if code == 0:
             self._job_state(key, f"done {time.strftime('%H:%M')}", seconds=took)
             out = getattr(self.pages.get(key), 'out', None)
-            if key in ('pdn', 'mqs') and out and os.path.isdir(str(out)):   # its maps and curves, its summary
+            if key in ('pdn', 'mqs', 'thermal') and out and os.path.isdir(str(out)):   # its maps and curves, its summary
                 self.refresh_runs(select=str(out))
                 self.open_results(str(out), quiet=True, front=False)
         else:
@@ -1293,7 +1295,7 @@ class MainWindow(QMainWindow):
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
         return {'viewer': self.viewer.split, 'results': self.results.splot.split, 'filter': self.filter.split,
-                'pdn': self.pdn.split, 'mqs': self.mqs.split, 'circuit': self.circuit.split,
+                'pdn': self.pdn.split, 'mqs': self.mqs.split, 'circuit': self.circuit.split, 'thermal': self.thermal.split,
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
     def _restore_shape(self):
@@ -1656,10 +1658,10 @@ class MainWindow(QMainWindow):
     def _show_tool_result(self, kind, out_dir):
         """A Power integrity or Near field folder: its page's summary, and in the viewer the map to start from
         (the rail's drop on the layer that drops most; the near field's own mesh in the plan)."""
-        from . import pdntab, mqstab
+        from . import pdntab, mqstab, thermaltab
         page = self.pages[kind]
         try:
-            res = (pdntab if kind == 'pdn' else mqstab).load_result(out_dir)
+            res = {'pdn': pdntab, 'mqs': mqstab, 'thermal': thermaltab}[kind].load_result(out_dir)
         except (OSError, ValueError, KeyError):
             res = None
         if res is None:
@@ -1670,7 +1672,7 @@ class MainWindow(QMainWindow):
             drops = [s for s in self.viewer.cuts.srcs if s.field == 'V' and s.run == 'power']
             if drops:
                 self.viewer.show_dump(max(drops, key=lambda s: float(abs(s.load(0)[1]).max())).label)
-        elif self.viewer.plan.mesh.findData('mqs') >= 0:
+        elif kind == 'mqs' and self.viewer.plan.mesh.findData('mqs') >= 0:
             self.viewer.plan.mesh.setCurrentIndex(self.viewer.plan.mesh.findData('mqs'))
 
     # ---- this board's runs: a folder each (runfolders.py) ----

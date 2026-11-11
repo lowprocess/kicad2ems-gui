@@ -8,24 +8,32 @@ from kicad2ems_gui import study
 
 def test_order_and_needs():
     keys = [a.key for a in study.ANALYSES]
-    assert keys[0] == 'rf' and keys.index('pdn') < keys.index('thermal')    # thermal: after the DC solve it uses
-    assert study.with_needs(['thermal']) == ['pdn', 'thermal']
+    assert keys[0] == 'rf' and keys.index('circuit') < keys.index('thermal')    # thermal: after the circuit run
+    assert study.with_needs(['thermal']) == ['thermal']                     # its losses may be typed: no needs
     assert study.with_needs(['circuit', 'rf']) == ['rf', 'circuit']          # the list's order, not the caller's
-    assert study.dependents('pdn') == ['thermal'] and study.dependents('rf') == []
+    assert study.dependents('pdn') == [] and study.dependents('rf') == []
     assert study.run_order(['circuit', 'mqs', 'rf']) == ['rf', 'mqs', 'circuit']
-    assert study.run_order(['thermal']) == ['pdn']                           # no thermal solver yet: its DC solve
+    assert study.run_order(['thermal', 'circuit']) == ['circuit', 'thermal']
+    assert not any(a.planned for a in study.ANALYSES)
     assert study.run_order(['rf', 'pdn', 'mqs'], preview=True) == ['rf', 'mqs']
     assert study.run_order(['rf', 'pdn'], available={'rf'}) == ['rf']       # pcbqs not installed
     assert study.run_order(['mqs'], preview=True, available={'rf'}) == []
 
 
 def test_a_planned_analysis_runs_once_it_has_a_tool(monkeypatch):
-    """Thermal with a tool: after Power integrity, and not at all when that cannot run."""
-    a = [x if x.key != 'thermal' else study.Analysis('thermal', 'Thermal', 'tool', needs=('pdn',)) for x in study.ANALYSES]
-    monkeypatch.setattr(study, 'ANALYSES', tuple(a))
-    monkeypatch.setattr(study, 'BY_KEY', {x.key: x for x in a})
-    assert study.run_order(['thermal']) == ['pdn', 'thermal']
-    assert study.run_order(['thermal'], available={'thermal'}) == []
+    """An analysis that starts from another's results: planned, only what it needs runs; with a tool, after
+    that, and not at all when that cannot run."""
+    base = study.ANALYSES
+
+    def with_later(planned):
+        a = (*base, study.Analysis('later', 'Later', 'tool', needs=('pdn',), planned=planned))
+        monkeypatch.setattr(study, 'ANALYSES', a)
+        monkeypatch.setattr(study, 'BY_KEY', {x.key: x for x in a})
+    with_later(True)
+    assert study.run_order(['later']) == ['pdn'] and study.dependents('pdn') == ['later']
+    with_later(False)
+    assert study.run_order(['later']) == ['pdn', 'later']
+    assert study.run_order(['later'], available={'later'}) == []
 
 
 @pytest.fixture
@@ -59,7 +67,7 @@ def test_study_dock(window):
     st = w.setup
     assert w.settings_dock.windowTitle() == 'Study'
     assert [st.study.topLevelItem(i).text(0) for i in range(st.study.topLevelItemCount())] == \
-        ['S-parameters', 'Power integrity', 'Thermal', 'Near field', 'Circuit']
+        ['S-parameters', 'Power integrity', 'Near field', 'Circuit', 'Thermal']
     assert st.study.ticked() == ['rf'] and st.study.current() == 'rf'       # as Run always did
     assert set(st.panels) == {'rf', 'pdn', 'thermal', 'mqs', 'circuit'}
     assert not st.rf_box.isHidden() and st.panels['pdn'].isHidden()
@@ -73,11 +81,10 @@ def test_study_dock(window):
     assert not w.mqs.find_btn.isHidden()                                     # it fills the form: it stays
     assert st.panels['circuit'].isAncestorOf(w.circuit.frequencies)
     assert w.pdn.board.placeholderText() == "the study's board"
-    # thermal: listed, not tickable; ticking Power integrity alone leaves it out
-    th = w.study.rows['thermal']
-    assert 'thermal' in w.study.why and th.text(2) == 'planned'
-    th.setCheckState(0, Qt.Checked)
-    assert th.checkState(0) == Qt.Unchecked and w.study.ticked() == ['rf']
+    # thermal: pcbqs's tool, its settings in the dock like the others
+    if w.thermal.desc is not None:
+        assert 'thermal' not in w.study.why and w.study.rows['thermal'].text(1) == 'pcbqs.thermal'
+        assert st.panels['thermal'].isAncestorOf(w.thermal.w['loss']) and w.thermal.run_btn.isHidden()
     w.study.rows['pdn'].setCheckState(0, Qt.Checked)
     assert w.study.ticked() == ['rf', 'pdn'] and '2 of 5' in st.study_section.head.text()
     w.setup.set_values(dict(solvers=['mom25d']))

@@ -56,8 +56,8 @@ def runs(base, board):
     return sorted(out, key=lambda r: os.path.basename(r[0]), reverse=True)
 
 
-TOOL_RESULTS = {'pdn': 'pdn.json', 'mqs': 'mqs.json'}               # the file a finished run of each wrote
-TOOL_TITLES = {'pdn': 'Power integrity', 'mqs': 'Near field'}
+TOOL_RESULTS = {'pdn': 'pdn.json', 'mqs': 'mqs.json', 'thermal': 'thermal.json'}   # the file a finished run of each wrote
+TOOL_TITLES = {'pdn': 'Power integrity', 'mqs': 'Near field', 'thermal': 'Thermal'}
 
 
 def _tag(text):
@@ -83,7 +83,7 @@ def tool_runs(base, board):
     pdn_<rail> / mqs_<converter> folders those tools wrote to before."""
     name = board_name(board)
     out = []
-    pat = re.compile(re.escape(name) + r'_(pdn|mqs)_(.+)_(\d{8}_\d{6})$')
+    pat = re.compile(re.escape(name) + r'_(' + '|'.join(TOOL_RESULTS) + r')_(.+)_(\d{8}_\d{6})$')
     for d in glob.glob(os.path.join(base, f"{glob.escape(name)}_*")):
         m = pat.match(os.path.basename(d))
         if m and tool_kind(d) == m.group(1):
