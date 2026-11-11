@@ -106,66 +106,79 @@ def levels(vals, signed, log, decades=2.5, clip=99.9):
 
 
 # ---- the board ------------------------------------------------------------------------------------
-def copper_triangles(geometry):
-    """The copper of dump_info.json's geometry as triangle meshes: [(layer, z mm, vertices (n, 3), faces
-    (m, 3))], model mm (y up, as the dumps)."""
+def _copper_parts(polys):
+    """A layer's copper ([rings] per polygon) as valid polygons, exterior counter-clockwise and holes clockwise."""
     import shapely
     from shapely.geometry import Polygon
+    g = shapely.get_parts(shapely.buffer(np.array([Polygon(r[0], r[1:]) for r in polys], dtype=object), 0))
+    g = g[(shapely.get_type_id(g) == 3) & ~shapely.is_empty(g)]
+    return shapely.orient_polygons(g, exterior_cw=False)
+
+
+def _caps(parts, ccw=True):
+    """The polygons' triangles: (k, 3, 2) corners, each counter-clockwise seen from above (ccw; else as shapely
+    makes them)."""
+    import shapely
+    if not len(parts):
+        return np.zeros((0, 3, 2))
+    t = shapely.get_parts(shapely.constrained_delaunay_triangles(parts))
+    t = t[shapely.get_type_id(t) == 3]
+    c = shapely.get_coordinates(shapely.get_exterior_ring(t)).reshape(-1, 4, 2)[:, :3]
+    if not ccw:
+        return c
+    cw = ((c[:, 1, 0] - c[:, 0, 0]) * (c[:, 2, 1] - c[:, 0, 1]) - (c[:, 1, 1] - c[:, 0, 1]) * (c[:, 2, 0] - c[:, 0, 0])) < 0
+    c[cw] = c[cw, ::-1]
+    return c
+
+
+def _at(c, z):
+    """(k, 3, 2) corners at height z: (k, 3, 3)."""
+    return np.concatenate([c, np.full(c.shape[:2] + (1,), z)], axis=2)
+
+
+def copper_triangles(geometry):
+    """The copper of dump_info.json's geometry as triangle meshes: [(layer, z mm, vertices (n, 3), faces
+    (m, 3))], model mm (y up, as the dumps). Whole layers at a time (shapely's array functions): a large board's
+    every net, one triangle at a time, took minutes and gigabytes in the window's own thread."""
     out = []
     cu_z = geometry.get('cu_z', {})
     for lay, polys in (geometry.get('copper') or {}).items():
         z = cu_z.get(lay)
         if z is None or not polys:
             continue
-        verts, faces = [], []
-        for rings in polys:
-            p = Polygon(rings[0], rings[1:]).buffer(0)
-            if p.is_empty:
-                continue
-            for t in shapely.get_parts(shapely.constrained_delaunay_triangles(p)):
-                c = np.asarray(t.exterior.coords)[:3]
-                faces.append(np.arange(3) + len(verts) * 3)
-                verts.append(np.column_stack([c, np.full(3, z)]))
-        if verts:
-            out.append((lay, float(z), np.concatenate(verts), np.asarray(faces)))
+        c = _caps(_copper_parts(polys), ccw=False)
+        if len(c):
+            v = _at(c, z).reshape(-1, 3)
+            out.append((lay, float(z), v, np.arange(len(v)).reshape(-1, 3)))
     return out
 
 
 def copper_solids(geometry, thickness):
     """The copper as slabs `thickness` mm thick (centred on each layer: shown thicker than it is, so that its
     edges catch the light): [(layer, z mm, vertices (n, 3), faces (m, 3))], faces wound with outward normals
-    (top +z, bottom -z, walls away from the copper) for a shaded mesh."""
+    (top +z, bottom -z, walls away from the copper) for a shaded mesh. Whole layers at a time, as
+    copper_triangles."""
     import shapely
-    from shapely.geometry import Polygon
-    from shapely.geometry.polygon import orient
     out = []
     cu_z, h = geometry.get('cu_z', {}), 0.5 * thickness
     for lay, polys in (geometry.get('copper') or {}).items():
         z = cu_z.get(lay)
         if z is None or not polys:
             continue
-        tri = []                                                    # (3, 3) vertex triples, wound outward
-        for rings in polys:
-            g = Polygon(rings[0], rings[1:]).buffer(0)
-            for p in shapely.get_parts(g):
-                if p.is_empty or p.geom_type != 'Polygon':
-                    continue
-                p = orient(p, 1.0)                                  # exterior counter-clockwise, holes clockwise
-                for t in shapely.get_parts(shapely.constrained_delaunay_triangles(p)):
-                    c = np.asarray(t.exterior.coords)[:3]
-                    if (c[1, 0] - c[0, 0]) * (c[2, 1] - c[0, 1]) - (c[1, 1] - c[0, 1]) * (c[2, 0] - c[0, 0]) < 0:
-                        c = c[::-1]                                 # counter-clockwise seen from above
-                    tri.append(np.column_stack([c, np.full(3, z + h)]))
-                    tri.append(np.column_stack([c[::-1], np.full(3, z - h)]))
-                for ring in [p.exterior] + list(p.interiors):
-                    r = np.asarray(ring.coords)
-                    for a, b in zip(r[:-1], r[1:]):                 # a wall quad as two triangles: normal (dy, -dx)
-                        lo_a, lo_b, hi_a, hi_b = (*a, z - h), (*b, z - h), (*a, z + h), (*b, z + h)
-                        tri.append(np.array([lo_a, lo_b, hi_b]))
-                        tri.append(np.array([lo_a, hi_b, hi_a]))
-        if tri:
-            v = np.concatenate(tri)
-            out.append((lay, float(z), v, np.arange(len(v)).reshape(-1, 3)))
+        parts = _copper_parts(polys)
+        if not len(parts):
+            continue
+        c = _caps(parts)
+        tri = [_at(c, z + h), _at(c[:, ::-1], z - h)]               # top up, bottom down
+        xy, ring = shapely.get_coordinates(shapely.get_rings(parts), return_index=True)
+        same = ring[:-1] == ring[1:]                                # each ring's edges, not across rings
+        a, b = xy[:-1][same], xy[1:][same]
+        if len(a):                                                  # a wall quad as two triangles: normal (dy, -dx)
+            lo_a, lo_b, hi_a, hi_b = _at(a[:, None], z - h)[:, 0], _at(b[:, None], z - h)[:, 0], \
+                _at(a[:, None], z + h)[:, 0], _at(b[:, None], z + h)[:, 0]
+            tri += [np.stack([lo_a, lo_b, hi_b], 1), np.stack([lo_a, hi_b, hi_a], 1)]
+        v = np.concatenate(tri).reshape(-1, 3)
+        out.append((lay, float(z), v, np.arange(len(v)).reshape(-1, 3)))
     return out
 
 

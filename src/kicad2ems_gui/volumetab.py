@@ -702,6 +702,21 @@ class VolumeTab(QWidget):
         self.solved.setEnabled(mp.solved(self.mesh_files, solver) is not None)
         self.solved.setToolTip(mp.tip(self.mesh_files, solver, meshes.counts))
 
+    def _memo(self, objs, key, make):
+        """make() once for these geometry objects (compared by identity) and settings: the board is rebuilt on
+        every change of a view setting, several times while a folder loads, and a large board's copper and parts
+        took seconds each time (a minute and more in all, in the window's own thread)."""
+        cache = self.__dict__.setdefault('_meshes', {})
+        k = tuple(id(o) for o in objs) + tuple(key)
+        hit = cache.get(k)
+        if hit is not None and all(a is b for a, b in zip(hit[0], objs)):
+            return hit[1]
+        if len(cache) > 20000:
+            cache.clear()
+        made = make()
+        cache[k] = (tuple(objs), made)
+        return made
+
     def _board(self):
         """Copper (translucent orange), vias and the board's box, at the height scale."""
         gl, zs = self.gl, self.zscale.value()
@@ -719,7 +734,8 @@ class VolumeTab(QWidget):
                         (dict(g,copper=g['active_copper']),(.10,.72,.80,.65))]
             i=0
             for geo,rgba in groups:
-                parts = v3.copper_solids(geo, t) if shown > 0 else v3.copper_triangles(geo)
+                parts = self._memo((geo['copper'], g.get('cu_z')), ('cu', shown > 0, t),
+                                   lambda: v3.copper_solids(geo, t) if shown > 0 else v3.copper_triangles(geo))
                 for lay, z, verts, faces in parts:
                     v = verts.copy();v[:, 2] *= zs
                     if shown > 0:
@@ -842,7 +858,8 @@ class VolumeTab(QWidget):
         if g is None:return
         lift = 0.5 * self.cu_t.value() if self.copper.isChecked() else 0.0
         for k,c in enumerate(g.get('components',[])):
-            for j,(rgba,verts,faces) in enumerate(v3.component_solids(c,g.get('cu_z',{}),zs,lift)):
+            made=self._memo((c,g.get('cu_z')),('component',zs,lift),lambda:v3.component_solids(c,g.get('cu_z',{}),zs,lift))
+            for j,(rgba,verts,faces) in enumerate(made):
                 md=self.gl.MeshData(vertexes=verts.astype(np.float32),faces=faces.astype(np.uint32))
                 item=self.gl.GLMeshItem(meshdata=md,color=rgba,smooth=False,shader=copper_shader(),glOptions='opaque')
                 item.setDepthValue(4);self.view.addItem(item);self.items[f'component{k}_{j}']=item
