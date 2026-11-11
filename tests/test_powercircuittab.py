@@ -80,7 +80,7 @@ def test_opens_on_the_simple_template():
     assert tab.start_from.currentData()=='boost' and tab.start_from.count()==11 and tab.start_from.itemData(tab.start_from.count()-1)=='wpthb'
     sc=tab.schematic.scene
     assert set(sc.devices)=={'part:'+r for r in ('V1','C1','L1','Q1','D1','C2','R1')}
-    assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.fields)
+    assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.powers)
     assert 'drives.pwm.duty is adjusted until vout_avg' in tab.matching_note.text()
     tab.new_model('wpthb')
     assert any(p['ref']=='C25' for p in tab.values()['components'])
@@ -145,16 +145,17 @@ def test_a_general_model_runs_on_its_board(tmp_path,monkeypatch):
     ran=[]
     monkeypatch.setattr(page,'run_tool',lambda tab,argv,*a,**k:ran.append(argv))
     tab=PowerCircuitTab();tab.outdir.setText(str(tmp_path/'out'))
-    assert tab.form.isRowVisible(tab.copper) and tab.form.isRowVisible(tab.board) and not tab.form.isRowVisible(tab.fields)
+    assert tab.form.isRowVisible(tab.copper) and tab.form.isRowVisible(tab.board) and tab.form.isRowVisible(tab.fields)
     assert tab.copper.text().startswith("Include the board's copper")
     tab.start();assert '--copper' not in ran[-1] and ran[-1][3]=='pcbqs.circuit'
     tab.copper.setChecked(True);tab.start()
     assert ran[-1][-3]=='--copper' and ran[-1][-2]=='--board' and ran[-1][-1].endswith('06_boost.kicad_pcb')
+    tab.fields.setChecked(True);tab.start();assert ran[-1][-1]=='--fields' and '--copper' in ran[-1];tab.fields.setChecked(False);tab.copper.setChecked(True)
     other=tmp_path/'mine.kicad_pcb';other.write_text('(kicad_pcb)');tab.board.setText(str(other));tab.start()
     assert ran[-1][-1]==str(other)
     tab.board.clear();c=tab.values();c.pop('board');tab.set_model(c);n=len(ran);tab.start()
     assert len(ran)==n and 'Import KiCad' in tab.status.text()      # no board to take the copper from: said, not run
-    tab.new_model('wpthb');assert tab.copper.text()=='Include extracted PCB R/L in circuit' and tab.form.isRowVisible(tab.fields)
+    tab.new_model('wpthb');assert tab.copper.text()=='Include extracted PCB R/L in circuit' and tab.fields.text().startswith('Infer periodic')
     tab.close()
 
 
@@ -165,9 +166,11 @@ def test_general_results_show_the_boards_copper(tmp_path):
     parts=dict(V1=dict(type='source',power_W=-12.3),D1=dict(type='diode',power_W=.23,avg_A=.5,rms_A=.73,peak_A=3.8,peak_V=57.),R1=dict(type='load',power_W=11.99,avg_V=24,avg_A=.5))
     copper=dict(loss_W=.0023,board='06_boost.kicad_pcb',fit_error=.03,ports=[dict(name='T0',terminal='C1.in',reference='J1.in',net='in',rms_A=.096)])
     case=dict(name='run',folder=str(tmp_path),period_s=5e-6,sweep={},knobs={},measures={},source_power_W=12.3,load_power_W=11.99,loss_W=.31,efficiency=.975,
-              gate_drive_power_W=0.0,parts=parts,coupled=[],copper=copper,notes=[],periodic_error=2e-4,reltol=1e-4,runs=9,periods=3450,runtime_s=36.)
+              gate_drive_power_W=0.0,parts=parts,coupled=[],copper=copper,notes=[],periodic_error=2e-4,reltol=1e-4,runs=9,periods=3450,runtime_s=36.,
+              fields=dict(heights_mm=[1.,5.],H_ac_rms_max_A_per_m=[29.5,5.14],E_ac_rms_max_V_per_m=[4060.,903.],highest_Hz=3.2e6,picture=None))
     tab.show_result(dict(format=2,name='Boost',complete=True,cases=[case],failed=[]))
     text=tab.summary.toPlainText()
     assert 'board copper (06_boost.kicad_pcb)' in text and '0.0023' in text and 'Board copper' in text
+    assert 'Fields over the board' in text and '4060' in text and '5.14' in text and 'H to 3.2 MHz' in text
     assert text.index('C1')<text.index('J1') and '0.096' in text
     tab.close()

@@ -75,7 +75,7 @@ class PowerCircuitTab(QWidget):
         self.refresh_timer=QTimer(self);self.refresh_timer.setSingleShot(True);self.refresh_timer.setInterval(250);self.refresh_timer.timeout.connect(self.refresh_schematic)
         self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
         for control in [self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.sweep,*self.overrides.values()]:control.editingFinished.connect(self.refresh_schematic)
-        self.bridge_rows=[self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.model,self.fields,*self.overrides.values()]
+        self.bridge_rows=[self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.model,*self.overrides.values()]
         self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
@@ -152,6 +152,7 @@ class PowerCircuitTab(QWidget):
         self.copper.setText("Include the board's copper between the parts' pads" if general else 'Include extracted PCB R/L in circuit')
         self.copper.setToolTip("Each pad a node of its own, joined by what the board has between them: the model's board (board.file), the PCB named above, or the study's board. "
                                'The circuit alone is settled first, then run on its board' if general else '')
+        self.fields.setText('H and E fields over the board, from the run\'s currents and voltages' if general else 'Infer periodic PCB fields from terminal currents')
         self.board.setPlaceholderText("the model's board, else the study's" if general else ("the study's board" if self._panel is not None else ''))
         views=['Probes: voltages','Probes: currents','Capacitor voltages','Inductor currents','Switch and diode voltages','Switch and diode currents'] if general else \
               ['Winding currents','Bridge / coil voltages','Input filter currents','Bus voltages']
@@ -274,7 +275,7 @@ class PowerCircuitTab(QWidget):
         model=self.out/'model-input.json';model.write_text(json.dumps(c,indent=2))
         argv=['-u','-m','pcbqs.circuit' if general else 'pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
         if self.copper.isChecked():argv+=['--copper','--board',board]
-        if not general and self.fields.isChecked():argv+=['--fields']
+        if self.fields.isChecked():argv+=['--fields']
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)
         run_tool(self,[sys.executable,*argv],self.read_log,self.finished,env=dict(OPENBLAS_NUM_THREADS='8'))
@@ -338,6 +339,12 @@ class PowerCircuitTab(QWidget):
             if c.get('copper') and c['copper'].get('ports'):
                 html+='<h4>Board copper</h4><table cellspacing=6><tr><th>Pad</th><th>Net</th><th>to</th><th>RMS A</th></tr>'
                 html+=''.join(f"<tr><td>{p['terminal'].rsplit('.',1)[0]}</td><td>{p['net']}</td><td>{p['reference'].rsplit('.',1)[0]}</td><td>{g(p.get('rms_A'))}</td></tr>" for p in c['copper']['ports'])+'</table>'
+            fields=c.get('fields')
+            if fields:
+                html+='<h4>Fields over the board (AC RMS, the largest on each plane)</h4><table cellspacing=6><tr><th>Height mm</th><th>H A/m</th><th>E V/m</th></tr>'
+                html+=''.join(f"<tr><td>{g(h)}</td><td>{g(a)}</td><td>{g(e)}</td></tr>" for h,a,e in zip(fields['heights_mm'],fields['H_ac_rms_max_A_per_m'],fields['E_ac_rms_max_V_per_m']))+'</table>'
+                html+=f"<p>The copper and its vias only: no part's own field. H to {g(fields['highest_Hz']/1e6)} MHz; E from the nets' voltages.</p>"
+                if fields.get('picture') and Path(fields['picture']).is_file():html+=f"<p><img src='{Path(fields['picture']).as_uri()}' width='760'></p>"
             html+=f"<p>Settled to {100*c.get('periodic_error',0):.2g} % period to period; solver tolerance {g(c.get('reltol'))}; {c.get('periods','–')} periods simulated.</p>"
         self.summary.setHtml(html)
 
