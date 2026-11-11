@@ -37,8 +37,9 @@ ANALYSES = (
                   "dissipation later). No thermal solver yet"),
     Analysis('mqs', 'Near field', 'pcbqs.mqs', page='Near field', preview=True,
              note="a converter's input loop and its magnetic near field"),
-    Analysis('circuit', 'Circuit', 'pcbqs.power_circuit', page='Circuit',
-             note='ngspice operating points of the circuit model, with the copper it extracts when asked'),
+    Analysis('circuit', 'Circuit', 'pcbqs.circuit', page='Circuit',
+             note="ngspice runs of the Circuit page's model: any circuit of parts, nodes and drives, settled, with "
+                  "its targets met; the board's full bridge (the wpthb model) with the copper it extracts when asked"),
 )
 BY_KEY = {a.key: a for a in ANALYSES}
 

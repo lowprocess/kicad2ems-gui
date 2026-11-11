@@ -148,3 +148,79 @@ def test_generated_orientation(tab):
     assert sc.devices['supply'].facing(k)==(1,0)
     pos['supply']=[ox+400,oy];view.save_positions(pos)
     assert sc.devices['supply'].facing(k)==(-1,0)
+
+
+@pytest.fixture
+def qapp():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def general(name):
+    from pcbqs.circuit import model as M
+    from kicad2ems_gui.schematicview import SchematicEditor
+    ed=SchematicEditor();ed.set_model(M.template(name));return ed,M
+
+
+def test_general_model_columns_follow_the_power_path(qapp):
+    """A general model's parts are placed by where they sit between the source and the load, whatever they are
+    called: a part to ground stands up in its net's column, a part between two nets lies between them."""
+    from kicad2ems_gui.schematicview import records
+    ed,M=general('boost')
+    by={r['ref']:r for r in records(ed.config)}
+    assert [by[r]['group'] for r in ('V1','C1','L1','Q1','D1','C2','R1')]==['c00','c01','c02','c03','c04','c05','c06']
+    assert [by[r]['stand'] for r in ('V1','C1','L1','Q1','D1','C2','R1')]==[True,True,False,True,False,True,True]
+    assert [by[r]['kind'] for r in ('V1','L1','Q1','D1','R1')]==['supply','inductor','switch','diode','load']
+    assert by['L1']['label']=='47 µH' and by['R1']['label']=='48 Ω' and by['Q1']['label']=='pwm' and by['V1']['glyph']=='+'
+    m=M.template('boost')                                           # the same circuit under other names: the same columns
+    names={p['ref']:f"X{i}" for i,p in enumerate(m['parts'])};nets={'in':'n1','sw':'n2','out':'n3'}
+    for p in m['parts']:p['ref']=names[p['ref']];p['nodes']=[nets.get(n,n) for n in p['nodes']]
+    m['probes']={};m['measures']={};m['targets']=[]
+    assert [r['group'] for r in records(m)]==[by[r]['group'] for r in names]
+    ed,M=general('flyback')
+    by={r['ref']:r for r in records(ed.config)}
+    assert by['LP']['kind']==by['LS']['kind']=='coil' and by['LP']['coupled']==[('part:LS','k=0.98')]
+    assert by['LS']['group']>by['Q1']['group']>by['LP']['group'] and by['R1']['group']==max(r['group'] for r in by.values())
+    assert len(ed.scene.couplings)==1
+    ed,M=general('bridge_rectifier')
+    assert next(r for r in records(ed.config) if r['ref']=='V1')['glyph']=='~'
+
+
+def test_no_wire_of_any_example_passes_through_a_part(qapp):
+    from PySide6.QtCore import QPointF
+    from pcbqs.circuit import model as M
+    for name in M.templates():
+        ed,_=general(name);sc=ed.scene
+        cards=[it.card().translated(it.pos()) for it in sc.devices.values()]
+        for net,wire,*_ in sc.links:
+            path=wire.path();pts=[QPointF(path.elementAt(k).x,path.elementAt(k).y) for k in range(path.elementCount())]
+            assert len(pts)>=2 and not sc.crosses(pts,cards),(name,net)
+            assert all(abs(u.x()-v.x())<.01 or abs(u.y()-v.y())<.01 for u,v in zip(pts,pts[1:])),(name,net)   # square corners
+
+
+def test_general_model_parts_are_edited_added_and_removed(qapp):
+    ed,M=general('buck')
+    ed.select('part:L1')
+    assert set(ed.fields)=={'value','DCR_ohm','SRF_Hz','Cp_F','core_R_ohm'} and ed.fields['value'].text()=='22u'
+    ed.fields['value'].setText('33u');ed.fields['DCR_ohm'].setText('');ed.ends['b'].setCurrentText('sw')
+    assert not ed.apply_selected() and "both nodes are 'sw'" in ed.note.text()      # said, and not applied
+    ed.ends['b'].setCurrentText('out');assert ed.apply_selected()
+    l1=next(p for p in ed.config['parts'] if p['ref']=='L1')
+    assert l1['value']=='33u' and 'DCR_ohm' not in l1
+    ed.select('part:Q1')
+    assert ed.drive.currentText()=='pwm' and ed.fields['model.Ron_ohm'].text()=='30m'
+    ed.fields['model.Cds_F'].setText('300p');ed.invert.setChecked(True);assert ed.apply_selected()
+    q1=next(p for p in ed.config['parts'] if p['ref']=='Q1')
+    assert q1['model']['Cds_F']=='300p' and q1['invert'] is True and q1['model']['type']=='switch'
+    ed.select('part:R1');ed.fields['resistance_ohm'].setText('vout/(2*iout)');assert ed.apply_selected()
+    assert ed.scene.devices['part:R1'].record['label']=='1.25 Ω'    # the number behind the expression
+    ed.fields['resistance_ohm'].setText('vout/ix');assert not ed.apply_selected() and "unknown name 'ix'" in ed.note.text()
+    n=len(ed.config['parts'])
+    ed.insert_part('capacitor','C9','100n','out','0');ed.insert_part('switch','Q9','0.01','sw','0')
+    assert len(ed.config['parts'])==n+2 and next(p for p in ed.config['parts'] if p['ref']=='Q9')['drive']=='pwm'
+    ed.insert_part('capacitor','C9','1u','out','0');assert 'used twice' in ed.note.text() and len(ed.config['parts'])==n+2
+    ed.select('part:C9');ed.remove_part();ed.undo()
+    assert any(p['ref']=='C9' for p in ed.config['parts'])
+    ed,M=general('flyback');ed.select('part:LS');ed.remove_part()
+    assert ed.config['couplings']==[] and not ed.scene.couplings
+    ed.import_file();assert 'board-terminal model' in ed.note.text()

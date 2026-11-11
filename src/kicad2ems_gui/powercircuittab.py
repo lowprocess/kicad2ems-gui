@@ -1,4 +1,6 @@
-"""Operational circuit models: ngspice transient and optional PCB field inference."""
+"""Circuit models run with ngspice. Two kinds, told apart by the model's "format":
+    2   pcbqs.circuit: any circuit of parts, nodes and drives (the examples to start from are its templates)
+    1   pcbqs.power_circuit: the phase-shifted full bridge on a board's terminals, with its copper and fields"""
 import json,os,subprocess,sys
 import numpy as np
 import pyqtgraph as pg
@@ -7,20 +9,33 @@ from PySide6.QtCore import QTimer
 from .schematicview import SchematicEditor
 from .toolprocess import run_tool
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QPushButton,QComboBox,
-                               QCheckBox,QPlainTextEdit,QTextBrowser,QTabWidget,QFileDialog,QLabel,QSplitter,QScrollArea,QSpinBox)
+                               QCheckBox,QPlainTextEdit,QTextBrowser,QTabWidget,QFileDialog,QLabel,QSplitter,QScrollArea,QSpinBox,
+                               QTableWidget,QTableWidgetItem,QHeaderView)
 from PySide6.QtCore import Qt
+
+
+def _is_number(text):
+    try:float(text);return True
+    except (TypeError,ValueError):return False
 
 
 class PowerCircuitTab(QWidget):
     _panel=None                                                     # the operating settings, once in the Study dock
 
     def __init__(self,win=None):
-        super().__init__();self.win=win;self.proc=None;self.out=None;self._syncing=False
-        root=QVBoxLayout(self);settings=QWidget();form=QFormLayout(settings)
+        super().__init__();self.win=win;self.proc=None;self.out=None;self._syncing=False;self.general=False;self.result=None
+        root=QVBoxLayout(self);settings=QWidget();form=QFormLayout(settings);self.form=form
         self.settings_toggle=QPushButton('Operating settings');self.settings_toggle.setCheckable(True);root.addWidget(self.settings_toggle)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);scroll.setMinimumHeight(180);scroll.setMaximumHeight(310);root.addWidget(scroll);scroll.hide();self.settings_toggle.toggled.connect(scroll.setVisible);self._settings_scroll=scroll
         self.board=QLineEdit();self.outdir=QLineEdit();self.frequencies=QLineEdit('90000,110000');self.powers=QLineEdit('5,10,20,30');self.coupling=QLineEdit('0.4')
         for label,w in [('PCB (optional)',self.board),('Output folder',self.outdir),('Frequencies (Hz)',self.frequencies),('Receiver powers (W)',self.powers),('Coupling k',self.coupling)]:form.addRow(label,w)
+        # the general model's settings: its parameters, and what it sweeps
+        self.params=QTableWidget(0,2);self.params.setHorizontalHeaderLabels(['Parameter','Value']);self.params.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.params.verticalHeader().hide();self.params.setMaximumHeight(170);self.params.setToolTip("The model's parameters: its values may be expressions of them (vout/iout). A number, SI notation (22u) or an expression of the others")
+        self.params.itemChanged.connect(lambda *_:self.refresh_timer.start() if not self._syncing else None)
+        self.sweep=QLineEdit();self.sweep.setPlaceholderText('e.g.  parameters.vin: 9, 12, 15;  R1.resistance_ohm: 24, 48')
+        self.sweep.setToolTip('What to sweep: a path of the model and its values; several, separated by semicolons, run in every combination')
+        form.addRow('Parameters',self.params);form.addRow('Sweep',self.sweep)
         self.receiver_C=QLineEdit();self.receiver_C.setPlaceholderText('Blank: tune at each frequency')
         self.load_R=QLineEdit();self.load_R.setPlaceholderText('Blank: efficiency match at each frequency')
         form.addRow('Fixed receiver C (nF)',self.receiver_C);form.addRow('Fixed receiver load (Ω)',self.load_R)
@@ -59,20 +74,41 @@ class PowerCircuitTab(QWidget):
         self.schematic.modelChanged.connect(self.schematic_changed);self.schematic.statusChanged.connect(self.status.setText)
         self.refresh_timer=QTimer(self);self.refresh_timer.setSingleShot(True);self.refresh_timer.setInterval(250);self.refresh_timer.timeout.connect(self.refresh_schematic)
         self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
-        for control in [self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,*self.overrides.values()]:control.editingFinished.connect(self.refresh_schematic)
+        for control in [self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.sweep,*self.overrides.values()]:control.editingFinished.connect(self.refresh_schematic)
+        self.bridge_rows=[self.board,self.frequencies,self.powers,self.coupling,self.receiver_C,self.load_R,self.model,self.copper,self.fields,*self.overrides.values()]
         self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
-        self.start_from=QComboBox();self.start_from.addItem('New: simple full bridge','simple');self.start_from.addItem('New: wpthb (board terminals)','wpthb')
-        self.start_from.setToolTip('Replace the model with one to start from: a bare full bridge with its tank and receiver, or the wpthb board\'s, whose terminals are its pads')
+        self.start_from=QComboBox()
+        for name,text in self.templates().items():
+            self.start_from.addItem('New: '+name.replace('_',' '),name);self.start_from.setItemData(self.start_from.count()-1,text,Qt.ToolTipRole)
+        self.start_from.addItem('New: wpthb (board terminals)','wpthb')
+        self.start_from.setItemData(self.start_from.count()-1,"The wpthb board's full bridge, on its pads, with its copper and fields (the older model format)",Qt.ToolTipRole)
+        self.start_from.setToolTip('Replace the model with one to start from: an example circuit, or the wpthb board\'s bridge')
         self.start_from.activated.connect(lambda i:self.new_model(self.start_from.itemData(i)))
         self.top_row.insertWidget(0,self.start_from)
-        try:self.set_model(self.template('simple'))                  # a small circuit to open on, not a board's
+        try:
+            self.set_model(self.template('simple'))                  # a small circuit to open on, not a board's
+            self.start_from.setCurrentIndex(max(self.start_from.findData('boost'),0))
         except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False);self.schematic.setEnabled(False)
 
     @staticmethod
-    def template(name):
-        """pcbqs's model to start from; a pcbqs without named templates gives its only one (wpthb's)."""
+    def templates():
+        """pcbqs's example circuits: {name: what it is}; none from a pcbqs without pcbqs.circuit."""
+        try:
+            from pcbqs.circuit import model
+            return dict(model.templates())
+        except (ImportError,OSError,ValueError):return {}
+
+    @classmethod
+    def template(cls,name):
+        """A model to start from: one of pcbqs.circuit's examples ('simple' is its boost converter), or the
+        full-bridge tool's (wpthb; a pcbqs without named templates gives its only one)."""
+        names=cls.templates()
+        if name=='simple' and 'boost' in names:name='boost'
+        if name in names:
+            from pcbqs.circuit import model
+            return model.template(name)
         run=lambda *a:subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template',*a],capture_output=True,text=True,timeout=30)
         p=run(name)
         if p.returncode and 'argument --template' not in p.stderr and 'unrecognized' not in p.stderr:p.check_returncode()
@@ -106,10 +142,56 @@ class PowerCircuitTab(QWidget):
         load=f'fixed {c["load_ohm"]:g} Ω' if c.get('load_ohm') is not None else 'efficiency matched per frequency'
         return f'Primary C: {c["primary_C_F"]*1e9:g} nF. Receiver C: {cap}; load: {load}. Phase targets load power.'
 
-    def set_model(self,c,diagram=True):
+    def show_kind(self,general):
+        """The settings and views of the model's kind: the general model's parameters and sweep, or the bridge's
+        operating points, overrides, copper and fields."""
+        self.general=general
+        for w in self.bridge_rows:self.form.setRowVisible(w,not general)
+        for w in (self.params,self.sweep):self.form.setRowVisible(w,general)
+        self.steps_box.setVisible(not general);self.open_btn.setVisible(not general)
+        views=['Probes: voltages','Probes: currents','Capacitor voltages','Inductor currents','Switch and diode voltages','Switch and diode currents'] if general else \
+              ['Winding currents','Bridge / coil voltages','Input filter currents','Bus voltages']
+        if [self.signal_view.itemText(i) for i in range(self.signal_view.count())]!=views:
+            self.signal_view.blockSignals(True);self.signal_view.clear();self.signal_view.addItems(views);self.signal_view.blockSignals(False)
+
+    @staticmethod
+    def sweep_text(sweep):
+        return ';  '.join(f"{path}: "+', '.join(f'{v:g}' if isinstance(v,(int,float)) else str(v) for v in values) for path,values in sweep.items())
+
+    @staticmethod
+    def sweep_of(text):
+        """'parameters.vin: 9, 12; R1.resistance_ohm: 24, 48' as the model's sweep."""
+        out={}
+        for item in filter(str.strip,text.split(';')):
+            path,sep,values=item.partition(':')
+            if not sep or not path.strip() or not values.strip():raise ValueError('Sweep: write  path: value, value, …  (several separated by ;)')
+            out[path.strip()]=[float(v) if _is_number(v) else v.strip() for v in values.split(',') if v.strip()]
+        return out
+
+    def set_general(self,c,diagram=True):
+        """A model of the general kind (format 2) into the page."""
         self._syncing=True
         try:
             if diagram:self.schematic.set_model(c)
+            self.show_kind(True)
+            self.params.setRowCount(0)
+            for name,value in c.get('parameters',{}).items():
+                row=self.params.rowCount();self.params.insertRow(row);key=QTableWidgetItem(name);key.setFlags(key.flags()&~Qt.ItemIsEditable)
+                self.params.setItem(row,0,key);self.params.setItem(row,1,QTableWidgetItem(f'{value:g}' if isinstance(value,(int,float)) else str(value)))
+            self.sweep.setText(self.sweep_text(c.get('sweep',{})))
+            targets=';  '.join(f"{t['adjust']} is adjusted until {t['measure']} = {t['value']}" for t in c.get('targets',[]))
+            self.matching_note.setText((c.get('description') or '')+('  —  '+targets if targets else ''))
+            self.settings_toggle.setText('Operating settings — '+(c.get('name') or 'circuit'))
+            self.editor.setPlainText(json.dumps(c,indent=2))
+        finally:self._syncing=False
+        if diagram:QTimer.singleShot(0,self.schematic.fit)
+
+    def set_model(self,c,diagram=True):
+        if c.get('format')==2:return self.set_general(c,diagram)
+        self._syncing=True
+        try:
+            if diagram:self.schematic.set_model(c)
+            self.show_kind(False)
             self.receiver_C.setText(str(c['secondary_C_F']*1e9) if c.get('secondary_C_F') is not None else '')
             self.load_R.setText(str(c['load_ohm']) if c.get('load_ohm') is not None else '')
             self.matching_note.setText(self.matching_text(c))
@@ -128,7 +210,16 @@ class PowerCircuitTab(QWidget):
         except (ValueError,KeyError,TypeError,ImportError) as exc:self.status.setText('Model needs attention: '+str(exc))
 
     def values(self):
-        c=json.loads(self.editor.toPlainText());c['frequencies_Hz']=[float(x) for x in self.frequencies.text().split(',')];c['powers_W']=[float(x) for x in self.powers.text().split(',')];c['coupling']=float(self.coupling.text());c.setdefault('switch_model',{})['type']=self.model.currentText()
+        c=json.loads(self.editor.toPlainText())
+        if c.get('format')==2:                                      # the general model: its parameters and its sweep
+            for row in range(self.params.rowCount()):
+                name,text=self.params.item(row,0).text(),self.params.item(row,1).text().strip()
+                if name in c.get('parameters',{}) and text:c['parameters'][name]=float(text) if _is_number(text) else text
+            sweep=self.sweep_of(self.sweep.text())
+            if sweep:c['sweep']=sweep
+            else:c.pop('sweep',None)
+            return c
+        c['frequencies_Hz']=[float(x) for x in self.frequencies.text().split(',')];c['powers_W']=[float(x) for x in self.powers.text().split(',')];c['coupling']=float(self.coupling.text());c.setdefault('switch_model',{})['type']=self.model.currentText()
         for key,w,scale in [('secondary_C_F',self.receiver_C,1e-9),('load_ohm',self.load_R,1.)]:
             if w.text().strip():c[key]=float(w.text())*scale
             else:c.pop(key,None)
@@ -150,6 +241,8 @@ class PowerCircuitTab(QWidget):
         if p:
             try:
                 c=json.loads(Path(p).read_text())
+                for part in c.get('parts',[]) if c.get('format')==2 else []:
+                    if part.get('model',{}).get('library'):part['model']['library']=str((Path(p).parent/part['model']['library']).resolve())
                 for model in [c.get('switch_model',{}),*[s.get('model',{}) for s in c.get('switches',[])]]:
                     if model.get('library'):model['library']=str((Path(p).parent/model['library']).resolve())
                 self.set_model(c)
@@ -169,14 +262,15 @@ class PowerCircuitTab(QWidget):
         if self.proc:return
         try:c=self.values()
         except (ValueError,KeyError) as e:self.status.setText(str(e));return
-        self.matching_note.setText(self.matching_text(c))
+        general=c.get('format')==2
+        if not general:self.matching_note.setText(self.matching_text(c))
         board=self.board_path()
-        if self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction');return
-        self.out=Path(self.outdir.text().strip() or 'power-circuit').expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
+        if not general and self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction');return
+        self.out=Path(self.outdir.text().strip() or ('circuit' if general else 'power-circuit')).expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
         model=self.out/'model-input.json';model.write_text(json.dumps(c,indent=2))
-        argv=['-u','-m','pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
-        if self.copper.isChecked():argv+=['--copper','--board',board]
-        if self.fields.isChecked():argv+=['--fields']
+        argv=['-u','-m','pcbqs.circuit' if general else 'pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
+        if not general and self.copper.isChecked():argv+=['--copper','--board',board]
+        if not general and self.fields.isChecked():argv+=['--fields']
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)
         run_tool(self,[sys.executable,*argv],self.read_log,self.finished,env=dict(OPENBLAS_NUM_THREADS='8'))
@@ -196,11 +290,68 @@ class PowerCircuitTab(QWidget):
     def finished(self,code,*_):
         if self.proc:self.read_log();self.proc.deleteLater();self.proc=None
         self.run_btn.setEnabled(True);self.stop_btn.setEnabled(False)
-        path=self.out/'power-circuit.json'
-        if code or not path.exists():self.status.setText('Circuit run failed; see Log');return
-        self.show_result(json.loads(path.read_text()))
+        path=next((self.out/n for n in ('circuit.json','power-circuit.json') if (self.out/n).exists()),None)
+        if path is None or (code and path.name!='circuit.json'):self.status.setText('Circuit run failed; see Log');return
+        self.show_result(json.loads(path.read_text()))             # a general run's failed points are in its results
+
+    def show_general(self,res):
+        """A general run's results: a row a point (its knobs, powers, efficiency and measures), then each part's
+        share of the selected point's loss, its stress, and whatever the point should be read with."""
+        self.editor_only.setChecked(False);self.show_kind(True)
+        self.result=res;self.case.blockSignals(True);self.case.clear()
+        for c in res['cases']:self.case.addItem(c['name'],c['folder'])
+        self.case.blockSignals(False)
+        self.show_point();self.show_waveform()
+        failed=len(res.get('failed',[]))
+        self.status.setText(('Completed' if res.get('complete') else 'Partial results')+(f': {failed} point{"s" if failed!=1 else ""} failed' if failed else ''))
+        self.tabs.setCurrentWidget(self.summary)
+
+    def show_point(self,*_):
+        res=self.result
+        if not res or res.get('format')!=2:return
+        g=lambda v,fmt='.4g':format(v,fmt) if isinstance(v,(int,float)) else '–'
+        cases=res['cases'];knobs=sorted({k for c in cases for k in c.get('knobs',{})});measures=sorted({k for c in cases for k in c.get('measures',{})})
+        head=''.join(f'<th nowrap>{h}</th>' for h in ['Point',*[k.split('.',1)[-1] for k in knobs],'In W','Out W','Loss W','Efficiency %',*measures,'Runs','s'])
+        rows=''.join('<tr>'+''.join(f'<td nowrap>{x}</td>' for x in [c['name'],*[g(c['knobs'].get(k)) for k in knobs],g(c['source_power_W']),g(c['load_power_W']),g(c['loss_W']),
+                     g(100*c['efficiency'],'.2f') if c.get('efficiency') else '–',*[g(c['measures'].get(m)) for m in measures],c.get('runs','–'),g(c.get('runtime_s'),'.0f')])+'</tr>' for c in cases)
+        html=f"<h3>{res.get('name') or 'Circuit'}</h3><table cellspacing=8><tr>{head}</tr>{rows}</table>"
+        for f in res.get('failed',[]):html+=f"<p><b>{f['name']}: failed.</b> {f['error']}</p>"
+        c=next((c for c in cases if c['folder']==self.case.currentData()),cases[0] if cases else None)
+        if c:
+            together={r for grp in c.get('coupled',[]) for r in grp['inductors']}
+            loss=[(r,p['power_W']) for r,p in c['parts'].items() if p['type'] not in ('source','load') and r not in together]
+            loss+=[(' + '.join(grp['inductors']),grp['power_W']) for grp in c.get('coupled',[])]
+            if c.get('gate_drive_power_W'):loss.append(('gate drives',-c['gate_drive_power_W']))
+            total=max(c['loss_W'],1e-30)
+            html+=f"<h4>{c['name']}: where the {g(c['loss_W'])} W goes</h4><table cellspacing=6><tr><th>Part</th><th>W</th><th>%</th></tr>"
+            html+=''.join(f"<tr><td>{r}</td><td>{g(w)}</td><td>{100*w/total:.1f}</td></tr>" for r,w in sorted(loss,key=lambda x:-x[1]) if abs(w)>1e-4*total)+'</table>'
+            stress=[(r,p) for r,p in c['parts'].items() if p['type'] in ('switch','diode','capacitor','inductor')]
+            html+='<h4>Stress</h4><table cellspacing=6><tr><th>Part</th><th>avg A</th><th>RMS A</th><th>peak A</th><th>peak V</th><th>avg V</th><th>ripple</th></tr>'
+            html+=''.join(f"<tr><td>{r}</td><td>{g(p.get('avg_A'))}</td><td>{g(p.get('rms_A'))}</td><td>{g(p.get('peak_A'))}</td><td>{g(p.get('peak_V'))}</td><td>{g(p.get('avg_V'))}</td>"
+                          f"<td>{g(p['ripple_V'])+' V' if 'ripple_V' in p else g(p['ripple_A'])+' A' if 'ripple_A' in p else '–'}</td></tr>" for r,p in stress)+'</table>'
+            for note in c.get('notes',[]):html+=f'<p><b>Note.</b> {note}</p>'
+            html+=f"<p>Settled to {100*c.get('periodic_error',0):.2g} % period to period; solver tolerance {g(c.get('reltol'))}; {c.get('periods','–')} periods simulated.</p>"
+        self.summary.setHtml(html)
+
+    def general_waveform(self,folder):
+        r=next(r for r in self.result['cases'] if r['folder']==folder)
+        with np.load(Path(folder)/'transient.npz') as data:v={k:data[k] for k in data.files}
+        try:model=json.loads((Path(folder)/'model.json').read_text())
+        except (OSError,ValueError):model={}
+        probes=model.get('probes',{});kinds={p['ref']:p['type'] for p in model.get('parts',[])}
+        of=lambda types,suffix:[ref+suffix for ref,k in kinds.items() if k in types]
+        keys,unit=[([n for n,p in probes.items() if 'voltage' in p],'V'),([n for n,p in probes.items() if 'current' in p],'A'),(of(('capacitor',),'.V'),'V'),
+                   (of(('inductor',),'.I'),'A'),(of(('switch','diode'),'.V'),'V'),(of(('switch','diode'),'.I'),'A')][max(self.signal_view.currentIndex(),0)]
+        T=r['period_s'];t=v['time_s'];take=t>=t[-1]-2*T;scale,name=(1e3,'ms') if T>=1e-3 else (1e6,'µs');self.waveform.clear()
+        present=[k for k in keys if k in v]
+        if not present:self.status.setText('This point has no '+self.signal_view.currentText().lower()+(': add probes to the model' if 'Probes' in self.signal_view.currentText() else ''))
+        pens=['#e9783c','#409ad6','#6eb671','#b0306a','#7b3fa0','#6b6100','#333333','#00876a']
+        for i,key in enumerate(present):self.waveform.plot((t[take]-(t[-1]-2*T))*scale,v[key][take],pen=pg.mkPen(pens[i%len(pens)],width=1.5),name=key)
+        self.waveform.setLabel('bottom',f'Time in the final two periods ({name})');self.waveform.setLabel('left',unit)
 
     def show_result(self,res):
+        if res.get('format')==2:return self.show_general(res)
+        self.show_kind(False)
         self.editor_only.setChecked(False)
         self.result=res;self.case.clear();rows=[]
         for c in res['cases']:
@@ -215,6 +366,7 @@ class PowerCircuitTab(QWidget):
         folder=self.case.currentData() if hasattr(self,'case') else None
         if not folder:return
         try:
+            if self.result.get('format')==2:self.show_point();return self.general_waveform(folder)
             r=next(r for r in self.result['cases'] if r['folder']==folder)
             with np.load(Path(folder)/'transient.npz') as data:v={k:data[k] for k in data.files}
             steps=self.steps_box.isChecked() and 'steps.time_s' in v
