@@ -7,8 +7,6 @@ import pytest
 
 pytest.importorskip('PySide6')
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-EXAMPLES = os.path.join(os.environ.get('KICAD2EMS_SRC') or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), 'kicad2ems'), 'examples')
 
 
 def settle(app, dlg, seconds=30):
@@ -74,9 +72,9 @@ def test_a_fit_puts_its_size_in_the_box(dialog):
     assert 'gives Zdiff 400 Ω' in dlg.out.text() and dlg.result is None and dlg.gap.value() == gap and dlg.text() == ''
 
 
-def test_the_open_board_s_layers_are_stacks(dialog):
+def test_the_open_board_s_layers_are_stacks(dialog, boards):
     dlg, app = dialog
-    dlg.set_board(os.path.join(EXAMPLES, 'demo_transition.kicad_pcb'))
+    dlg.set_board(boards['demo'] + '.kicad_pcb')                # the demo transition: four copper layers
     assert [dlg.stack.itemData(i) for i in range(dlg.stack.count())] == [None, 'F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
     dlg.stack.setCurrentIndex(dlg.stack.findData('In1.Cu'))
     settle(app, dlg)
