@@ -119,7 +119,10 @@ def test_an_opengl_start_that_fails_stays_in_the_view(monkeypatch):
     app = QApplication.instance() or QApplication([])
     mixin = sys.modules[gl.GLViewWidget.__module__].GLViewMixin
 
+    called = []
+
     def no_gl(self):
+        called.append(self)
         raise RuntimeError('pyqtgraph.opengl: Requires >= OpenGL 2.1')
     monkeypatch.setattr(mixin, 'initializeGL', no_gl)
     held = {k: sys.getrefcount(mixin.__dict__[k]) for k in ('paintGL', 'paint')}
@@ -130,6 +133,9 @@ def test_an_opengl_start_that_fails_stays_in_the_view(monkeypatch):
         app.processEvents()
         w.view.repaint()
         app.processEvents()
+        if not called:                                              # no context to start: Qt never calls it here
+            w.close()                                               # (a CI machine without a GL driver)
+            pytest.skip('Qt made no OpenGL context here: initializeGL is never called')
         assert w.view.gl_error.startswith('RuntimeError') and 'could not start OpenGL' in w.status.text()
         w.close()
         del w

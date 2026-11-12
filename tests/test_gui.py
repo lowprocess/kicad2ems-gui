@@ -936,7 +936,9 @@ def test_the_window_is_docks(monkeypatch, tmp_path):
     if w.filter.desc is not None:
         assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
     # moved about and closed: so the next window opens
-    w.work.tabifyDockWidget(w.docks['Viewer'], w.docks['Results'])  # the results beside the board, not under it
+    w.work.removeDockWidget(w.docks['Results'])                     # the results beside the board, not under it
+    w.docks['Results'].show()                                       # (as a drag does: out of its group first)
+    w.work.tabifyDockWidget(w.docks['Viewer'], w.docks['Results'])
     w.addDockWidget(Qt.RightDockWidgetArea, w.settings_dock)        # the settings on the right
     w.fold_acts['Questions'].trigger()                              # the study closed
     app.processEvents()

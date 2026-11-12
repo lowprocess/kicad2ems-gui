@@ -1808,7 +1808,8 @@ class MainWindow(QMainWindow):
                 d = self.docks[name]                                # on a dock of a window not yet laid out leaves
                 if d.isFloating():                                  # a second tab bar behind, drawn over the page)
                     d.setFloating(False)
-                if d.isHidden():
+                self.work.removeDockWidget(d)                       # (Qt 6.12 tabs a dock with another only when
+                if d.isHidden():                                    # it is in no tab group of its own)
                     d.show()
             first = self.docks[group[0]]
             self.work.addDockWidget(area, first)
