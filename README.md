@@ -54,8 +54,12 @@ the installed analyses ship: Circuits). A circuit to start from is an example li
 with its board, its model on the Circuit page and the circuit ticked.
 
 Filter Synthesis opens from the toolbar's Filter (it is closed when the window opens). The **Circuit** page, the
-one analysis with an editor of its own (its model as a schematic), is there while Circuit is ticked; its model is
-a file the config names, saved back beside the config with the study.
+one analysis with an editor of its own, is there while Circuit is asked. It is the model's editor only (its
+schematic, its JSON): the model is a file the config names, saved back beside the config with the study. The
+circuit's settings are a panel in the Study dock like any analysis's, made from the plugin's options (the two
+tools' own tables, the options of the other kind of model hidden), with a *Model* section for a general model's
+parameters and sweep; the full bridge's operating points show the model's values, and what is typed there goes
+into the model. Its results are on the Results page and its log on the Run page, as every analysis's.
 
 ## Install
 
@@ -86,7 +90,7 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 | `fieldtab.py`, `antennatab.py`, `steering.py` | field maps, antenna results, beam steering |
 | `filtertab.py` | the Filter page (dfsynth) |
 | `impedance.py` | Tools > Impedance calculator: a stack-up's Z0 and the width of a target (kicad2ems's `lines.calc`) |
-| `powercircuittab.py`, `schematicview.py` | the Circuit page: the circuit analysis's model as a schematic to edit, its run |
+| `powercircuittab.py`, `schematicview.py` | the Circuit page: the circuit analysis's model as a schematic to edit; its settings panel (the plugin's options, and the model's own values) |
 | `toolprocess.py` | a tool as a child process (an analysis's command, dfsynth) |
 | `systempanel.py`, `statusbar.py`, `meters.py` | what this machine can run, memory, estimates |
 | `panels.py` | a collapsible section, an image panel, a row of controls that wraps |
@@ -113,16 +117,18 @@ marks simulated copper, grey the layout context and gold selected components.
 The **Use board and rail in Power Integrity** action transfers the board/net
 context while leaving DC source, voltage and loads for review.
 
-The **Circuit** page runs ngspice operational circuits through
-`python -m pcbqs.power_circuit`. It accepts an editable component model with
+The **Circuit** analysis runs ngspice circuits through `python -m pcbqs.circuit`
+(any circuit of parts, nodes and drives) or `python -m pcbqs.power_circuit` (the
+full bridge with a coupled receiver), by the model's kind. The bridge's model has
 switch/NMOS/VDMOS/vendor-subcircuit choices, capacitor ESR/ESL, inductor DCR,
-input filter and coupled receiver. Select frequency/load-power sweeps and k,
-optionally include a passive broadband PCB equivalent and infer periodic
-copper fields. Top controls override corresponding JSON values. Individual
-case fields open in the existing time-domain Viewer. The supplied parasitics
-and receiver are assumptions; see pcbqs `docs/power-circuit.md` for scope and
-validation, including the distinction between electrical startup and periodic
-field inference. ngspice must be installed separately.
+an input filter and the receiver; its settings give the frequency and load-power
+sweeps, k, and overrides for a group of parts at once (the tank, each rail's
+capacitors, the filter), and a run can include the board's copper and infer the
+periodic copper fields, which open in the Viewer from a point's folder. The
+supplied parasitics and receiver are assumptions; see pcbqs
+`docs/power-circuit.md` for scope and validation, including the distinction
+between electrical startup and periodic field inference. ngspice must be
+installed separately.
 
 **Parallel circuit cases** runs independent operating points concurrently
 (default four, capped by available CPUs). Extraction/field transfers are prepared
@@ -132,7 +138,7 @@ case records runtime and per-trial solver statistics for profiling.
 The Circuit page now includes a **Schematic** editor beside **Model JSON**.
 Select symbols to edit component models/parasitics/connections, add/remove
 passives, undo/redo and save diagram positions. Search references or highlight
-nets; expand Operating settings for the sweep controls. The optional pcbqs
+nets; the sweep controls are with the circuit's settings in the Study dock. The optional pcbqs
 backend owns KiCad import: `.kicad_sch` uses `kicad-cli`, or import a KiCad XML
 netlist directly. Review existing/source values and selected parts before
 applying changes. The original sheets can be viewed read-only with Qt SVG

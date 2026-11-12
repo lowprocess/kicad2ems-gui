@@ -92,7 +92,7 @@ def test_study_dock(window):
     assert st.panels['pdn'] is pdn and isinstance(pdn, AnalysisPanel) and pdn.isAncestorOf(pdn.w['rail'])
     assert pdn.run_btn.isHidden() and mqs.run_btn.isHidden() and w.pages['circuit'].run_btn.isHidden()
     assert not mqs.find_btn.isHidden()                               # it fills the form: it stays
-    assert st.panels['circuit'].isAncestorOf(w.pages['circuit'].frequencies)
+    assert st.panels['circuit'] is w.pages['circuit'].panel and st.panels['circuit'].isAncestorOf(w.pages['circuit'].params)
     assert pdn.board.placeholderText() == "the study's board"
     assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']    # no page per analysis: the
     tree.rows['dc'].setCheckState(0, Qt.Checked)                                 # circuit's editor alone

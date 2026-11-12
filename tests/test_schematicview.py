@@ -8,7 +8,8 @@ from kicad2ems_gui.schematicview import ImportReview,KiCadJob
 
 @pytest.fixture
 def tab():
-    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab();widget.new_model('wpthb');yield widget;widget.close();app.processEvents()
+    A=pytest.importorskip('pcbqs.analyses',reason='pcbqs is not installed')     # its own plugin: the bridge's options
+    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab(plugin=A.Circuit());widget.new_model('wpthb');yield widget;widget.close();app.processEvents()
 
 
 def test_component_edit_and_undo_redo_reach_json_and_run_values(tab):
@@ -42,10 +43,11 @@ def test_invalid_json_is_not_overwritten_by_diagram_edit(tab):
 def test_layout_round_trip_top_overrides_and_noop_precision(tab):
     original=tab.values();tab.schematic.select('primary');assert tab.schematic.apply_selected()
     assert tab.values()['primary']==original['primary']
-    tab.overrides['cap_ESR'].setText('20');tab.refresh_schematic()
+    tab.panel.w['override'].setPlainText('tank.ESR_ohm=0.02');tab.refresh_schematic()
     tab.schematic.save_positions({'part:C25':[123.5,456]})
     c=tab.values();assert c['schematic']['positions']['part:C25']==[123.5,456]
-    assert all(p['ESR_ohm']==.02 for p in c['components'] if p['type']=='capacitor')
+    assert next(p for p in c['components'] if p['ref']=='C25')['ESR_ohm']!=.02     # an override is the run's: the
+    assert tab.panel.values()['override']=='tank.ESR_ohm=0.02'                      # model keeps each part's own
     tab.set_model(json.loads(json.dumps(c)));assert tab.schematic.scene.devices['part:C25'].pos().x()==123.5
 
 

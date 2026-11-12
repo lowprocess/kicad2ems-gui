@@ -1430,6 +1430,8 @@ class MainWindow(QMainWindow):
                 continue
             if a.page and a.key in EDITORS.values():
                 self.editors[a.key] = editor_page(a.key, self)
+                if hasattr(self.editors[a.key], 'panel'):           # its settings: a config holds them too
+                    self.editors[a.key].panel.changed.connect(lambda: self.setup.touch())
             else:
                 self.panels[a.key] = AnalysisPanel(plugin, self)
                 self.panels[a.key].changed.connect(lambda: self.setup.touch())     # a config holds its settings
@@ -1604,8 +1606,8 @@ class MainWindow(QMainWindow):
             if self._queue_preview:                                 # a mesh preview: the mesh, in the plan
                 self.viewer.set_view('Plan')
                 self.show_panel('Viewer')
-            else:                                                   # its editor, else its report
-                self.show_panel(BY_KEY[key].page if key in self.editors else 'Results')
+            else:                                                   # its report
+                self.show_panel('Results')                          # (an editor's page is its model: not its result)
 
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):

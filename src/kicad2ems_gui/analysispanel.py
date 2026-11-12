@@ -19,7 +19,9 @@ import re
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
-                               QPlainTextEdit, QCheckBox, QFileDialog, QProgressBar, QLabel, QInputDialog)
+                               QPlainTextEdit, QCheckBox, QComboBox, QFileDialog, QProgressBar, QLabel, QInputDialog)
+
+UNSET = '(default)'                         # a choice left to the tool's default
 
 from .panels import Section, FlowLayout
 from .toolprocess import run_tool
@@ -76,8 +78,9 @@ class AnalysisPanel(QWidget):
         self.proc, self.out, self.result, self._preview, self._found, self._setting = None, None, None, False, None, 0
         self.required = set()                               # options a run needs set (proposed without a value)
         self.options = list(analysis.options())
-        self.w, self.sections = {}, {}
+        self.w, self.sections, self.forms = {}, {}, {}      # an option's field; a group's section, and its form
         v = QVBoxLayout(self)
+        self._layout = v
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(2)
         files = QWidget()
@@ -118,15 +121,22 @@ class AnalysisPanel(QWidget):
                     wid = QPlainTextEdit()
                     wid.setPlaceholderText('one a line')
                     wid.setFixedHeight(70)
+                elif o.get('choices'):                              # one of a few: a drop-down, the default first
+                    wid = QComboBox()
+                    wid.addItems([UNSET if o['default'] in ('', None) else f"{o['default']} (default)",
+                                  *[str(c) for c in o['choices'] if c != o['default']]])
                 else:
                     wid = QLineEdit()
                     wid.setPlaceholderText(str(o['default']) if o['default'] not in ('', None) else '')
                 wid.setToolTip(f"{o['flag']}: {o['help']}")
-                (wid.toggled if o['kind'] == 'bool' else wid.textChanged).connect(self._edited)
+                (wid.toggled if o['kind'] == 'bool' else wid.currentIndexChanged if isinstance(wid, QComboBox)
+                 else wid.textChanged).connect(self._edited)
                 self.w[o['key']] = wid
                 fl.addRow(o['key'].replace('_', ' ').capitalize() if o['kind'] != 'bool' else '', wid)
+            self.forms[g] = fl
             self.sections[g] = Section(g, inner, i == 0)            # the first group open: what a run is of
             v.addWidget(self.sections[g])
+        self._after_sections = v.count()                            # where a page's own section goes (add_section)
         self.buttons = FlowLayout()
         self.find_btn = None
         if getattr(analysis, 'finds', ''):                          # the board proposes settings
@@ -174,6 +184,16 @@ class AnalysisPanel(QWidget):
         if p:
             self.board.setText(p)
 
+    def add_section(self, title, widget, form=None, expanded=False):
+        """A section of the page's own under the options' (the circuit's model values): its widget, and the form
+        its rows are in."""
+        self.sections[title] = Section(title, widget, expanded)
+        if form is not None:
+            self.forms[title] = form
+        self._layout.insertWidget(self._after_sections, self.sections[title])
+        self._after_sections += 1
+        return self.sections[title]
+
     def values(self):
         out = {}
         for k, wid in self.w.items():
@@ -181,6 +201,8 @@ class AnalysisPanel(QWidget):
                 out[k] = wid.isChecked()
             elif isinstance(wid, QPlainTextEdit):
                 out[k] = wid.toPlainText()
+            elif isinstance(wid, QComboBox):
+                out[k] = '' if wid.currentIndex() <= 0 else wid.currentText()
             else:
                 out[k] = wid.text()
         return out
@@ -197,6 +219,8 @@ class AnalysisPanel(QWidget):
                     wid.setChecked(v is True or str(v).strip().lower() in ('1', 'true', 'yes', 'on'))
                 elif isinstance(wid, QPlainTextEdit):
                     wid.setPlainText('\n'.join(map(str, v)) if isinstance(v, (list, tuple)) else ('' if v is None else str(v)))
+                elif isinstance(wid, QComboBox):
+                    wid.setCurrentIndex(max(wid.findText(str(v)), 0) if v not in (None, '') else 0)
                 else:
                     wid.setText('' if v is None else (f"{v:g}" if isinstance(v, float) else str(v)))
         finally:

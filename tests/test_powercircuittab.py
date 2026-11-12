@@ -1,210 +1,139 @@
+"""The Circuit page: the model's editor, with its settings a panel made from the circuit plugin's options (the two
+tools' own tables: the options of the other kind of model hidden), the model's own values under them, and a run
+that is the plugin's command on the model as edited. pcbqs's own plugin: skipped without pcbqs."""
 import json
 import pytest
-from kicad2ems_gui.powercircuittab import PowerCircuitTab
+from kicad2ems_gui.powercircuittab import PowerCircuitTab, SWITCH_NOTE
+
+A=pytest.importorskip('pcbqs.analyses',reason='pcbqs is not installed')
 
 
-def test_component_and_operating_overrides():
+@pytest.fixture
+def tab():
     from PySide6.QtWidgets import QApplication
     app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();tab.new_model('wpthb');tab.frequencies.setText('90000,110000');tab.powers.setText('5,30');tab.coupling.setText('.4');tab.model.setCurrentText('vdmos')
+    t=PowerCircuitTab(plugin=A.Circuit())
+    yield t
+    t.close();app.processEvents()
+
+
+def test_the_page_is_the_model_s_editor(tab):
+    """No result tabs, no log, no case chooser of its own: the schematic and the model's JSON; its settings and
+    its Run are the panel's (beside the model when the page is alone)."""
+    assert [tab.model_tabs.tabText(i) for i in range(tab.model_tabs.count())]==['Schematic','Model JSON']
+    for gone in ('tabs','summary','waveform','signal_view','case','editor_only','steps_box','open_btn'):
+        assert not hasattr(tab,gone),gone
+    assert tab.settings_panel() is tab.panel and tab.panel.isAncestorOf(tab.params) and tab.status is tab.panel.status
+    assert tab.log is tab.panel.log and tab.proc is None and tab.out is None
+    assert 'Model' in tab.panel.sections and tab.panel.sections['Model'].expanded
+
+
+def test_the_bridge_s_operating_points_are_the_model_s(tab):
+    """The full bridge: its tool's options, their fields showing the model's values; what is typed goes into the
+    model. The switch model is the model's own, and the behavioural one is warned of. Overrides by group are the
+    run's, not the model's."""
+    tab.new_model('wpthb')
+    assert not tab.general and tab.shown()==['copper','fields','field_harmonics','frequencies','powers','coupling','receiver_c','load',
+                                             'switch_type','override','jobs']
+    assert tab.panel.sections['Model'].isHidden() and not tab.panel.sections['Operating points'].isHidden()
+    assert tab.frequencies.text()=='90000,110000' and tab.powers.text()=='5,10,20,30' and tab.coupling.text()=='0.4'
+    assert tab.receiver_C.text()=='' and tab.model.currentText()=='vdmos'       # the template's, not the first listed
+    tab.frequencies.setText('90000');tab.powers.setText('5,30');tab.coupling.setText('.35');tab.receiver_C.setText('100');tab.load_R.setText('2.5')
     c=json.loads(tab.editor.toPlainText());next(p for p in c['components'] if p['ref']=='L3')['DCR_ohm']=.075
-    next(p for p in c['components'] if p['ref']=='C19').update(type='resistor',value=100)
     tab.editor.setPlainText(json.dumps(c));v=tab.values()
-    assert v['frequencies_Hz']==[90000,110000] and v['powers_W']==[5,30]
-    assert v['switch_model']['type']=='vdmos'
+    assert v['frequencies_Hz']==[90000] and v['powers_W']==[5,30] and v['coupling']==.35
+    assert v['secondary_C_F']==pytest.approx(100e-9) and v['load_ohm']==2.5 and v['switch_model']['type']=='vdmos'
     assert next(p for p in v['components'] if p['ref']=='L3')['DCR_ohm']==.075
-    assert next(p for p in v['components'] if p['ref']=='C19')['type']=='resistor'
+    tab.receiver_C.clear();assert 'secondary_C_F' not in tab.values()            # none: tuned at each frequency
+    tab.model.setCurrentText('switch');assert tab.values()['switch_model']['type']=='switch' and tab.status.text()==SWITCH_NOTE
+    tab.model.setCurrentText('mosfet');assert tab.status.text()=='' and tab.values()['switch_model']['type']=='mosfet'
     tab.fields.setChecked(True);assert tab.copper.isChecked()
     tab.copper.setChecked(False);assert not tab.fields.isChecked()
-    tab.close()
+    m=tab.values();m['secondary_C_F']=47e-9;m['load_ohm']=3.0;tab.set_model(m)   # a model with them held: shown
+    assert tab.receiver_C.text()=='47' and tab.load_R.text()=='3' and 'fixed 47 nF' in tab.matching_note.text()
 
 
-def test_saved_case_waveforms_are_visible(tmp_path):
-    import numpy as np
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();tab.new_model('wpthb');t=np.linspace(0,.003,301)
-    np.savez(tmp_path/'transient.npz',time_s=t,**{'PRIMARY.winding_I':np.sin(2*np.pi*1000*t),'SECONDARY.winding_I':np.cos(2*np.pi*1000*t)})
-    c=dict(folder=str(tmp_path),frequency_Hz=1000,target_W=5,load_power_W=5,phase_deg=30,primary_rms_A=.707,efficiency=.9)
-    tab.show_result(dict(complete=True,cases=[c]))
-    assert len(tab.waveform.listDataItems())==2
-    assert 'Input W' in tab.summary.toHtml() and 'VHB ripple' in tab.summary.toHtml()
-    tab.signal_view.setCurrentIndex(2)                      # input filter currents: none saved in this case
-    assert len(tab.waveform.listDataItems())==0 and 'none of' in tab.status.text()
-    tab.signal_view.setCurrentIndex(0)
-    c2=dict(c,input_power_W=5.4,bus_ripple_V=3.88,runtime_s=56.0);tab.show_result(dict(complete=True,cases=[c2]))
-    assert '5.400' in tab.summary.toHtml() and '3.88' in tab.summary.toHtml()
-    assert len(tab.waveform.listDataItems()[0].getData()[0])>100
-    tab.overrides['cap_ESR'].setText('12');tab.overrides['dead_time_s'].setText('80')
-    vals=tab.values();assert vals['switch_model']['dead_time_s']==80e-9
-    assert all(p['ESR_ohm']==.012 for p in vals['components'] if p['type']=='capacitor')
-    tab.close()
-
-
-def test_fixed_receiver_model_roundtrip():
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();tab.new_model('wpthb');c=tab.values();c.update(secondary_C_F=100e-9,load_ohm=6.45)
-    tab.set_model(c);assert abs(float(tab.receiver_C.text())-100)<1e-10
-    assert tab.values()['secondary_C_F']==pytest.approx(100e-9) and tab.values()['load_ohm']==6.45
-    assert 'fixed' in tab.matching_note.text()
-    tab.receiver_C.clear();tab.load_R.clear()
-    assert 'secondary_C_F' not in tab.values() and 'load_ohm' not in tab.values()
-    tab.close()
-
-
-def test_solver_steps_view(tmp_path):
-    """I1: with the run's solver-step signals saved (steps.*), the waveform view can show them instead of the
-    uniform samples; without them the box is disabled."""
-    import numpy as np
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();t=np.linspace(0,.003,301);ts=np.sort(np.r_[t,np.linspace(.0025,.003,2001)])
-    np.savez(tmp_path/'transient.npz',time_s=t,**{'bus.V':24+0*t,'steps.time_s':ts,'steps.bus.V':24+(ts>.0029)})
-    c=dict(folder=str(tmp_path),frequency_Hz=1000,target_W=5,load_power_W=5,phase_deg=30,primary_rms_A=.707,efficiency=.9)
-    tab.show_result(dict(complete=True,cases=[c]));tab.signal_view.setCurrentIndex(3)
-    uniform=tab.waveform.listDataItems()[0].getData()
-    tab.steps_box.setChecked(True)
-    stepped=tab.waveform.listDataItems()[0].getData()
-    assert tab.steps_box.isEnabled() and len(stepped[0])>len(uniform[0]) and stepped[1].max()==25
-
-
-def test_opens_on_the_simple_template():
-    """A small circuit to open on, not a board's: a boost converter, in the general model; the circuits to start
-    from are the window's examples, and the settings follow the model's kind."""
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab()
+def test_a_general_model_s_parameters_and_sweep(tab):
+    """A general model (the page opens on pcbqs.circuit's boost converter): its tool's options, and in Model its
+    parameters and its sweep, which are the model's."""
+    assert tab.general and tab.shown()==['copper','fields','set','jobs','parameters','sweep']
+    assert not tab.panel.sections['Model'].isHidden() and tab.panel.sections['Operating points'].isHidden()
+    assert tab.panel.forms['Board'].isRowVisible(tab.copper) and not tab.panel.forms['Board'].isRowVisible(tab.panel.w['field_harmonics'])
     c=tab.values()
-    assert c['format']==2 and c['name'].startswith('Boost converter') and [p['ref'] for p in c['parts']]==['V1','C1','L1','Q1','D1','C2','R1']
-    assert not hasattr(tab,'start_from') and tab.model_path is None      # no loader of its own: File > Examples > Circuits
-    sc=tab.schematic.scene
-    assert set(sc.devices)=={'part:'+r for r in ('V1','C1','L1','Q1','D1','C2','R1')}
-    assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.powers)
-    assert 'drives.pwm.duty is adjusted until vout_avg' in tab.matching_note.text()
-    tab.new_model('wpthb')
-    assert any(p['ref']=='C25' for p in tab.values()['components'])
-    assert not tab.form.isRowVisible(tab.params) and tab.form.isRowVisible(tab.frequencies) and tab.signal_view.itemText(0)=='Winding currents'
-    tab.new_model('flyback')
-    assert tab.values()['couplings'][0]['inductors']==['LP','LS'] and tab.signal_view.itemText(0)=='Probes: voltages'
-    tab.close()
-
-
-def test_parameters_and_sweep_of_a_general_model():
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab()
+    assert c['format']==2
     names=[tab.params.item(r,0).text() for r in range(tab.params.rowCount())]
-    assert names==['fsw','vin','vout','pout'] and tab.sweep.text()==''
-    tab.params.item(names.index('vin'),1).setText('9');tab.params.item(names.index('fsw'),1).setText('250k')
-    tab.sweep.setText('R1.resistance_ohm: 48, 96;  parameters.vout: 20, 2*vin')
+    assert names==list(c['parameters']) and 'adjusted until' in tab.matching_note.text()
+    tab.params.item(names.index('vin'),1).setText('9');tab.sweep.setText('parameters.vin: 9, 12;  R1.resistance_ohm: 24, 48')
     v=tab.values()
-    assert v['parameters']['vin']==9 and v['parameters']['fsw']=='250k'
-    assert v['sweep']=={'R1.resistance_ohm':[48,96],'parameters.vout':[20,'2*vin']}
-    tab.refresh_schematic()                                         # the schematic shows the numbers behind them
-    assert tab.schematic.scene.devices['part:V1'].record['label']=='9 V'
-    tab.sweep.setText('R1.resistance_ohm 48')
-    with pytest.raises(ValueError,match='Sweep'):tab.values()
-    tab.new_model('buck_synchronous')
-    assert tab.sweep.text()=='I1.current_A: 0.5, 2, 4'
-    tab.close()
+    assert v['parameters']['vin']==9 and v['sweep']=={'parameters.vin':[9,12],'R1.resistance_ohm':[24,48]}
+    tab.sweep.setText('vin 9');
+    with pytest.raises(ValueError,match='Sweep: write'):tab.values()
+    tab.sweep.clear();assert 'sweep' not in tab.values()
+    tab.new_model('wpthb');assert not tab.general and tab.shown()[3]=='frequencies'
+    tab.new_model('boost');assert tab.general and tab.frequencies.text()=='90000,110000'      # hidden: not this model's
 
 
-def test_general_results_table_loss_and_waveforms(tmp_path):
-    import numpy as np
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab();T=5e-6;t=np.linspace(0,8*T,8*64+1)
-    np.savez(tmp_path/'transient.npz',time_s=t,**{'vout':24+0*t,'il':1+.3*np.sin(2*np.pi*t/T),'L1.I':1+0*t,'C2.V':24+0*t,'Q1.V':12+0*t,'D1.V':-12+0*t,'Q1.I':0*t,'D1.I':0*t})
-    (tmp_path/'model.json').write_text(json.dumps(tab.values()))
-    parts=dict(V1=dict(type='source',power_W=-12.3),L1=dict(type='inductor',power_W=.055,avg_A=1.03,rms_A=1.05,peak_A=1.35,ripple_A=.65),
-               Q1=dict(type='switch',power_W=.02,avg_A=.53,rms_A=.75,peak_A=4.5,peak_V=24.4),D1=dict(type='diode',power_W=.23,avg_A=.5,rms_A=.73,peak_A=3.8,peak_V=24),
-               C2=dict(type='capacitor',power_W=.002,avg_V=24,ripple_V=.065,rms_A=.53),R1=dict(type='load',power_W=11.99,avg_V=24,avg_A=.5))
-    case=dict(name='run',folder=str(tmp_path),period_s=T,sweep={},knobs={'drives.pwm.duty':.5142},measures=dict(vout_avg=23.98,il_ripple=.649),
-              source_power_W=12.3,load_power_W=11.99,loss_W=.31,efficiency=.9749,gate_drive_power_W=0.0,parts=parts,coupled=[],
-              notes=['Q1: a peak of 5e+05 V is a solver spike'],periodic_error=2e-4,reltol=1e-4,runs=8,periods=3400,runtime_s=25.)
-    tab.show_result(dict(format=2,name='Boost',complete=True,cases=[case],failed=[dict(name='vin=3',error='vout_avg cannot reach 24')]))
-    text=tab.summary.toPlainText()
-    assert 'pwm.duty' in text and '97.49' in text and '0.5142' in text and 'where the 0.31 W goes' in text
-    assert text.index('D1')<text.index('L1')<text.index('Q1')        # the loss table: the largest first
-    assert 'solver spike' in text and 'vin=3: failed.' in text and 'cannot reach 24' in text
-    assert tab.status.text()=='Completed: 1 point failed' and tab.case.count()==1
-    assert [i.name() for i in tab.waveform.listDataItems()]==['vout']
-    x,y=tab.waveform.listDataItems()[0].getData();assert x[-1]==pytest.approx(10.0) and len(x)==129     # two periods, in µs
-    tab.signal_view.setCurrentIndex(1);assert [i.name() for i in tab.waveform.listDataItems()]==['il']
-    tab.signal_view.setCurrentIndex(3);assert [i.name() for i in tab.waveform.listDataItems()]==['L1.I']
-    tab.signal_view.setCurrentIndex(4);assert [i.name() for i in tab.waveform.listDataItems()]==['Q1.V','D1.V']
-    tab.close()
-
-
-def test_a_general_model_runs_on_its_board(tmp_path,monkeypatch):
-    """The board's copper is offered for a general model too: the model's own board, or the one named."""
-    from PySide6.QtWidgets import QApplication
-    import kicad2ems_gui.powercircuittab as page
-    app=QApplication.instance() or QApplication([])
+def test_a_run_is_the_plugin_s_command_on_the_model_as_edited(tab,tmp_path,monkeypatch):
+    """Run: the model as edited written into the run's folder, the tool of its kind with the options of its kind;
+    the board's copper needs a board (the model's own, the one named, else said)."""
+    import kicad2ems_gui.analysispanel as panel
     ran=[]
-    monkeypatch.setattr(page,'run_tool',lambda tab,argv,*a,**k:ran.append(argv))
-    tab=PowerCircuitTab();tab.outdir.setText(str(tmp_path/'out'))
-    assert tab.form.isRowVisible(tab.copper) and tab.form.isRowVisible(tab.board) and tab.form.isRowVisible(tab.fields)
-    assert tab.copper.text().startswith("Include the board's copper")
-    tab.start();assert '--copper' not in ran[-1] and ran[-1][3]=='pcbqs.circuit'
-    tab.copper.setChecked(True);tab.start()
-    assert ran[-1][-3]=='--copper' and ran[-1][-2]=='--board' and ran[-1][-1].endswith('06_boost.kicad_pcb')
-    tab.fields.setChecked(True);tab.start();assert ran[-1][-1]=='--fields' and '--copper' in ran[-1];tab.fields.setChecked(False);tab.copper.setChecked(True)
+    monkeypatch.setattr(panel,'run_tool',lambda p,argv,*a,**k:ran.append(argv))
+    tab.outdir.setText(str(tmp_path/'out'))
+    tab.params.item(0,1).setText('123456');tab.start()
+    assert ran[-1][1:5]==['-u','-m','pcbqs.circuit',str(tmp_path/'out'/'model-input.json')] and '--copper' not in ran[-1]
+    assert 123456 in json.loads((tmp_path/'out'/'model-input.json').read_text())['parameters'].values()
+    assert ran[-1][5:]==['--out',str(tmp_path/'out'),'--jobs','4']
+    tab.panel.w['set'].setPlainText('drives.pwm.duty=0.4');tab.fields.setChecked(True);tab.start()
+    assert ran[-1][7:]==['--copper','--fields','--set','drives.pwm.duty=0.4','--jobs','4','--board',ran[-1][-1]] and ran[-1][-1].endswith('06_boost.kicad_pcb')
     other=tmp_path/'mine.kicad_pcb';other.write_text('(kicad_pcb)');tab.board.setText(str(other));tab.start()
     assert ran[-1][-1]==str(other)
     tab.board.clear();c=tab.values();c.pop('board');tab.set_model(c);n=len(ran);tab.start()
     assert len(ran)==n and 'Import KiCad' in tab.status.text()      # no board to take the copper from: said, not run
-    tab.new_model('wpthb');assert tab.copper.text()=='Include extracted PCB R/L in circuit' and tab.fields.text().startswith('Infer periodic')
-    tab.close()
+    tab.fields.setChecked(False);tab.copper.setChecked(False)
+    tab.new_model('wpthb');tab.frequencies.setText('90000');tab.panel.w['override'].setPlainText('tank.ESR_ohm=0.004\nfilter.DCR_ohm=0.01')
+    tab.panel.w['set'].setPlainText('x=1');tab.start()               # the other tool's --set: not this one's
+    assert ran[-1][3]=='pcbqs.power_circuit' and ran[-1][7:]==['--override','tank.ESR_ohm=0.004','--override','filter.DCR_ohm=0.01','--jobs','4']
+    sent=json.loads((tmp_path/'out'/'model-input.json').read_text())
+    assert sent['frequencies_Hz']==[90000] and next(p for p in sent['components'] if p['ref']=='C25')['ESR_ohm']!=.004
+    tab.editor.setPlainText('{ not json');n=len(ran);tab.start()
+    assert len(ran)==n and tab.status.text().startswith('The model needs attention')
 
 
-def test_general_results_show_the_boards_copper(tmp_path):
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab()
-    parts=dict(V1=dict(type='source',power_W=-12.3),D1=dict(type='diode',power_W=.23,avg_A=.5,rms_A=.73,peak_A=3.8,peak_V=57.),R1=dict(type='load',power_W=11.99,avg_V=24,avg_A=.5))
-    copper=dict(loss_W=.0023,board='06_boost.kicad_pcb',fit_error=.03,ports=[dict(name='T0',terminal='C1.in',reference='J1.in',net='in',rms_A=.096)])
-    case=dict(name='run',folder=str(tmp_path),period_s=5e-6,sweep={},knobs={},measures={},source_power_W=12.3,load_power_W=11.99,loss_W=.31,efficiency=.975,
-              gate_drive_power_W=0.0,parts=parts,coupled=[],copper=copper,notes=[],periodic_error=2e-4,reltol=1e-4,runs=9,periods=3450,runtime_s=36.,
-              fields=dict(heights_mm=[1.,5.],H_ac_rms_max_A_per_m=[29.5,5.14],E_ac_rms_max_V_per_m=[4060.,903.],highest_Hz=3.2e6,picture=None))
-    tab.show_result(dict(format=2,name='Boost',complete=True,cases=[case],failed=[]))
-    text=tab.summary.toPlainText()
-    assert 'board copper (06_boost.kicad_pcb)' in text and '0.0023' in text and 'Board copper' in text
-    assert 'Fields over the board' in text and '4060' in text and '5.14' in text and 'H to 3.2 MHz' in text
-    assert text.index('C1')<text.index('J1') and '0.096' in text
-    tab.close()
-
-
-def test_a_study_s_config_holds_the_circuit(tmp_path):
-    """[analysis.circuit] of a config: the model it names loaded (its board found beside it), the copper and fields
-    ticks; saved back: the model written beside the config, its board named relative to it; a run alone goes where
-    it was started, in the window under the study's output folder."""
-    from PySide6.QtWidgets import QApplication
-    app=QApplication.instance() or QApplication([])
-    tab=PowerCircuitTab()
-    assert tab.save_settings(str(tmp_path/'s.toml'))=={}           # never given a model, not ticked: no circuit
+def test_a_study_s_config_holds_the_circuit(tab,tmp_path):
+    """[analysis.circuit] of a config: the model it names loaded (its board found beside it), the options it sets;
+    saved back: the model written beside the config, its board named relative to it, the options that are set. A
+    run alone goes beside where it was started, in the window under the study's output folder."""
+    assert tab.save_settings(str(tmp_path/'s.toml'))=={}           # never given a model, not asked: no circuit
     model=tab.values();model['name']='Mine';model['board']=dict(file='b.kicad_pcb')
     (tmp_path/'m.json').write_text(json.dumps(model));(tmp_path/'b.kicad_pcb').write_text('')
-    tab.load_settings(dict(model=str(tmp_path/'m.json'),fields=True,out=str(tmp_path/'o')))
+    tab.load_settings(dict(model=str(tmp_path/'m.json'),fields=True,out=str(tmp_path/'o'),jobs=2,set=['drives.pwm.duty=0.4']))
     c=tab.values()
     assert c['name']=='Mine' and c['board']['file']==str(tmp_path/'b.kicad_pcb') and tab.model_path==str(tmp_path/'m.json')
     assert tab.copper.isChecked() and tab.fields.isChecked() and tab.outdir.text()==str(tmp_path/'o')
-    assert tab.status.text()=='Model: m.json'
+    assert tab.status.text()=='Model: m.json' and tab.run_tag()=='m'
     tab.params.item(0,1).setText('123456')                         # an edit: saved with the study
-    assert tab.save_settings(str(tmp_path/'s.toml'))==dict(model='m.json',copper=True,fields=True,out='o')
+    assert tab.save_settings(str(tmp_path/'s.toml'))==dict(model='m.json',copper=True,fields=True,out='o',jobs=2,set=['drives.pwm.duty=0.4'])
     saved=json.loads((tmp_path/'m.json').read_text())
     assert saved['board']['file']=='b.kicad_pcb' and 123456 in saved['parameters'].values()
-    assert tab.default_out(c)=='circuit'                            # alone: where it was started
     tab.load_settings({})                                           # a study without a circuit: the page as it opens
     assert tab.model_path is None and tab.values()['name'].startswith('Boost converter') and not tab.copper.isChecked()
+    assert tab.panel.values()['set']=='' and tab.run_tag().startswith('Boost')
     assert not tab.load_model(str(tmp_path/'none.json')) and 'none.json' in tab.status.text()
+    bridge=tmp_path/'bridge.json';bridge.write_text(json.dumps(PowerCircuitTab.template('wpthb')))
+    tab.load_settings(dict(model=str(bridge),override=['tank.ESR_ohm=0.004'],frequencies='1,2'))     # the model's own: not a config's
+    assert tab.frequencies.text()=='90000,110000' and tab.panel.values()['override']=='tank.ESR_ohm=0.004'
+    tab.powers.setText('7')
+    assert tab.save_settings(str(tmp_path/'s.toml'))==dict(model='bridge.json',override=['tank.ESR_ohm=0.004'])
+    assert json.loads(bridge.read_text())['powers_W']==[7.0]        # in the model, where it belongs
+    tab.load_settings({})
+    assert tab.general and tab.model_path is None
 
     class Win:                                                      # the window's part: the study's output folder
         def tool_out(self,kind,board,name,preview=False):return str(tmp_path/'out'/f'{kind}_{name}')
-    tab.win=Win();tab.model_path=str(tmp_path/'m.json')
-    assert tab.default_out(c)==str(tmp_path/'out'/'circuit_m')
-    tab.model_path=None
-    assert tab.default_out(dict(format=2,name='Buck, 12 V to 5 V'))==str(tmp_path/'out'/'circuit_Buck__12_V_to_5_V')
+    tab.panel.win=Win();tab.model_path=str(tmp_path/'m.json')
+    assert tab.panel.default_out(None,tab.run_tag())==str(tmp_path/'out'/'circuit_m')
     run=tmp_path/'run';run.mkdir();(run/'circuit.json').write_text(json.dumps(dict(format=2,name='Ran',cases=[],failed=[],complete=True)))
-    assert tab.open_run(str(run)) and tab.out==run and tab.status.text()=='Completed' and not tab.open_run(str(tmp_path))
+    assert tab.open_run(str(run)) and tab.out==str(run) and not tab.open_run(str(tmp_path))
+    old=tmp_path/'bridge-run';old.mkdir();(old/'power-circuit.json').write_text(json.dumps(dict(format=1,complete=True,cases=[])))
+    assert tab.open_run(str(old)) and tab.out==str(old)             # the full bridge's run: a circuit result too
