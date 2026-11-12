@@ -134,7 +134,11 @@ def test_an_opengl_start_that_fails_stays_in_the_view(monkeypatch):
         w.view.repaint()
         app.processEvents()
         if not called:                                              # no context to start: Qt never calls it here
-            w.close()                                               # (a CI machine without a GL driver)
+            w.close()                                               # (a CI machine without a GL driver); the
+            w.deleteLater()                                         # window gone now, not at the interpreter's
+            del w                                                   # exit after Qt's teardown (a segfault there)
+            app.processEvents()
+            gc.collect()
             pytest.skip('Qt made no OpenGL context here: initializeGL is never called')
         assert w.view.gl_error.startswith('RuntimeError') and 'could not start OpenGL' in w.status.text()
         w.close()
