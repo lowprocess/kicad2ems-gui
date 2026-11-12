@@ -193,7 +193,7 @@ def save_config(path, values, template=None):
         key_re = re.compile(r'^(\s*)([A-Za-z0-9_-]+)(\s*=\s*)')
         while i < len(src):
             line = src[i]
-            head = re.match(r'^\s*\[\s*([^\]]+?)\s*\]', line)
+            head = re.match(r'^\s*\[\[?\s*([^\[\]]+?)\s*\]', line)       # ([[...]]: an array's table too)
             if head:
                 first_table = len(out) if first_table is None else first_table
                 table = _table_keys(head.group(1))
@@ -249,31 +249,38 @@ def save_config(path, values, template=None):
 
 def write_analyses(path, run, tables):
     """The [analysis] part of the config at `path` written anew (kicad2ems.analyses.read_config reads it): run,
-    the analyses its study runs (None: not said), and each analysis's table {key: value}. The [analysis] tables
-    there before are replaced, the rest of the file is kept; none to write and none there: the file as it is."""
+    the analyses its study runs (None: not said), and each analysis's table {key: value}, or its tables, a list
+    of them (a run each: a board's rails), written as an array ([[analysis.<name>]]). The [analysis] tables there
+    before are replaced, the rest of the file is kept; none to write and none there: the file as it is."""
     import re
     with open(path, encoding='utf-8') as fh:
         lines = fh.read().splitlines()
     out, skip, had = [], False, False
     for line in lines:
-        head = re.match(r'^\s*\[\s*([^\]]+?)\s*\]', line)
+        head = re.match(r'^\s*\[\[?\s*([^\[\]]+?)\s*\]', line)
         if head:
             name = head.group(1).strip()
             skip = name == 'analysis' or name.startswith('analysis.')
             had = had or skip
         if not skip:
             out.append(line)
-    tables = {k: v for k, v in (tables or {}).items() if v}
-    if run is None and not tables and not had:
+    sets = {}
+    for name, tab in (tables or {}).items():
+        many = [t for t in (tab if isinstance(tab, (list, tuple)) else [tab]) if t]
+        if many:
+            sets[name] = many
+    if run is None and not sets and not had:
         return
     while out and not out[-1].strip():
         out.pop()
-    if run is not None or tables:
+    if run is not None or sets:
         out += ['', '[analysis]']
         if run is not None:
             out.append(f"run = {toml_value(list(run))}")
-        for name, tab in tables.items():
-            out += ['', f"[analysis.{name}]"] + [f"{k} = {toml_value(v)}" for k, v in tab.items()]
+        for name, many in sets.items():
+            for tab in many:
+                out += ['', f"[[analysis.{name}]]" if len(many) > 1 else f"[analysis.{name}]"]
+                out += [f"{k} = {toml_value(v)}" for k, v in tab.items()]
     with open(path, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(out) + '\n')
 

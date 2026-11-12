@@ -2327,15 +2327,17 @@ class MainWindow(QMainWindow):
         <name>] table, the others' cleared. path None: a new study, nothing set. A table of an analysis not
         installed here is kept, and saved back, as is a question or an engine of the study this window lacks."""
         from kicad2ems.api.frontend import read_analyses, read_study, Study
-        run, tables, study = None, {}, Study({'sparams': []})
+        run, tables, study, more = None, {}, Study({'sparams': []}), {}
         if not self.busy():
             self.study.clear_states()                               # another study: the last one's states are not its
         if path:
             try:
                 run, tables = read_analyses(path)
                 study = read_study(path, strict=False)
+                more = self._more_sets(path)
             except Exception as e:
                 self.statusBar().showMessage(f"{path}: its study could not be read ({e})", 8000)
+        self.more_sets = more
         base = os.path.dirname(os.path.abspath(path)) if path else os.getcwd()
         loading, self.setup._loading = self.setup._loading, True
         try:
@@ -2350,7 +2352,14 @@ class MainWindow(QMainWindow):
                 page.reset()
                 page.set_own(tab.pop('board', None), tab.pop('out', None))
                 page.set_values(tab)
-            self.extra_analyses = {k: v for k, v in tables.items() if k not in self.pages}
+            self.extra_analyses = {k: ([v, *more[k]] if more.get(k) else v) for k, v in tables.items()
+                                   if k not in self.pages}
+            for key, rest in more.items():                          # an analysis given several tables (a board's
+                page = self.pages.get(key)                          # rails): the first is shown and run here
+                if page is not None and hasattr(page, 'status'):
+                    tags = ', '.join(self.registry[key].tag(dict(v)) for v in rest)
+                    page.status.setText(f"This config has {len(rest)} more of these ({tags}): the first is shown and "
+                                        f"run here, and all of them by `kicad2ems study`; saving keeps them.")
             self.extra_study = Study({q: n for q, n in study.asked.items() if q not in self.study.rows
                                       or not self.study.engines[q]},
                                      {q: v for q, v in study.fields.items() if q not in self.study.rows})
@@ -2368,6 +2377,25 @@ class MainWindow(QMainWindow):
         run = self.study.run_of(first) if first in self.study.rows else RF
         if path and run in self.editors:
             self.show_panel(BY_KEY[run].page)
+
+    @staticmethod
+    def _more_sets(path):
+        """{analysis: its tables after the first} for the analyses a config gives several tables ([[analysis.
+        <name>]]: a run each, kicad2ems 2.10), their paths whole; {} with an older kicad2ems, which reads one."""
+        try:
+            from kicad2ems.api.frontend import read_analysis_sets
+        except ImportError:
+            return {}
+        base, out = os.path.dirname(os.path.abspath(path)), {}
+        for name, sets in read_analysis_sets(path).items():
+            rest = [dict(t) for t in sets[1:]]
+            for t in rest:
+                for k in ('board', 'out'):                          # its own board and folder: beside the config
+                    if t.get(k) and not os.path.isabs(str(t[k])):
+                        t[k] = os.path.normpath(os.path.join(base, str(t[k])))
+            if rest:
+                out[name] = rest
+        return out
 
     def _fields_set(self, question, study):
         """Whether a question's settings ask for field dumps, for a study that does not say (a config written
@@ -2396,6 +2424,12 @@ class MainWindow(QMainWindow):
         for key, page in self.pages.items():
             tab = page.save_settings(path) if key in self.editors else config_values(page, base)
             if tab:
+                rest = getattr(self, 'more_sets', {}).get(key)      # the config's other tables of it: kept,
+                if rest:                                            # their paths relative to where it is saved
+                    paths = (*getattr(self.registry.get(key), 'paths', ()), 'board', 'out')
+                    rel = lambda v: (os.path.relpath(v, base).replace(os.sep, '/')
+                                     if isinstance(v, str) and os.path.isabs(v) else v)
+                    tab = [tab, *[{k: (rel(v) if k in paths else v) for k, v in t.items()} for t in rest]]
                 tables[key] = tab
         write_analyses(path, None, tables)                          # [study] says which run: no [analysis] run
         st = self.study.study()

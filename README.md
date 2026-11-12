@@ -39,6 +39,9 @@ ripple on the rail) and *Copy U702's input current to Near field*. A click fills
 it so that Run includes it, and shows it. None installed: those rows are greyed, and say how to install an
 engine.
 
+A config may give an analysis several tables (`[[analysis.pdn]]`: a board's rails, a run each of `kicad2ems
+study`): the window shows and runs the first, says how many more there are, and keeps them when it saves.
+
 **Preview** and **Run** make the runs the questions asked take, one after the other: the solvers', then each
 analysis in the registry's order; the Run page lists them with each one's state, time and log. Run > *Run the
 selected question alone* (or the list's context menu) runs one whatever is ticked. An analysis may start from
