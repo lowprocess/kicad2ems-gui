@@ -159,19 +159,20 @@ def test_pages_that_come_and_go(window):
     w, app = window
     w.show()
     app.processEvents()
-    assert not w.places['Filter'].isVisible()                       # opened by hand only: a window of its own
+    assert not w.docks['Filter'].isVisible()                        # opened by hand only
     w.acts['Filter'].trigger()
-    assert w.places['Filter'].isVisible() and w.filter_window.isVisible()
-    w.filter_window.close()
-    assert w.places['Filter'].isHidden()
-    assert w.places['Circuit'].isHidden() and 'circuit' not in w.study.ticked() and w.stage.tabBar().isHidden()
+    assert w.docks['Filter'].isVisible()
+    w.docks['Filter'].hide()
+    app.processEvents()
+    assert w.docks['Circuit'].isHidden() and 'circuit' not in w.study.ticked()
     if 'circuit' in w.study.why:
         pytest.skip('pcbqs is not installed: Circuit cannot be ticked')
-    w.study.set_ticked(['rf', 'circuit'])                           # the circuit's editor: a tab beside the board
-    assert not w.places['Circuit'].isHidden() and [w.stage.tabText(i) for i in range(w.stage.count())] == ['Board', 'Circuit']
-    assert not w.stage.tabBar().isHidden() and w.places['Viewer'].in_front()
+    w.study.set_ticked(['rf', 'circuit'])                           # the circuit's editor: tabbed beside the board
+    app.processEvents()
+    assert not w.docks['Circuit'].isHidden() and w.docks['Circuit'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
+    assert w.places['Viewer'].in_front()
     w.study.set_ticked(['rf'])
-    assert w.places['Circuit'].isHidden() and w.stage.count() == 1 and w.stage.tabBar().isHidden()
+    assert w.docks['Circuit'].isHidden()
 
 
 def test_second_viewer(window, tmp_path):

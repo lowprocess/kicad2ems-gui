@@ -80,19 +80,21 @@ def gui_media(only):
         return w
 
     def shot(w, path, page=None, view=None):
-        """The window with `page` in front (and the Viewer's `view`), saved to path (None: only shown). A page of
-        the drawer gets most of the middle's height, the board the rest; the board's own pictures the other way
-        round. Filter Synthesis is its own window: that is what is saved."""
+        """The window with `page` in front (and the Viewer's `view`), saved to path (None: only shown). A page
+        under the board gets most of the workspace's height, the board the rest; the board's own pictures the
+        other way round."""
         if page:
             w.show_panel(page)
-            if page != 'Filter':
-                h = sum(w.mid.sizes())
-                w.mid.setSizes([int(0.3 * h), int(0.7 * h)] if page in w.drawer.pages else [int(0.78 * h), int(0.22 * h)])
+            from PySide6.QtCore import Qt
+            h = w.work.height()
+            lower = page in ('Results', 'Run')
+            w.work.resizeDocks([w.docks['Viewer'], w.docks['Results']],
+                               [int(0.3 * h), int(0.7 * h)] if lower else [int(0.78 * h), int(0.22 * h)], Qt.Vertical)
         if view:
             w.viewer.set_view(view)
         pump(30)
         if path:
-            (w.filter_window if page == 'Filter' else w).grab().save(path)
+            w.grab().save(path)
             print(f"  {os.path.relpath(path, REPO)}")
 
     def close(w):
@@ -166,7 +168,6 @@ def gui_media(only):
         w = MainWindow()
         w.resize(1500, 900)
         w.show()
-        w.filter_window.resize(1500, 900)
         w.filter.set_values(dict(args, out=base))
         w.filter.show_result(ft.load_design(base))
         shot(w, os.path.join(GUI, 'filter.png'), 'Filter')

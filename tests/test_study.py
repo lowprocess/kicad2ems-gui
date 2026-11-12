@@ -85,7 +85,7 @@ def test_study_dock(window):
     assert not st.rf_box.isHidden() and st.panels['pdn'].isHidden() and st.panel_title.text() == 'S-parameters settings'
     assert st.sections['Board'].parentWidget() is not st.rf_box              # the board: for every question
     assert st.rf_box.isAncestorOf(st.more) and st.more.isAncestorOf(st.sections['Frequency'])   # under More settings
-    assert w.setup.inspector.isAncestorOf(st.rf_box) and not st.isAncestorOf(st.rf_box)         # the right column
+    assert w.setup.inspector.isAncestorOf(st.rf_box) and w.settings_dock.widget() is w.setup.inspector   # its own dock
     tree.select('dc')
     assert st.rf_box.isHidden() and not st.panels['pdn'].isHidden() and tree.current() == 'pdn'
     assert st.panel_title.text() == 'Rail drop settings' and st.engine_titles['pdn'].isHidden()        # one engine
@@ -475,25 +475,25 @@ def test_one_analysis_starts_from_another_s_result(window, tmp_path):
     w.close()
 
 
-def test_the_questions_column_folds_and_comes_back(window):
-    """The questions' column folds away from View (and by its key) and comes back the same way; a window that
-    opens with it folded says so in View, where it is one click from back."""
+def test_the_study_dock_closes_and_comes_back(window):
+    """The study's dock closes from View (and by its key) and comes back the same way; closed when the window
+    was, it is there again in the next one, the study being what a window opens on."""
     w, app, MainWindow = window
     w.show()
     app.processEvents()
     act = w.fold_acts['Questions']
-    assert act.isEnabled() and act.isChecked() and not w.setup.isHidden()
+    assert act.isEnabled() and act.isChecked() and not w.study_dock.isHidden()
     act.trigger()
-    assert w.setup.isHidden() and not act.isChecked()
-    w.close()                                                       # saved with the column folded
+    assert w.study_dock.isHidden() and not act.isChecked()
+    act.trigger()                                                   # View > Questions: back
+    assert not w.study_dock.isHidden() and w.setup.isAncestorOf(w.study)
+    act.trigger()
+    w.close()                                                       # saved with it closed
     again = MainWindow()
     try:
         again.show()
         app.processEvents()
-        act = again.fold_acts['Questions']
-        assert again.setup.isHidden() and act.isEnabled() and not act.isChecked()
-        act.trigger()                                               # View > Questions: back
-        assert not again.setup.isHidden() and again.setup.isAncestorOf(again.study)
+        assert not again.study_dock.isHidden() and again.fold_acts['Questions'].isChecked()
     finally:
         again.system.stop()
         again.meters.stop()

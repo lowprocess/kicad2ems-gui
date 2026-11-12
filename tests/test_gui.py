@@ -896,16 +896,16 @@ def test_filter_page(tmp_path):
     w.close()
 
 
-def test_one_fixed_layout(monkeypatch, tmp_path):
-    """The window's one layout: the questions on the left, the board in the middle with the Results and Run pages
-    in a drawer under it, the selected question's settings on the right. The columns and the drawer fold (View)
-    and stay folded for the next window; nothing floats; a dock layout an older window saved is not read. Filter
-    Synthesis is a window of its own, closed until asked for."""
+def test_the_window_is_docks(monkeypatch, tmp_path):
+    """The window is docks, as a studio's: the study (the board, the questions) over the selected question's
+    settings on the left; the Viewer with the Results and Run pages under it in the workspace. Each moves, tabs,
+    floats and closes, View brings it back, and the next window opens as this one was left; a layout an older
+    window saved is not read. Filter Synthesis is a page, closed until asked for; Reset layout puts all back."""
     pytest.importorskip('PySide6')
     pytest.importorskip('pyqtgraph')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QSettings, Qt
     from PySide6.QtWidgets import QApplication
     from kicad2ems_gui.app import MainWindow
     app = QApplication.instance() or QApplication([])
@@ -914,36 +914,48 @@ def test_one_fixed_layout(monkeypatch, tmp_path):
     w = MainWindow()
     w.show()
     app.processEvents()
-    assert [w.cols.widget(i) for i in range(3)] == [w.setup, w.mid, w.setup.inspector]
-    assert [w.mid.widget(i) for i in range(2)] == [w.stage, w.drawer] and w.stage.currentWidget() is w.viewer
-    assert list(w.drawer.pages) == ['Results', 'Run'] and not w.drawer.is_folded and w.stage.tabBar().isHidden()
+    assert w.windowState() & Qt.WindowMaximized                     # no session before: the whole screen
+    assert w.study_dock.widget() is w.setup and w.settings_dock.widget() is w.setup.inspector
+    assert w.dockWidgetArea(w.study_dock) == w.dockWidgetArea(w.settings_dock) == Qt.LeftDockWidgetArea
+    assert w.study_dock.geometry().bottom() < w.settings_dock.geometry().top()      # the settings: under the list
     assert w.setup.isAncestorOf(w.study) and w.setup.inspector.isAncestorOf(w.setup.rf_box)
-    assert not w.setup.isAncestorOf(w.setup.rf_box)                 # the settings: the right column's, not the list's
+    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit'] and w.places is w.docks
+    assert w.docks['Viewer'].geometry().bottom() < w.docks['Results'].geometry().top()
+    assert w.docks['Run'] in w.work.tabifiedDockWidgets(w.docks['Results'])
     assert w.places['Viewer'].in_front() and w.places['Results'].in_front() and not w.places['Run'].in_front()
     w.show_panel('Run')
-    assert w.places['Run'].in_front() and not w.places['Results'].in_front() and w.drawer.current() == 'Run'
-    w.fold_acts['Results and Run drawer'].trigger()                 # folded to its tabs
-    assert w.drawer.is_folded and w.drawer.stack.isHidden() and not w.places['Run'].in_front()
-    w.show_panel('Results')                                         # asked for: open again
-    assert not w.drawer.is_folded and w.places['Results'].in_front()
-    w.show_panel('Run', front=False)                                # only there: what is in front stays
-    assert w.drawer.current() == 'Results'
-    for name, col in (('Questions', w.setup), ('Settings', w.setup.inspector)):
-        w.fold_acts[name].trigger()
-        assert col.isHidden()
+    app.processEvents()
+    assert w.places['Run'].in_front() and not w.places['Results'].in_front()
+    w.show_panel('Results', front=False)                            # only there: what is in front stays
+    app.processEvents()
+    assert w.places['Run'].in_front()
+    assert w.places['Filter'].isHidden()                            # closed until asked for
+    w.acts['Filter'].trigger()
+    app.processEvents()
+    assert w.docks['Filter'] in w.work.tabifiedDockWidgets(w.docks['Viewer']) and w.places['Filter'].in_front()
+    if w.filter.desc is not None:
+        assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
+    # moved about and closed: so the next window opens
+    w.work.tabifyDockWidget(w.docks['Viewer'], w.docks['Results'])  # the results beside the board, not under it
+    w.addDockWidget(Qt.RightDockWidgetArea, w.settings_dock)        # the settings on the right
+    w.fold_acts['Questions'].trigger()                              # the study closed
+    app.processEvents()
+    assert w.study_dock.isHidden()
     w.setup.dirty = False
-    w.close()                                                       # the columns folded: so the next window opens
+    w.close()
     w = MainWindow()
     w.show()
     app.processEvents()
-    assert w.setup.isHidden() and w.setup.inspector.isHidden() and not w.drawer.is_folded
+    assert w.dockWidgetArea(w.settings_dock) == Qt.RightDockWidgetArea
+    assert w.docks['Results'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
+    assert not w.study_dock.isHidden() and w.places['Filter'].isHidden()    # the study: always there on opening
+    w.settings_dock.setFloating(True)
+    w.docks['Run'].hide()
     w.reset_layout()
-    assert not w.setup.isHidden() and not w.setup.inspector.isHidden()
-    assert w.places['Filter'].isHidden() and not w.filter_window.isVisible()       # closed until asked for
-    w.acts['Filter'].trigger()
-    assert not w.places['Filter'].isHidden() and w.filter_window.isVisible() and w.filter_window.isAncestorOf(w.filter)
-    if w.filter.desc is not None:
-        assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
+    app.processEvents()
+    assert not w.settings_dock.isFloating() and w.dockWidgetArea(w.settings_dock) == Qt.LeftDockWidgetArea
+    assert not w.docks['Run'].isHidden() and w.docks['Results'] not in w.work.tabifiedDockWidgets(w.docks['Viewer'])
+    assert w.docks['Viewer'].geometry().bottom() < w.docks['Results'].geometry().top()
     w.setup.dirty = False
     w.close()
     QSettings('kicad2ems', 'gui').clear()

@@ -138,7 +138,7 @@ In an order where each step leaves a working window:
    *Done.*
 3. `level` on options; the inspector with "More settings". *Done for the solvers' settings (an option's `level`,
    a solver's `basic`, a search box). An analysis's panel is still its groups, the first one open.*
-4. The fixed layout: the board in the middle, the drawer, the activity bar; docking removed. *Done, with these
+4. The fixed layout: the board in the middle, the drawer, the activity bar; docking removed. *Built, then taken back on the user's word (2026-11-12): the settings are a dock on the left under the questions, and every panel is a dock again (it moves, tabs, floats, closes), with the board over the Results and Run pages as a new window's arrangement. The layout sections above describe what was tried, not the window as it is.* *It had been done with these
    differences from the drawing above: the toolbar is the one it was (no header with the five steps); the drawer's
    tabs are the Results page and the Run page whole, not Plots, Report, Tables and Log; the status bar is the
    activity bar; Filter Synthesis is already a window of its own.*

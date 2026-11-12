@@ -15,17 +15,19 @@ needs nothing of a solver's and closing it never loses a run. kicad2ems's [GUI p
 
 ## The window
 
-One fixed layout (`docs/redesign.md`): the board and the **Questions** asked of it on the left; the board itself
-in the middle, in the Viewer, with the Results and Run pages in a drawer under it; the settings of the question
-selected on the right, the few a run is set up with in view and the rest under a searchable **More settings**
+Docks, as a studio application's: on the left the **Study** (the board and the **Questions** asked of it) over
+the **Settings** of the question selected; in the workspace the board, in the Viewer, with the Results and Run
+pages under it. Each dock moves, tabs with others, floats and closes (View brings it back; *View > Reset layout*
+puts all of them where a new window has them), and the window opens as it was left, the first time over the whole
+screen. The settings: the few a run is set up with in view and the rest under a searchable **More settings**
 (an option's `level`, a solver's `basic`: kicad2ems API 2.9); under them **Still needed**, what a run of that
 question lacks (`rf_needs`, an analysis's `missing`), each line leading to where it is set. The Run button says
-what it will run, or the first thing missing. The columns and the drawer fold (View); nothing docks or floats.
+what it will run, or the first thing missing.
 
 ## The study
 
 The left column is the study: the board (one for every question) and the **Questions** asked of it; the
-settings of the question selected there are the right column. The list is kicad2ems's (`kicad2ems.api.frontend.study_tree`): the
+settings of the question selected there are the Settings dock. The list is kicad2ems's (`kicad2ems.api.frontend.study_tree`): the
 questions by group (RF, Power, Thermal), each with the engines installed that answer it. A row's *Answered by*
 cell is a menu: *auto*, or a tick per engine, and several ticked all run and are compared; *Fields* asks for its
 field dumps where an engine can write them. The three RF questions are kicad2ems's own run, with the solvers
@@ -73,7 +75,7 @@ with its board, its model on the Circuit page and the circuit ticked.
 Filter Synthesis opens from the toolbar's Filter, in a window of its own. The **Circuit** page, the
 one analysis with an editor of its own, is a tab beside the board while Circuit is asked. It is the model's editor only (its
 schematic, its JSON): the model is a file the config names, saved back beside the config with the study. The
-circuit's settings are a panel in the right column like any analysis's, made from the plugin's options (the two
+circuit's settings are a panel in the Settings dock like any analysis's, made from the plugin's options (the two
 tools' own tables, the options of the other kind of model hidden), with a *Model* section for a general model's
 parameters and sweep; the full bridge's operating points show the model's values, and what is typed there goes
 into the model. Its results are on the Results page and its log on the Run page, as every analysis's.
@@ -93,7 +95,7 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 
 | Module | Contents |
 |---|---|
-| `app.py` | `MainWindow`: the fixed layout (the questions, the board and its drawer, the settings), a run of the ticked analyses and its events, what a run still needs |
+| `app.py` | `MainWindow`: the docks (the study, the settings, the pages in their workspace), a run of the ticked analyses and its events, what a run still needs |
 | `study.py` | the runs a board can have (the solvers', then each analysis), what follows what, and the list in the Study dock: a row per question, who answers it, its Fields tick and its state |
 | `analysispanel.py` | an analysis's settings and its run, for any plugin: the form from its options, its command as a child process |
 | `curves.py`, `curveplot.py` | an analysis's curves on the Results page (a rail's impedance, a spectrum, waveforms), other runs over them |
