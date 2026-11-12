@@ -15,17 +15,22 @@ needs nothing of a solver's and closing it never loses a run. kicad2ems's [GUI p
 
 ## The study
 
-The dock on the left is the study: the board (one for every analysis), the **Analyses** and the settings of the
-analysis selected there. S-parameters is kicad2ems's own run with the solvers ticked under Solvers. The others are
-the analysis plugins installed (`kicad2ems --check` lists them): each one's settings are a panel made from the
-options its plugin declares, with what else it offers (Near field's *Find converters*, which lists the board's
-converters to pick from; after a near-field run, *Copy the input rail to Power integrity*). None installed: the
-list is S-parameters alone.
+The dock on the left is the study: the board (one for every question), the **Questions** asked of it and the
+settings of the question selected there. The list is kicad2ems's (`kicad2ems.api.frontend.study_tree`): the
+questions by group (RF, Power, Thermal), each with the engines installed that answer it. A row's *Answered by*
+cell is a menu: *auto*, or a tick per engine, and several ticked all run and are compared; *Fields* asks for its
+field dumps where an engine can write them. The three RF questions are kicad2ems's own run, with the solvers
+ticked on those rows. The others' engines are the analysis plugins installed (`kicad2ems --check` lists them):
+each one's settings are a panel made from the options its plugin declares, with what else it offers (Near
+field's *Find converters*, which lists the board's converters to pick from; after a near-field run, *Copy the
+input rail to Power integrity*). None installed: those rows are greyed, and say how to install an engine.
 
-**Preview** and **Run** act on the ticked analyses, one after the other in the list's order; the Run page lists
-them with each one's state, time and log. Run > *Run the selected analysis alone* (or the list's context menu) runs
-one whatever is ticked. An analysis may start from another's result: Thermal takes its losses from the latest
-circuit run when none are typed, so with both ticked it runs after Circuit and on that run's board.
+**Preview** and **Run** make the runs the questions asked take, one after the other: the solvers', then each
+analysis in the registry's order; the Run page lists them with each one's state, time and log. Run > *Run the
+selected question alone* (or the list's context menu) runs one whatever is ticked. An analysis may start from
+another's result: Thermal takes its losses from the latest circuit run when none are typed, so with both asked
+it runs after Circuit and on that run's board. When two engines have answered one question, the Results page's
+report has their named figures side by side (*Engines compared*).
 
 **What a run leaves is shown where every result is**, not on a page of its own:
 
@@ -68,7 +73,7 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 | Module | Contents |
 |---|---|
 | `app.py` | `MainWindow`: the study dock, the pages, a run of the ticked analyses and its events |
-| `study.py` | the analyses a board can have (S-parameters, then the registry's), what follows what, the list in the Study dock |
+| `study.py` | the runs a board can have (the solvers', then each analysis), what follows what, and the list in the Study dock: a row per question, who answers it, its Fields tick and its state |
 | `analysispanel.py` | an analysis's settings and its run, for any plugin: the form from its options, its command as a child process |
 | `curves.py`, `curveplot.py` | an analysis's curves on the Results page (a rail's impedance, a spectrum, waveforms), other runs over them |
 | `reportview.py` | an analysis's report on the Results page: the page to read, its tables to sort, copy and export |

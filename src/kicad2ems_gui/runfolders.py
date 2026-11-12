@@ -15,22 +15,10 @@ compared; their results from before that (pdn_<rail>, mqs_<converter> beside the
     tool_runs(base, board)                # [(folder, kind, label)], the newest first: those that wrote a result
 """
 import datetime, glob, os, re
+# the folders' names are kicad2ems's (its `kicad2ems study` puts its runs there too): kicad2ems.runs
+from kicad2ems.api.frontend import board_name, run_dir, preview_dir, tool_dir, tool_preview_dir      # noqa: F401
 
 STAMP = '%Y%m%d_%H%M%S'
-
-
-def board_name(board):
-    """The name a board's folders take: its file name without the extension (and a resolved board's _board)."""
-    name = os.path.splitext(os.path.basename(board or 'board'))[0]
-    return name[:-len('_board')] if name.endswith('_board') else name
-
-
-def run_dir(base, board, now=None):
-    return os.path.join(base, f"{board_name(board)}_{(now or datetime.datetime.now()).strftime(STAMP)}")
-
-
-def preview_dir(base, board):
-    return os.path.join(base, f"{board_name(board)}_preview")
 
 
 def runs(base, board):
@@ -62,16 +50,6 @@ def tool_titles():
     return {name: a.label for name, a in analyses().items()}
 
 
-def _tag(text):
-    return ''.join(c if c.isalnum() else '_' for c in str(text or '')).strip('_') or 'run'
-
-
-def tool_dir(base, board, kind, name, now=None):
-    return os.path.join(base, f"{board_name(board)}_{kind}_{_tag(name)}_{(now or datetime.datetime.now()).strftime(STAMP)}")
-
-
-def tool_preview_dir(base, board, kind):
-    return os.path.join(base, f"{board_name(board)}_{kind}_preview")
 
 
 def tool_kind(folder):

@@ -258,6 +258,9 @@ class AnalysisPanel(QWidget):
         if self.proc is not None or (preview and not self.a.previewed):
             return
         vals = self.values()
+        asked = tuple(getattr(self, 'asked', None) or ())           # the questions this run is asked (the study's)
+        if asked:
+            vals = self.a.for_questions(vals, asked)
         unset = sorted(k for k in self.required if not str(vals.get(k, '')).strip())
         if unset:
             self.status.setText(f"Set {', '.join(k.replace('_', ' ') for k in unset)} before Run: "
@@ -274,6 +277,9 @@ class AnalysisPanel(QWidget):
             self.status.setText(str(e))
             return
         self.out, self._preview = os.path.abspath(out), preview
+        from kicad2ems.api.frontend import mark_run
+        from kicad2ems.study import provided
+        mark_run(self.out, self.a.name, asked or provided(self.a), preview)     # whose run this folder is
         self.log.clear()
         self.say('$ ' + ' '.join(['python', *argv[1:]] if os.path.basename(argv[0]).startswith('python') else argv))
         self._running(True)

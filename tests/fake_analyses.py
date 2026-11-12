@@ -1,6 +1,7 @@
 """Stand-ins for the analysis plugins, for the window's tests (as kicad2ems's standins.py is for the solvers): the
-same names, labels and order as pcbqs's four, so the window is the one a user has, but each a few lines whose
-"tool" (fake_tool.py) writes a small result at once. The window knows no analysis by name, so what is tested with
+same names, labels, order and questions as pcbqs's four, and a second engine for the temperature as
+kicad2ems-fem's Elmer is, so the window is the one a user has, but each a few lines whose "tool" (fake_tool.py)
+writes a small result at once. The window knows no analysis by name, so what is tested with
 these holds for any plugin; test_real_analyses.py runs pcbqs's own through the same window.
 
     install()                       before kicad2ems_gui is imported (conftest.py): the registry holds these
@@ -39,12 +40,14 @@ def write(kind, folder, preview=False, **v):
                    points=[['light', 1.0, 98.0], ['full', 4.0, 94.0]], model=v.get('model') or '')
         with open(os.path.join(folder, 'model.json'), 'w', encoding='utf-8') as fh:
             json.dump(dict(format=2, parts=[], board=dict(file=v.get('_board') or '')), fh)
-    elif kind == 'thermal':
+    elif kind in ('thermal', 'elmer_thermal'):
         losses = v.get('loss') or 'Q1=0.5'
         losses = losses if isinstance(losses, (list, tuple)) else [s for s in str(losses).replace(',', '\n').splitlines() if s.strip()]
         parts = {s.split('=')[0].strip(): float(s.split('=')[1]) for s in losses}
-        res = dict(parts={r: [w, 25.0 + 100.0 * w * scale] for r, w in parts.items()}, circuit=v.get('circuit') or '',
-                   film=float(v.get('film') or 10.0), hottest=25.0 + 100.0 * max(parts.values()) * scale)
+        more = 2.0 if kind == 'elmer_thermal' else 0.0              # the other engine: a little warmer
+        res = dict(parts={r: [w, 25.0 + 100.0 * w * scale + more] for r, w in parts.items()}, circuit=v.get('circuit') or '',
+                   film=float(v.get('film') or 10.0), hottest=25.0 + 100.0 * max(parts.values()) * scale + more,
+                   **(dict(tool='elmer') if more else {}))
         _temperature_dump(folder, res['hottest'])
     else:
         raise ValueError(kind)
@@ -80,7 +83,8 @@ def _temperature_dump(folder, hottest):
 
 
 class _Fake(Analysis):
-    api = (2, 5)
+    api = (2, 6)
+    engine = 'fake'
     OPTIONS = ()
 
     def check(self):
@@ -108,8 +112,16 @@ class _Fake(Analysis):
 class PowerIntegrity(_Fake):
     name, label, tool, order, result = 'pdn', 'Power integrity', 'fake.pdn', 20, 'pdn.json'
     about = "a rail's DC drop and the impedance its loads see"
+    provides = ('dc', 'pdn')                                        # one run answers both
     OPTIONS = (opt('rail', group='Rail'), opt('volts', 'float', 3.3, 'Rail'), opt('load', 'list', [], 'Rail'),
                opt('scale', 'float', 1.0, 'Rail'), opt('no_pdn', 'bool', False, 'PDN impedance'))
+
+    def for_questions(self, values, asked):
+        return values if 'pdn' in asked else dict(values, no_pdn=True)
+
+    def figures(self, folder):
+        r = self.read(folder) or {}
+        return [dict(name=f"drop {k}", value=d, unit='mV') for k, (_i, d) in (r.get('loads') or {}).items()]
 
     def tag(self, values):
         return str(values.get('rail') or 'rail').strip()
@@ -149,6 +161,7 @@ class NearField(_Fake):
     name, label, tool, order = 'mqs', 'Near field', 'fake.mqs', 30
     about = "a converter's input loop and its magnetic near field"
     previewed, finds = True, 'converters'
+    provides = ('nearfield',)
     result, preview_result = 'mqs.json', 'mqs-preview.json'
     OPTIONS = (opt('converter', group='Converter'), opt('vin', group='Converter'), opt('ground', default='GND', group='Converter'),
                opt('fsw', 'float', 5e5, 'Operating point'), opt('vin_volts', 'float', 0.0, 'Operating point'))
@@ -200,7 +213,8 @@ class Circuit(_Fake):
     name, label, tool, order, result = 'circuit', 'Circuit', 'fake.circuit', 40, 'circuit.json'
     about = 'ngspice runs of a circuit model'
     page, paths = True, ('model',)
-    OPTIONS = (opt('model', group='Circuit'), opt('copper', 'bool', False, 'Circuit'))
+    provides, fields = ('circuit',), 'fields'
+    OPTIONS = (opt('model', group='Circuit'), opt('copper', 'bool', False, 'Circuit'), opt('fields', 'bool', False, 'Circuit'))
 
     def tag(self, values):
         return os.path.splitext(os.path.basename(str(values.get('model') or 'circuit')))[0]
@@ -228,8 +242,18 @@ class Thermal(_Fake):
     name, label, tool, order, result = 'thermal', 'Thermal', 'fake.thermal', 50, 'thermal.json'
     about = "the board's steady temperature from its parts' losses"
     paths = ('circuit',)
+    provides = ('thermal',)
     OPTIONS = (opt('loss', 'list', [], 'Heat'), opt('circuit', group='Heat'), opt('film', 'float', 10.0, 'Air'),
                opt('scale', 'float', 1.0, 'Air'))
+
+    def owns(self, folder, preview=False):                          # the other engine writes a thermal.json too
+        r = None if preview else self.read(folder)
+        return r is not None and r.get('tool', '') == getattr(self, 'key', '')
+
+    def figures(self, folder):
+        r = self.read(folder) or {}
+        return ([dict(name='hottest', value=r['hottest'], unit='C')] if 'hottest' in r else []) + \
+               [dict(name=k, value=c, unit='C') for k, (_w, c) in (r.get('parts') or {}).items()]
 
     def tag(self, values):
         return 'losses' if str(values.get('loss') or '').strip() else 'circuit'
@@ -255,7 +279,13 @@ class Thermal(_Fake):
                                                               rows=[['F.Cu', r['hottest']]]))])
 
 
-FAKES = (PowerIntegrity, NearField, Circuit, Thermal)
+class Thermal3D(Thermal):
+    """A second engine for the temperature (as kicad2ems-fem's Elmer): the same question, its own settings."""
+    name, label, tool, order, engine, key = 'elmer_thermal', 'Temperature (Elmer)', 'fake.elmer', 60, 'Elmer', 'elmer'
+    about = "the board's steady temperature, in 3D"
+
+
+FAKES = (PowerIntegrity, NearField, Circuit, Thermal, Thermal3D)
 
 
 class _EP:

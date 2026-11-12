@@ -145,14 +145,17 @@ class SetupTab(QWidget):
                 holder.setLayout(row)
                 row.setContentsMargins(0, 0, 0, 0)
                 groups[group].addRow(label, holder)
-            elif key.startswith(TICK):                              # a solver: its name on the box, a whole row
-                w.setText(label)
+            elif key.startswith(TICK):                              # a solver: ticked on the list's RF rows (the
+                w.setText(label)                                    # box is its state: not in the form)
                 self.solver_labels[key[len(TICK):]] = label
-                groups[group].addRow(w)
+                w.setParent(self)
+                w.hide()
             else:
                 groups[group].addRow(label, w)
-            self.field_labels[key] = groups[group].labelForField(w)
+            self.field_labels[key] = None if key.startswith(TICK) else groups[group].labelForField(w)
             self.edits[key] = (w, kind)
+            if key == 'mode':                                       # the list's Antenna row says it
+                groups[group].setRowVisible(w, False)
         if G_DUMP in groups:                                        # an FDTD solver installed
             groups[G_DUMP].addRow('Add a dump', self._dump_builder())
         for top, need in SECTION_SOLVERS.items():                   # a solver's own section, when it also shares
@@ -197,56 +200,162 @@ class SetupTab(QWidget):
         self.scroll.setMinimumWidth(max(270, min(need, 420) + bar + 2 * self.scroll.frameWidth() + 2))
 
     def set_study(self, study, panels):
-        """The analyses' list under the board, and each analysis's settings {key: widget} (a page's own form,
-        moved here): the selected analysis's are the ones shown."""
+        """The questions' list under the board, and each run's settings {key: widget} ('rf': the solvers' own
+        sections; an analysis: its page's form, moved here): those of the selected question's engines are shown."""
         from .study import ANALYSES
         self.study = study
         holder = QWidget()
         hl = QVBoxLayout(holder)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.addWidget(study)
-        self.study_note = QLabel('ticked: Preview and Run include it')
+        self.study_note = QLabel("ticked: Preview and Run include it · Answered by: click to choose the engine, "
+                                 "or several to compare")
         self.study_note.setWordWrap(True)
         self.study_note.setEnabled(False)                           # greyed: a note, not a setting
         hl.addWidget(self.study_note)
-        self.study_section = Section('Analyses', holder, expanded=True)
+        self.study_section = Section('Questions', holder, expanded=True)
         self.study_slot.addWidget(self.study_section)
         at = self._left.indexOf(self.rf_box) + 1
+        self.engine_titles = {}                                     # an analysis: whose settings (several shown)
         for a in ANALYSES:
             w = panels.get(a.key)
             if w is None or a.key in self.panels:
                 continue
+            lab = QLabel(f"{a.tool}")
+            lab.setStyleSheet('font-weight: bold; color: gray; padding: 6px 4px 0px 4px;')
+            lab.hide()
+            self.engine_titles[a.key] = lab
+            self._left.insertWidget(at, lab)
             self.panels[a.key] = w
-            self._left.insertWidget(at, w)
-            at += 1
+            self._left.insertWidget(at + 1, w)
+            at += 2
+        study.set_solver_boxes(self.solver_boxes)
         study.selected.connect(self.show_settings)
         study.ticks_changed.connect(self._ticks)
+        study.fields_ticked.connect(self._fields_ticked)
+        mode = self.edits.get('mode', (None,))[0]
+        if mode is not None:                                        # a config's mode: the Antenna row's tick
+            mode.currentIndexChanged.connect(lambda _i: self._antenna_from_mode())
         self._fit_width()
-        self.show_settings(study.current())
-        self._solvers_text()
+        self.show_settings(study.current_question())
         self._ticks()
 
-    def show_settings(self, key):
-        """The settings of one analysis under the list, the others' hidden."""
-        from .study import BY_KEY
+    def show_settings(self, question):
+        """The settings of a question's engines under the list (the solvers' own sections for an RF question),
+        the others' hidden; with several engines, each under its name."""
+        if self.study is None:
+            return
+        keys = self.study.panels_of(question) if question in self.study.rows else ['rf']
         for k, w in self.panels.items():
-            w.setVisible(k == key)
-        a = BY_KEY.get(key)
-        self.panel_title.setText(f"{a.title} settings" if a else '')
-        self.panel_title.setVisible(a is not None and self.study is not None)
+            w.setVisible(k in keys)
+        labels = {e.name: e.label for e in self.study.engines.get(question, [])}
+        for k, lab in self.engine_titles.items():
+            lab.setText(f"{labels.get(k, k)}  ·  {BY_KEY[k].tool}" if k in BY_KEY else k)
+            lab.setVisible(k in keys and len(keys) > 1)
+        self.panel_title.setText(f"{self.study.labels.get(question, 'S-parameters')} settings")
+        self.panel_title.setVisible(True)
 
     def _solvers_text(self):
-        """The S-parameters analysis's With in the list: the solvers ticked under Solvers."""
+        """The RF rows of the list: the solvers ticked."""
         if self.study is not None:
-            on = [n for n, w in self.solver_boxes.items() if w.isChecked()]
-            self.study.set_tool('rf', ', '.join(on) if on else 'no solver ticked')
+            self.study.refresh()
 
     def _ticks(self):
-        from .study import ANALYSES
-        n = len(self.study.ticked())
-        self.study_section.head.setText(f"Analyses  ({n} of {len(ANALYSES)})")
+        asked = self.study.asked()
+        self.study_section.head.setText(f"Questions  ({len(asked)} asked)" if asked else 'Questions')
+        self._mode_from_antenna()
         if hasattr(self.win, 'ticks_changed'):
             self.win.ticks_changed()
+
+    def _mode_from_antenna(self):
+        """The Antenna row ticked is the run's antenna mode (the mode setting, which the form no longer shows)."""
+        mode = self.edits.get('mode', (None,))[0]
+        if mode is None or 'antenna' not in self.study.rows:
+            return
+        want = 'antenna' if 'antenna' in self.study.asked() else 'sparams'
+        if mode.currentText() != want and mode.findText(want) >= 0:
+            mode.setCurrentIndex(mode.findText(want))
+
+    def _antenna_from_mode(self):
+        """A config's mode = antenna (or a setting typed elsewhere): the Antenna row ticked with it."""
+        from PySide6.QtCore import Qt as _Qt
+        st = self.study
+        mode = self.edits.get('mode', (None,))[0]
+        if st is None or mode is None or 'antenna' not in st.rows or not st.can_ask('antenna'):
+            return
+        on = mode.currentText() == 'antenna'
+        it = st.rows['antenna']
+        if (it.checkState(0) == _Qt.Checked) != on:
+            it.setCheckState(0, _Qt.Checked if on else _Qt.Unchecked)
+
+    def dump_keys(self):
+        """The settings of the form that ask a solver for field dumps: {key: its solvers}."""
+        from kicad2ems.api.frontend import registry
+        from kicad2ems.study import dump_options
+        out = {}
+        for name, sv in registry().items():
+            for o in dump_options(sv):
+                if o.key in self.edits:
+                    out.setdefault(o.key, []).append(name)
+        return out
+
+    def _fields_ticked(self, question, on):
+        """A row's Fields tick. Ticked with no dump set: a default for each of its engines that can write one
+        (an FDTD solver: E on the first port's layer at the band's centre; mom25d: its currents there; an
+        analysis: its fields switch), which the settings let you change. Unticked: the settings stay, the run
+        leaves them out."""
+        from kicad2ems.api.frontend import default_fields
+        st = self.study
+        if st.is_solver(question):
+            if not on:
+                return
+            names, auto = st._solver_names(question)
+            if auto or not names:
+                names = [e.name for e in st.engines[question] if e.fields]
+            vals = self.values()
+            fmin = vals.get('fmin') or self.defaults.fmin
+            fmax = vals.get('fmax') or self.defaults.fmax
+            for name in names:
+                for key, value in default_fields(name, float(fmin), float(fmax), self.port_layer(),
+                                                 vals.get('sweep') or 'linear').items():
+                    w = self.edits.get(key, (None,))[0]
+                    if w is not None and not w.text().strip():
+                        w.setText(('; ' if key in SEMICOLON_LISTS else ',').join(map(str, value)))
+            return
+        for name in st.engines_for(question):
+            e = next(x for x in st.engines[question] if x.name == name)
+            box = self.fields_box(name, e.fields) if e.fields else None
+            if box is not None and box.isChecked() != bool(on):
+                box.setChecked(bool(on))
+
+    def fields_box(self, name, key):
+        """The tick of an analysis's fields switch: its panel's field of that option, or its page's own box."""
+        page = getattr(self.win, 'pages', {}).get(name)
+        box = page.w.get(key) if isinstance(getattr(page, 'w', None), dict) else getattr(page, key, None)
+        return box if isinstance(box, QCheckBox) else None
+
+    def follow_fields(self):
+        """An analysis's own fields switch, ticked in its settings: the list's Fields tick of its question."""
+        st = self.study
+        for q, es in st.engines.items():
+            for e in es:
+                box = self.fields_box(e.name, e.fields) if e.kind == 'analysis' and e.fields else None
+                if box is not None:
+                    box.toggled.connect(lambda on, q=q, n=e.name: n in st.engines_for(q) and st.set_fields(q, on))
+
+    def port_layer(self):
+        """The copper layer a default field dump is on: the window's board's first port's, else F.Cu."""
+        import glob
+        try:
+            shown = getattr(self.win.viewer, 'out', None) or ''
+            for path in sorted(glob.glob(os.path.join(glob.escape(shown), '*_board.json'))):
+                with open(path, encoding='utf-8') as fh:
+                    ports = json.load(fh).get('ports') or []
+                if ports and ports[0].get('layer'):
+                    return str(ports[0]['layer'])
+        except (OSError, ValueError, AttributeError):               # no board shown yet, or not a board file
+            pass
+        return 'F.Cu'
 
     def set_availability(self, info):
         """The machine's solvers (sysinfo): a solver that cannot run here says why on its tick box."""
@@ -307,7 +416,8 @@ class SetupTab(QWidget):
             on = bool(need & ticked)
             sec.setEnabled(on)
             names = ', '.join(self.solver_labels.get(n, n) for n in sorted(need) if n in self.solver_labels)
-            sec.setToolTip('' if on else f"for {names}: tick it under Solvers to use these settings")
+            sec.setToolTip('' if on else f"for {names}: choose it on the S-parameters row of the list to use these "
+                           "settings")
         from .runner import ANTENNA_FIELDS
         mode = self.edits.get('mode', (None,))[0]
         radiating = [n for n, sv in registry().items() if sv.capabilities.get('antenna', 'no').split(':')[0] != 'no']
@@ -320,7 +430,7 @@ class SetupTab(QWidget):
             lab = self.field_labels.get(key)
             if lab is not None:
                 lab.setEnabled(antenna)
-            w.setToolTip('' if antenna else "antenna mode only (Solvers: Mode = antenna, with " +
+            w.setToolTip('' if antenna else "antenna mode only (tick Antenna pattern in the list, with " +
                          " or ".join(self.solver_labels.get(n, n) for n in radiating) + ")")
 
     def _dump_builder(self):
@@ -933,6 +1043,8 @@ class ResultsTab(QWidget):
                 rep = analyses()[made[0]].report(folder)
             except Exception:                                       # a plugin's fault, a damaged file: no report
                 rep = None
+            if rep:
+                rep = self._with_engines(made[0], folder, rep)
             sets = load_sets(folder)
         self.analysis = made[0] if made is not None and (rep or sets) else None
         self.analysis_report, self.curve_sets = (rep, sets) if self.analysis else (None, [])
@@ -948,6 +1060,42 @@ class ResultsTab(QWidget):
         return self.analysis is not None
 
     load_curves = load_analysis                                     # its name before reports
+
+    def _with_engines(self, name, folder, report):
+        """A result's report with the other engines' answers to the same question beside it: a section 'Engines
+        compared' whose table has the figures they name (kicad2ems.api.frontend.compare_engines: this result and
+        each other engine's newest on this board) against the engines, and the difference where two give one.
+        Nothing to compare: the report as it is."""
+        from kicad2ems.api.frontend import compare_engines, engines, questions
+        try:
+            es, qs = engines(), questions()
+            me = es.get(name)
+            latest = dict(self.win.latest_results()) if hasattr(self.win, 'latest_results') else {}
+            latest[name] = folder
+            added = []
+            for q in (me.provides if me is not None else ()):
+                names = [e.name for e in es.values() if e.kind == 'analysis' and q in e.provides and e.name in latest]
+                if len(names) < 2:
+                    continue
+                c = compare_engines({n: latest[n] for n in names})
+                if not any(r['spread'] is not None for r in c['rows']):
+                    continue                                        # no figure two of them give
+                n = len(c['labels'])
+                rows = [[r['name'], r['unit'], *['' if v is None else v for v in r['values']],
+                         '' if r['spread'] is None else r['spread']] for r in c['rows']]
+                where = '; '.join(f"{lab}: {os.path.basename(latest[k])}" for lab, k in zip(c['labels'], c['engines']))
+                added.append(dict(title=f"Engines compared: {qs[q].label if q in qs else q}",
+                                  text=f"Each engine's newest result on this board ({where}). A figure both name is "
+                                       "the same quantity; one only an engine has is its own.",
+                                  table=dict(columns=['figure', 'unit', *c['labels'], 'difference'], rows=rows,
+                                             formats=[None, None, *['.4g'] * n, '.3g'])))
+            if not added:
+                return report
+            sections = list(report.get('sections') or [])
+            at = 1 if sections and not sections[0].get('title') else 0     # after its opening words
+            return dict(report, sections=sections[:at] + added + sections[at:])
+        except Exception:                                           # noqa: BLE001 (a plugin's figures, a damaged file)
+            return report
 
     def _pick_set(self, *_):
         if self.analysis is not None:
@@ -1266,6 +1414,8 @@ class MainWindow(QMainWindow):
         self._study_ready = True
         if config:
             self.setup.load(config)
+        else:                                                       # no config: the solvers as kicad2ems's default
+            self.setup.set_values({})                               # (auto), which the S-parameters row shows
 
     # ---- the study: the analyses, which a Run includes, their settings in the dock ----
     def _analyses(self):
@@ -1312,22 +1462,48 @@ class MainWindow(QMainWindow):
         for a in ANALYSES:                                          # listed without a plugin here (a test's)
             if a.key != RF and a.key not in self.pages and not a.planned:
                 self.study.set_available(a.key, False, 'not installed')
-        saved = self.qsettings.value('study/ticked')
-        saved = ['rf'] if saved is None else ([saved] if isinstance(saved, str) else list(saved))
-        self.study.set_ticked([k for k in saved if k in BY_KEY])
+        self.study.set_study(self._saved_study())
+        self.setup.follow_fields()
         self.study.opened.connect(self.show_analysis)
-        self.study.run_one.connect(lambda k: self.run_study(only=k))
+        self.study.run_one.connect(lambda q: self.run_study(only=q))
+
+    def _saved_study(self):
+        """The study of the last session: its questions, their engines and Fields ticks (the first time:
+        S-parameters, as Run always did; a session of before the questions: the runs it had ticked)."""
+        from kicad2ems.api.frontend import Study
+        raw = self.qsettings.value('study/asked')
+        if isinstance(raw, str) and raw:
+            try:
+                d = json.loads(raw)
+                return Study({str(q): [str(n) for n in names] for q, names in d.get('asked', {}).items()},
+                             {str(q): bool(v) for q, v in d.get('fields', {}).items()})
+            except (ValueError, AttributeError, TypeError):
+                pass
+        old = self.qsettings.value('study/ticked')
+        if old is None:
+            return Study({'sparams': []})
+        keys = [k for k in ([old] if isinstance(old, str) else list(old)) if k in BY_KEY]
+        asked = {}
+        for k in keys:
+            for q in self.study.rows:
+                if (k == RF and q == 'sparams') or (k != RF and any(e.name == k for e in self.study.engines[q])):
+                    asked.setdefault(q, [])
+        return Study(asked)
 
     def ticks_changed(self):
         if getattr(self, '_study_ready', False):
-            self.qsettings.setValue('study/ticked', self.study.ticked() or '')
+            st = self.study.study()
+            self.qsettings.setValue('study/asked', json.dumps(dict(asked=st.asked, fields=st.fields)))
             self._page_visibility()
-            if self.setup.path:                                     # an open config says which analyses its study
-                self.setup.touch()                                  # runs (without one, the next window remembers)
+            if self.setup.path:                                     # an open config says what its study asks
+                self.setup.touch()                                  # (without one, the next window remembers)
 
     def show_analysis(self, key):
-        """An analysis's page in front (S-parameters: Results), its settings in the dock."""
+        """A run's page in front (S-parameters: Results), the settings of a question it answers in the dock. key:
+        'rf' or an analysis; a question: its run."""
         self.study.select(key)
+        if key in self.study.rows:
+            key = self.study.run_of(key)
         if key in BY_KEY and not BY_KEY[key].planned:
             self.show_panel(BY_KEY[key].page or 'Results')
 
@@ -1337,19 +1513,18 @@ class MainWindow(QMainWindow):
                 or any(p.proc is not None for p in self.pages.values()))
 
     def run_study(self, preview=False, only=None):
-        """Run (preview) the ticked analyses, one after the other, each after what it starts from; only: that
-        analysis alone. One that cannot start (a setting missing) says why in the list, and the rest go on,
-        except those that start from it."""
+        """Run (preview) the questions asked: the runs they take, one after the other (the solvers' first, then
+        each analysis after what it starts from); only: that question (or run) alone. One that cannot start (a
+        setting missing) says why in the list, and the rest go on, except those that start from it."""
         if self.busy():
             QMessageBox.information(self, 'Busy', 'A run is going: stop it first')
             return
-        keys = [only] if only else run_order(self.study.ticked(), preview, self.study.available())
-        if only and (only in self.study.why or (preview and not BY_KEY[only].preview)):
-            keys = []
+        keys = self.study.jobs(preview, only=only)
         if not keys:
-            QMessageBox.warning(self, 'Study', 'None of the ticked analyses has a preview: tick S-parameters or '
-                                'Near field under Analyses' if preview else 'Tick an analysis under Analyses first')
+            QMessageBox.warning(self, 'Study', 'None of the questions asked has a preview: tick S-parameters or '
+                                'Converter near field in the list' if preview else 'Tick a question in the list first')
             return
+        self._only = only if only in self.study.rows else None      # the question a run of one alone answers
         self.queue, self._queue_preview, self._queue_stopped = list(keys), preview, False
         self.runtab.set_jobs([(k, BY_KEY[k].title) for k in keys])
         for k in keys:
@@ -1381,6 +1556,7 @@ class MainWindow(QMainWindow):
         if key == 'rf':
             return self.start(preview)
         page = self.pages[key]
+        page.asked = self.study.asked_of(key, getattr(self, '_only', None))     # what this run is asked
         page.start(preview=True) if preview else page.start()
         proc = page.proc
         if proc is None:                                            # the page said why on its status line
@@ -1651,8 +1827,8 @@ class MainWindow(QMainWindow):
         vm.addAction(a)
         rm = self.menuBar().addMenu('&Run')
         for text, key, slot in (('&Preview', 'Ctrl+P', self.preview), ('&Run', 'Ctrl+R', self.run),
-                                ('Run the selected &analysis alone', 'Ctrl+Shift+R',
-                                 lambda: self.run_study(only=self.study.current())),
+                                ('Run the selected &question alone', 'Ctrl+Shift+R',
+                                 lambda: self.run_study(only=self.study.current_question())),
                                 ('&Stop', 'Ctrl+.', self.stop)):
             a = QAction(text, self)
             a.setShortcut(QKeySequence(key))
@@ -1759,7 +1935,8 @@ class MainWindow(QMainWindow):
         return json.dumps(v, sort_keys=True, default=str)
 
     def new_estimates(self, est):
-        """A preview's estimates: beside the tick boxes and in the toolbar, for the settings as they are now."""
+        """A preview's estimates: beside the solvers in the S-parameters row's menu and in the toolbar, for the
+        settings as they are now."""
         self.setup.set_estimates(est)
         self._est_basis = self._basis() if est else None
         self.update_estimate()
@@ -1874,16 +2051,20 @@ class MainWindow(QMainWindow):
         return out
 
     def load_analyses(self, path=None):
-        """A config's [analysis] tables into the study (kicad2ems.api.frontend.read_analyses): the analyses it
-        runs ticked (it names none: S-parameters), each one's settings from its table, the others' cleared.
-        path None: a new study, nothing set. A table of an analysis not installed here is kept, and saved back."""
-        from kicad2ems.api.frontend import read_analyses
-        run, tables = None, {}
+        """A config's study into the list (kicad2ems.api.frontend.read_study: its [study] tables, else the
+        analyses [analysis] run names; neither: S-parameters) and each analysis's settings from its [analysis.
+        <name>] table, the others' cleared. path None: a new study, nothing set. A table of an analysis not
+        installed here is kept, and saved back, as is a question or an engine of the study this window lacks."""
+        from kicad2ems.api.frontend import read_analyses, read_study, Study
+        run, tables, study = None, {}, Study({'sparams': []})
+        if not self.busy():
+            self.study.clear_states()                               # another study: the last one's states are not its
         if path:
             try:
                 run, tables = read_analyses(path)
+                study = read_study(path, strict=False)
             except Exception as e:
-                self.statusBar().showMessage(f"{path}: its [analysis] tables could not be read ({e})", 8000)
+                self.statusBar().showMessage(f"{path}: its study could not be read ({e})", 8000)
         base = os.path.dirname(os.path.abspath(path)) if path else os.getcwd()
         loading, self.setup._loading = self.setup._loading, True
         try:
@@ -1899,17 +2080,45 @@ class MainWindow(QMainWindow):
                 page.set_own(tab.pop('board', None), tab.pop('out', None))
                 page.set_values(tab)
             self.extra_analyses = {k: v for k, v in tables.items() if k not in self.pages}
-            self.study.set_ticked([k for k in (run if run is not None else [RF]) if k in BY_KEY])
+            self.extra_study = Study({q: n for q, n in study.asked.items() if q not in self.study.rows
+                                      or not self.study.engines[q]},
+                                     {q: v for q, v in study.fields.items() if q not in self.study.rows})
+            fields = dict(study.fields)
+            for q in study.asked:                                   # a config of before the Fields ticks: what
+                if q not in fields and q in self.study.rows:        # its settings ask for
+                    fields[q] = self._fields_set(q, study)
+            self.study.set_study(Study(study.asked, fields, study.said))
+            self.setup._antenna_from_mode()                         # mode = "antenna" in the settings
         finally:
             self.setup._loading = loading
-        first = (self.study.ticked() or [RF])[0]                    # the study's first analysis: its settings shown,
-        self.study.select(first)                                    # its editor (a circuit's) in front
-        if path and first in self.editors:
-            self.show_panel(BY_KEY[first].page)
+        asked = list(self.study.asked())
+        first = asked[0] if asked else 'sparams'                    # the study's first question: its settings
+        self.study.select(first)                                    # shown, its editor (a circuit's) in front
+        run = self.study.run_of(first) if first in self.study.rows else RF
+        if path and run in self.editors:
+            self.show_panel(BY_KEY[run].page)
+
+    def _fields_set(self, question, study):
+        """Whether a question's settings ask for field dumps, for a study that does not say (a config written
+        before the list had the tick): a solver's dump setting filled in, an analysis's fields switch on."""
+        st = self.study
+        if st.is_solver(question):
+            if question == 'lines':
+                return False
+            vals = self.setup.values()
+            return any(vals.get(k) for k in self.setup.dump_keys())
+        for name in (study.asked.get(question) or st.engines_for(question)):
+            e = next((x for x in st.engines.get(question, []) if x.name == name), None)
+            box = self.setup.fields_box(name, e.fields) if e is not None and e.fields else None
+            if box is not None and box.isChecked():
+                return True
+        return False
 
     def save_analyses(self, path):
-        """The study's analyses into a config's [analysis] tables: the ones ticked, each one's settings that are
-        set. A study of S-parameters alone with nothing else set writes none."""
+        """The study into a config: what it asks and who answers as its [study] tables (kicad2ems.api.frontend.
+        write_study), each analysis's settings that are set as its [analysis.<name>] table. A study of
+        S-parameters alone with nothing else set writes neither."""
+        from kicad2ems.api.frontend import write_study, Study
         from .runner import write_analyses
         base = os.path.dirname(os.path.abspath(path))
         tables = dict(getattr(self, 'extra_analyses', {}))
@@ -1917,8 +2126,13 @@ class MainWindow(QMainWindow):
             tab = page.save_settings(path) if key in self.editors else config_values(page, base)
             if tab:
                 tables[key] = tab
-        run = self.study.ticked()
-        write_analyses(path, None if run == [RF] and not tables else run, tables)
+        write_analyses(path, None, tables)                          # [study] says which run: no [analysis] run
+        st = self.study.study()
+        extra = getattr(self, 'extra_study', None)
+        if extra is not None and extra.asked:                       # what this window could not show: kept
+            st = Study({**st.asked, **extra.asked}, {**st.fields, **extra.fields}, 'study')
+        plain = list(st.asked) == ['sparams'] and not st.fields.get('sparams') and not tables
+        write_study(path, None if plain else st)
 
     def apply_suggestion(self, source, s):
         """What one analysis's result proposes for another (Analysis.suggest): those settings into the other's
@@ -2039,10 +2253,15 @@ class MainWindow(QMainWindow):
         if not vals.get('board'):
             return no('Setup', 'Choose a board first')
         if not preview and vals.get('solvers') == []:
-            return no('Setup', 'Choose a solver under Solvers (or Preview)')
+            return no('Setup', "Choose a solver on the list's S-parameters row (or Preview)")
+        from kicad2ems.api.frontend import mark_run
         from .runfolders import run_dir, preview_dir
+        if not preview and not self.study.fields_on(RF):            # no Fields tick on an RF row: the run leaves
+            for k in self.setup.dump_keys():                        # the dumps out (the settings keep them)
+                vals.pop(k, None)
         base = self.out_dir(vals)                                   # each run in a folder of its own
         self.current = Run(vals, preview_dir(base, vals['board']) if preview else run_dir(base, vals['board']), preview)
+        mark_run(self.current.out, RF, self.study.asked_of(RF, getattr(self, '_only', None)) or ('sparams',), preview)
         self.files, self._traceback, self._stopping = [], False, False
         self.runtab.reset()
         self.tail = EventTail(self.current.events)
@@ -2142,7 +2361,8 @@ class MainWindow(QMainWindow):
         self.acts['Report'].setEnabled(bool(self.results.report))
         if self.current.preview and self.system.load_estimates(out):
             self.new_estimates(self.system.est)
-            self.statusBar().showMessage('preview done: estimates beside the solvers (? for details)', 8000)
+            self.statusBar().showMessage("preview done: estimates beside the solvers in the S-parameters row's menu "
+                                         "(? under Solvers for details)", 8000)
         if code:
             self.runtab.stage.setText(f"ended with code {code} - see the log")
             self.show_panel('Run')

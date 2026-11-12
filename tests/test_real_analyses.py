@@ -24,6 +24,7 @@ def window(tmp_path, monkeypatch):
     for module in (study, gui):                 # the stand-ins', in a run of every test
         monkeypatch.setattr(module, 'ANALYSES', listed)
         monkeypatch.setattr(module, 'BY_KEY', {a.key: a for a in listed})
+    monkeypatch.setattr(study, 'TREE', study.tree())                # and the questions with their engines
     app = application()
     QSettings('kicad2ems', 'gui').clear()
     w = MainWindow()
@@ -41,8 +42,10 @@ def test_the_panels_are_pcbqs_s_options(window):
     assert {'rail', 'load', 'plane_min', 'no_pdn'} <= set(pdn.w) and list(pdn.sections)[:2] == ['Files', 'Rail']
     assert mqs.find_btn.text() == 'Find converters' and {'converter', 'fsw', 'heights'} <= set(mqs.w)
     assert list(th.sections) == ['Files', 'Heat', 'Parts', 'Air', 'Solver'] and th.w['film'].placeholderText() == '10.0'
-    assert [w.study.rows[k].text(1) for k in ('pdn', 'mqs', 'circuit', 'thermal')] == \
-        ['pcbqs.pdn', 'pcbqs.mqs', 'pcbqs.circuit', 'pcbqs.thermal']
+    by = {q: w.study.rows[q].text(1).replace('  ▾', '') for q in ('dc', 'pdn', 'nearfield', 'circuit', 'thermal')}
+    assert set(by.values()) == {'pcbqs'}                            # pcbqs's four alone in this registry
+    assert [e.name for e in w.study.engines['dc']][0] == 'pdn' and w.study.run_of('nearfield') == 'mqs'
+    assert w.study.rows['pdn'].toolTip(1).startswith(('pcbqs.pdn', 'click to choose'))
     assert {'/Circuits/Passive and rectifiers', '/Circuits/DC-DC converters', '/Circuits/Bridges'} <= set(w.example_menus)
     assert w.example_sources['/Circuits'] == {'circuit'}
     names = [a.text() for a in w.example_menus['/Circuits/DC-DC converters'].actions()]
@@ -86,6 +89,8 @@ def test_a_circuit_example_runs_to_its_temperatures(window, tmp_path):
     w._pick_run(w.runs_box.itemData(i))                             # the circuit: its waveforms, its points
     assert r.kind() == 'circuit' and r.modes() == ['Plots', 'Report', 'Tables'] and r.set_box.count() >= 1
     assert 'Points' in [t for t, _ in r.reportview._tables]
-    assert w.setup.save()                                           # the study, saved: what it runs, its model
+    assert w.setup.save()                                           # the study, saved: what it asks, its model
+    from kicad2ems.api.frontend import read_study
     run, tables = read_analyses(w.setup.path)
-    assert run == ['circuit', 'thermal'] and tables['circuit'] == dict(model=str(folder / '01_rc_filter.json'))
+    assert run is None and tables['circuit'] == dict(model=str(folder / '01_rc_filter.json'))
+    assert list(read_study(w.setup.path).asked) == ['circuit', 'thermal']

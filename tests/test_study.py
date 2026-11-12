@@ -59,40 +59,169 @@ def window(tmp_path, monkeypatch):
 
 
 def test_study_dock(window):
-    """The board above the list, each analysis's settings a panel made from its plugin's options and shown when it
-    is selected, no Run button of its own, the ticks kept for the next window."""
+    """The board above the list; the list: the questions by group, who answers each, its state; the settings of
+    the selected question's engines under it (a panel made from each plugin's options), no Run button of its
+    own; what is asked kept for the next window."""
     from PySide6.QtCore import Qt
     from kicad2ems_gui.analysispanel import AnalysisPanel
     w, app, MainWindow = window
-    st = w.setup
-    assert w.settings_dock.windowTitle() == 'Study'
-    assert [st.study.topLevelItem(i).text(0) for i in range(st.study.topLevelItemCount())] == \
-        ['S-parameters', 'Power integrity', 'Near field', 'Circuit', 'Thermal']
-    assert st.study.ticked() == ['rf'] and st.study.current() == 'rf'       # as Run always did
-    assert set(st.panels) == {'rf', 'pdn', 'thermal', 'mqs', 'circuit'} and list(w.pages) == ['pdn', 'mqs', 'circuit', 'thermal']
-    assert not st.rf_box.isHidden() and st.panels['pdn'].isHidden()
-    assert st.sections['Board'].parentWidget() is not st.rf_box              # the board: for every analysis
+    st, tree = w.setup, w.study
+    assert w.settings_dock.windowTitle() == 'Study' and st.study is tree
+    groups = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    assert [g.text(0) for g in groups] == ['RF', 'Power', 'Thermal']
+    assert [[g.child(k).text(0) for k in range(g.childCount())] for g in groups] == [
+        ['S-parameters', 'Antenna pattern', 'Trace impedances'],
+        ['Rail drop', 'Rail impedance', 'Converter near field', 'Circuit', 'Capacitance'], ['Temperature']]
+    assert tree.headerItem().text(1) == 'Answered by' and tree.headerItem().text(2) == 'Fields'
+    by = lambda q: tree.rows[q].text(1).replace('  ▾', '')
+    assert [by(q) for q in ('dc', 'pdn', 'nearfield', 'circuit', 'thermal')] == ['fake'] * 5
+    assert tree.rows['thermal'].text(1).endswith('▾') and not tree.rows['dc'].text(1).endswith('▾')    # two engines
+    assert tree.rows['capacitance'].text(3) == 'not installed' and 'kicad2ems[fem]' in tree.rows['capacitance'].toolTip(3)
+    assert not tree.rows['capacitance'].flags() & Qt.ItemIsUserCheckable
+    assert tree.asked() == dict(sparams=[]) and tree.ticked() == ['rf'] and tree.current() == 'rf'     # as Run always did
+    assert tree.current_question() == 'sparams' and '1 asked' in st.study_section.head.text()
+    assert set(st.panels) == {'rf', 'pdn', 'thermal', 'elmer_thermal', 'mqs', 'circuit'}
+    assert list(w.pages) == ['pdn', 'mqs', 'circuit', 'thermal', 'elmer_thermal']
+    assert not st.rf_box.isHidden() and st.panels['pdn'].isHidden() and st.panel_title.text() == 'S-parameters settings'
+    assert st.sections['Board'].parentWidget() is not st.rf_box              # the board: for every question
     assert st.sections['Frequency'].parentWidget() is st.rf_box
-    w.study.select('pdn')
-    assert st.rf_box.isHidden() and not st.panels['pdn'].isHidden()
-    assert st.panel_title.text() == 'Power integrity settings'
+    tree.select('dc')
+    assert st.rf_box.isHidden() and not st.panels['pdn'].isHidden() and tree.current() == 'pdn'
+    assert st.panel_title.text() == 'Rail drop settings' and st.engine_titles['pdn'].isHidden()        # one engine
     pdn, mqs = w.pages['pdn'], w.pages['mqs']
     assert st.panels['pdn'] is pdn and isinstance(pdn, AnalysisPanel) and pdn.isAncestorOf(pdn.w['rail'])
     assert pdn.run_btn.isHidden() and mqs.run_btn.isHidden() and w.pages['circuit'].run_btn.isHidden()
     assert not mqs.find_btn.isHidden()                               # it fills the form: it stays
     assert st.panels['circuit'].isAncestorOf(w.pages['circuit'].frequencies)
     assert pdn.board.placeholderText() == "the study's board"
-    assert w.study.rows['thermal'].text(1) == 'fake.thermal' and 'thermal' not in w.study.why
     assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']    # no page per analysis: the
-    w.study.rows['pdn'].setCheckState(0, Qt.Checked)                             # circuit's editor alone
-    assert w.study.ticked() == ['rf', 'pdn'] and '2 of 5' in st.study_section.head.text()
-    w.setup.set_values(dict(solvers=['mom25d']))
-    assert w.study.rows['rf'].text(1) == 'mom25d'
+    tree.rows['dc'].setCheckState(0, Qt.Checked)                                 # circuit's editor alone
+    assert tree.asked() == dict(sparams=[], dc=[]) and tree.ticked() == ['rf', 'pdn'] and '2 asked' in st.study_section.head.text()
+    assert tree.asked_of('pdn') == ('dc',) and tree.asked_of('rf') == ('sparams',)
+    tree.rows['pdn'].setCheckState(0, Qt.Checked)                    # the rail's impedance too: the same run
+    assert tree.ticked() == ['rf', 'pdn'] and tree.asked_of('pdn') == ('dc', 'pdn')
     w.close()
-    w2 = MainWindow()                                               # the next window: the same ticks
-    assert w2.study.ticked() == [k for k in ('rf', 'pdn') if k not in w2.study.why]
+    w2 = MainWindow()                                               # the next window: the same questions
+    assert list(w2.study.asked()) == ['sparams', 'dc', 'pdn'] and w2.study.ticked() == ['rf', 'pdn']
     w2.system.stop()
     w2.meters.stop()
+
+
+def test_who_answers_is_chosen_on_the_row(window):
+    """Answered by: a menu of the question's engines, 'auto' first; several ticked run and are compared. The
+    settings shown are those of the engines chosen, each under its name; an engine that cannot run here is not
+    offered, and a question nobody can answer is greyed."""
+    from PySide6.QtCore import Qt
+    w, app, _ = window
+    st, tree = w.setup, w.study
+    w.show()
+    app.processEvents()
+    assert [e.name for e in tree.engines['thermal']] == ['thermal', 'elmer_thermal'] and tree.engines_for('thermal') == ['thermal']
+    texts = lambda q: [(a.text(), a.isChecked(), a.isEnabled()) for a in tree.engine_menu(q).actions() if not a.isSeparator()]
+    assert texts('thermal') == [('auto (fake)', True, True), ('fake  (fake.thermal)', False, True), ('Elmer  (fake.elmer)', False, True)]
+    tree.select('thermal')
+    assert not st.panels['thermal'].isHidden() and st.panels['elmer_thermal'].isHidden()
+    tree.rows['thermal'].setCheckState(0, Qt.Checked)
+    tree.choose('thermal', 'elmer_thermal', True)                   # with the default: both, compared
+    assert tree.choice['thermal'] == ['thermal', 'elmer_thermal'] and tree.rows['thermal'].text(1) == 'fake + Elmer  ▾'
+    assert tree.ticked() == ['rf', 'thermal', 'elmer_thermal'] and tree.asked()['thermal'] == ['thermal', 'elmer_thermal']
+    assert not st.panels['thermal'].isHidden() and not st.panels['elmer_thermal'].isHidden()
+    assert not st.engine_titles['thermal'].isHidden() and st.engine_titles['elmer_thermal'].text() == 'Elmer  ·  fake.elmer'
+    assert texts('thermal')[0][1] is False and [t[1] for t in texts('thermal')[1:]] == [True, True]
+    tree.choose('thermal', 'thermal', False)                        # Elmer alone
+    assert tree.ticked() == ['rf', 'elmer_thermal'] and tree.current() == 'elmer_thermal' and st.panels['thermal'].isHidden()
+    tree.set_state('elmer_thermal', 'running')
+    tree.set_state('thermal', 'done 10:00')                         # not this question's engine now: not shown
+    assert tree.rows['thermal'].text(3) == 'running' and tree.rows['thermal'].font(3).bold()
+    tree.choose('thermal', 'thermal', True)
+    tree.set_state('elmer_thermal', 'failed (exit 2)', 'bad')
+    assert tree.rows['thermal'].text(3) == 'fake done 10:00 · Elmer failed'
+    assert tree.rows['thermal'].toolTip(3) == 'fake: done 10:00\nElmer: failed (exit 2)'
+    tree.choose('thermal', 'auto', True)                            # back to its default
+    assert tree.choice['thermal'] == [] and tree.ticked() == ['rf', 'thermal'] and tree.rows['thermal'].text(1) == 'fake  ▾'
+    # an engine that cannot run here: the other answers; neither: the question is greyed, unticked
+    tree.set_available('thermal', False, 'no ngspice')
+    assert tree.engines_for('thermal') == ['elmer_thermal'] and tree.ticked() == ['rf', 'elmer_thermal']
+    assert texts('thermal')[0][0] == 'auto (Elmer)' and texts('thermal')[1][2] is False
+    tree.set_available('elmer_thermal', False, 'no Elmer')
+    it = tree.rows['thermal']
+    assert it.checkState(0) == Qt.Unchecked and it.text(3) == 'not available' and tree.ticked() == ['rf']
+    assert it.toolTip(3) == 'fake: no ngspice; Elmer: no Elmer' and not it.flags() & Qt.ItemIsUserCheckable
+    assert not st.panels['thermal'].isHidden() and not st.panels['elmer_thermal'].isHidden()     # still to read
+    tree.set_available('thermal', True)
+    assert it.flags() & Qt.ItemIsUserCheckable and it.text(3) == ''
+    w.close()
+
+
+def test_the_solvers_are_ticked_on_the_rf_rows(window):
+    """The solvers' tick boxes are off the form: the S-parameters row's menu sets them ('auto' among them), the
+    Antenna row is the run's antenna mode, the Trace impedances row the line model; the three are one run."""
+    from PySide6.QtCore import Qt
+    w, app, _ = window
+    st, tree = w.setup, w.study
+    assert all(b.isHidden() and b.parentWidget() is st for b in st.solver_boxes.values())
+    assert st.edits['mode'][0].isHidden() and 'Solvers' in st.sections      # the section keeps the driven ports
+    names = [a.text() for a in tree.engine_menu('sparams').actions()]
+    assert names[0].startswith('auto') and names[1:4] == ['openEMS (FDTD)', 'mom25d (MoM)', 'gfdtd (GPU FDTD)']
+    assert tree.rows['sparams'].text(1) == 'auto  ▾' and st.values().get('solvers') is None
+    tree.choose('sparams', 'auto', False)
+    tree.choose('sparams', 'mom25d', True)
+    tree.choose('sparams', 'qucs', True)
+    assert tree.rows['sparams'].text(1) == 'mom25d + line model  ▾' and tree.rows['lines'].text(1) == 'line model  ▾'
+    assert st.values()['solvers'] == ['mom25d', 'qucs'] and st.dirty             # a setting of the form, as any
+    assert st.sections['mom25d'].isEnabled() and not st.parents['FDTD'][0].isEnabled()      # a solver's section: its tick
+    w.setup.set_values(dict(solvers=['openems']))                   # a config's solvers: the rows show them
+    assert tree.rows['sparams'].text(1) == 'openEMS  ▾' and tree.rows['antenna'].text(1) == 'openEMS  ▾'
+    # the antenna: a row of its own, the run's mode
+    assert st.values().get('mode') in (None, '', 'sparams')
+    tree.rows['antenna'].setCheckState(0, Qt.Checked)
+    assert st.values()['mode'] == 'antenna' and tree.ticked() == ['rf'] and tree.asked_of('rf') == ('sparams', 'antenna')
+    assert [a.text() for a in tree.engine_menu('antenna').actions()][0].startswith('auto')
+    assert not any(a.text().startswith('line model') for a in tree.engine_menu('antenna').actions())
+    assert any(a.text().startswith('line model') for a in tree.engine_menu('sparams').actions())
+    tree.rows['antenna'].setCheckState(0, Qt.Unchecked)
+    assert st.values().get('mode') in (None, '', 'sparams')
+    w.setup.set_values(dict(solvers=['openems'], mode='antenna'))   # a config in antenna mode: the row ticked
+    assert 'antenna' in tree.asked()
+    tree.rows['sparams'].setCheckState(0, Qt.Unchecked)
+    tree.rows['antenna'].setCheckState(0, Qt.Unchecked)
+    assert tree.ticked() == [] and tree.asked() == {}
+    tree.rows['lines'].setCheckState(0, Qt.Checked)                 # the line model alone: still kicad2ems's run
+    assert tree.ticked() == ['rf'] and tree.asked_of('rf') == ('lines',)
+    w.setup.dirty = False
+    w.close()
+
+
+def test_the_fields_tick(window):
+    """Fields: a tick on the rows whose engines can write field dumps. Ticked with none set, a default goes into
+    the settings (an FDTD solver's dump, mom25d's current maps, an analysis's switch); unticked, the settings
+    stay and the run leaves the dumps out."""
+    from PySide6.QtCore import Qt
+    w, app, _ = window
+    st, tree = w.setup, w.study
+    box = lambda q: None if tree.rows[q].data(2, Qt.CheckStateRole) is None else tree.rows[q].checkState(2)
+    assert box('sparams') == Qt.Unchecked and box('lines') is None and box('thermal') is None and box('dc') is None
+    assert box('circuit') == Qt.Unchecked                           # its plugin has a fields switch
+    w.setup.set_values(dict(solvers=['openems', 'mom25d'], fmin=2.0, fmax=6.0))
+    assert st.edits['dump'][0].text() == '' and tree.fields_on('rf') is False
+    tree.rows['sparams'].setCheckState(2, Qt.Checked)
+    assert st.edits['dump'][0].text() == 'E@F.Cu@4' and st.edits['mom_dump'][0].text() == '4.0' and tree.fields_on('rf')
+    st.edits['dump'][0].setText('H@In1.Cu@3')                       # changed in the settings: kept
+    tree.rows['sparams'].setCheckState(2, Qt.Unchecked)
+    tree.rows['sparams'].setCheckState(2, Qt.Checked)
+    assert st.edits['dump'][0].text() == 'H@In1.Cu@3' and tree.study().fields == dict(sparams=True)
+    w.setup.set_values(dict(solvers=['qucs']))                      # the line model alone: nothing to dump
+    assert box('sparams') is None and not tree.fields_on('rf')
+    tree.rows['circuit'].setCheckState(0, Qt.Checked)
+    tree.rows['circuit'].setCheckState(2, Qt.Checked)
+    page = w.pages['circuit']                                       # its editor's own switch: the same tick
+    assert page.fields.isChecked() and tree.fields_on('circuit') and tree.study().fields['circuit'] is True
+    tree.rows['circuit'].setCheckState(2, Qt.Unchecked)
+    assert not page.fields.isChecked() and tree.study().fields['circuit'] is False
+    page.fields.setChecked(True)                                    # ticked in its settings: the row follows
+    assert box('circuit') == Qt.Checked and tree.fields['circuit'] is True
+    w.setup.dirty = False
+    w.close()
 
 
 def test_an_analysis_page_in_front_selects_its_settings(window):
@@ -158,7 +287,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     w.run()
     assert started == [('rf', False), ('pdn', False)] and w.job == 'pdn'
     assert w.study.state('rf') == 'not started: Choose a board first'
-    assert w.study.rows['rf'].text(2) == 'not started'               # the column: short, the tooltip whole
+    assert w.study.rows['sparams'].text(3) == 'not started'          # the column: short, the tooltip whole
     # Stop: the queued ones are not run
     w._job_done('pdn', 0)
     pump()
@@ -190,7 +319,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     pump()
     w.study.set_ticked([])
     w.run()
-    assert 'Tick an analysis' in said[-1] and w.job is None
+    assert 'Tick a question' in said[-1] and w.job is None
     w.close()
 
 
@@ -244,6 +373,51 @@ def test_an_analysis_runs_from_the_window(window, tmp_path):
     assert not cuts.log.isChecked() and cuts.lim == pytest.approx((40.0, 75.0), abs=0.6)    # its own range: not from 0
     assert cuts.cbar.axis.labelText == 'T (°C)' and 'steady' in cuts.frame_lab.text()
     assert w.latest_results() == dict(pdn=pdn.out, thermal=th.out)
+    w.close()
+
+
+def test_two_engines_of_one_question_run_and_are_compared(window, tmp_path):
+    """The temperature asked of both its engines: each runs with its own settings into a folder that says whose it
+    is; the Results page lays the figures they name alike side by side, with the difference; the config keeps who
+    was asked."""
+    from PySide6.QtCore import Qt
+    from kicad2ems.api.frontend import analysis_of, read_study, run_mark
+    w, app, _ = window
+    w.show()
+    tree = w.study
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    cfg = tmp_path / 'b.toml'
+    cfg.write_text('board = "b.kicad_pcb"\n\n[study]\nrun = ["dc", "thermal"]\n[study.thermal]\nengine = ["fake", "Elmer"]\n\n'
+                   '[analysis.pdn]\nrail = "+3V3"\n\n[analysis.thermal]\nloss = ["Q1=0.5", "L1=0.2"]\n\n'
+                   '[analysis.elmer_thermal]\nloss = ["Q1=0.5", "L1=0.2"]\n')
+    assert w.setup.load(str(cfg))
+    assert tree.asked() == dict(dc=[], thermal=['thermal', 'elmer_thermal']) and tree.ticked() == ['pdn', 'thermal', 'elmer_thermal']
+    assert tree.current_question() == 'dc' and tree.rows['thermal'].text(1) == 'fake + Elmer  ▾'
+    pdn, th, el = (w.pages[k] for k in ('pdn', 'thermal', 'elmer_thermal'))
+    w.run()
+    run_to_the_end(w, app)
+    assert all(tree.state(k).startswith('done ') for k in ('pdn', 'thermal', 'elmer_thermal'))
+    assert tree.rows['thermal'].text(3).startswith('done ') and 'Elmer: done' in tree.rows['thermal'].toolTip(3)
+    assert run_mark(pdn.out) == dict(engine='pdn', questions=('dc',), preview=False)      # the drop alone was asked
+
+    assert analysis_of(th.out) == ('thermal', False) and analysis_of(el.out) == ('elmer_thermal', False)
+    assert os.path.basename(el.out).startswith('b_elmer_thermal_losses_') and run_mark(el.out)['questions'] == ('thermal',)
+    r = w.results                                                   # the last one's report, the other beside it
+    assert r.kind() == 'elmer_thermal' and r.modes() == ['Report', 'Tables']
+    titles = [t for t, _ in r.reportview._tables]
+    assert titles[0] == 'Engines compared: Temperature' and titles[1:] == ['Parts', 'Layers']
+    table = r.reportview._tables[0][1]
+    assert table['columns'] == ['figure', 'unit', 'fake', 'Elmer', 'difference']
+    assert table['rows'] == [['hottest', 'C', 75.0, 77.0, 2.0], ['Q1', 'C', 75.0, 77.0, 2.0], ['L1', 'C', 45.0, 47.0, 2.0]]
+    text = r.reportview.page.toPlainText()
+    assert 'Engines compared: Temperature' in text and os.path.basename(th.out) in text
+    w._pick_run(pdn.out)                                            # a question one engine answered: nothing beside it
+    assert [t for t, _ in r.reportview._tables] == ['Loads at DC']
+    tree.choose('thermal', 'thermal', False)                        # Elmer alone, saved as such
+    assert w.setup.dirty and w.setup.save()
+    st = read_study(str(cfg))
+    assert st.asked == dict(dc=[], thermal=['elmer_thermal']) and '[analysis]\nrun' not in cfg.read_text()
     w.close()
 
 

@@ -63,10 +63,15 @@ def test_a_config_opens_as_a_study_and_saves_back(window, tmp_path):
     assert mqs.values()['converter'] == '' and w.extra_analyses == dict(cfd=dict(fans=2))
     pdn.w['rail'].setText('+5V')                                    # an edit by hand: unsaved
     assert w.setup.dirty
-    w.study.rows['mqs'].setCheckState(0, __import__('PySide6.QtCore', fromlist=['Qt']).Qt.Checked)
+    w.study.rows['nearfield'].setCheckState(0, __import__('PySide6.QtCore', fromlist=['Qt']).Qt.Checked)
+    assert w.study.ticked() == ['pdn', 'mqs', 'thermal']
     assert w.setup.save() and not w.setup.dirty
+    from kicad2ems.api.frontend import read_study
     run, tables = read_analyses(str(cfg))
-    assert run == ['pdn', 'mqs', 'thermal'] and tables['cfd'] == dict(fans=2)            # not installed: kept
+    assert run is None and tables['cfd'] == dict(fans=2)            # [study] says what runs now; not installed: kept
+    st = read_study(str(cfg))                                       # the rail tool answered both its questions
+    assert st.said == 'study' and st.fields == {}                   # the analyses the config named: kept by name
+    assert st.asked == dict(dc=['pdn'], pdn=['pdn'], nearfield=[], thermal=['thermal'])
     assert tables['pdn'] == dict(board='other.kicad_pcb', rail='+5V', load=['U1=2', 'U2=1'])    # the panel's own: as written
     assert tables['thermal'] == dict(circuit=str(tmp_path / 'out' / 'run'), film=12.0)
     assert 'circuit = "out/run"' in cfg.read_text() and 'board = "other.kicad_pcb"' in cfg.read_text()    # relative
@@ -74,7 +79,7 @@ def test_a_config_opens_as_a_study_and_saves_back(window, tmp_path):
     plain.write_text('board = "b.kicad_pcb"\n')                     # S-parameters, the panels cleared
     assert w.setup.load(str(plain))
     assert w.study.ticked() == ['rf'] and pdn.values()['rail'] == '' and pdn.board.text() == '' and w.extra_analyses == {}
-    assert w.setup.save() and '[analysis' not in plain.read_text()  # and it stays a plain one
+    assert w.setup.save() and '[analysis' not in plain.read_text() and '[study' not in plain.read_text()   # it stays plain
     w.study.set_ticked(['rf', 'pdn'])
     assert w.setup.dirty                                            # an open config: its ticks are its
     w.setup.dirty = False

@@ -21,7 +21,8 @@ def test_tool_run_folders(tmp_path):
     a = runfolders.tool_dir(base, board, 'pdn', '+3V3', now=t0)
     assert os.path.basename(a) == 'b_pdn_3V3_20261111_013136'
     assert runfolders.tool_preview_dir(base, board, 'mqs').endswith('b_mqs_preview')
-    assert runfolders.tool_titles() == dict(pdn='Power integrity', mqs='Near field', circuit='Circuit', thermal='Thermal')
+    assert runfolders.tool_titles() == dict(pdn='Power integrity', mqs='Near field', circuit='Circuit', thermal='Thermal',
+                                            elmer_thermal='Temperature (Elmer)')
     _pdn(a)
     os.makedirs(runfolders.tool_dir(base, board, 'pdn', 'X', now=t0.replace(second=40)))     # stopped: no result
     _mqs(str(tmp_path / 'mqs_U3'))                                  # the old place: beside the board
