@@ -77,6 +77,7 @@ def test_cancelled_import_does_not_start_or_overwrite_invalid_json(tab,tmp_path)
     assert tab.editor.toPlainText()=='{ unfinished' and 'Fix the model' in tab.schematic.note.text()
 
 
+@pytest.mark.skipif(sys.platform=='win32',reason='its stand-in for kicad-cli is a #! script, which Windows does not run')
 def test_kicad_process_import_and_cancellation(tab,tmp_path,monkeypatch):
     from pathlib import Path
     from PySide6.QtCore import QProcess,QTimer
