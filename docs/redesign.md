@@ -1,7 +1,8 @@
 # The window, from a clean slate
 
 A design for kicad2ems-gui as it would be built today, and the order in which the present window can be taken
-there. Written 2026-11-12; nothing here is built. It assumes the registry of questions and engines in kicad2ems's
+there. Written 2026-11-12. Steps 2 to 5 of [Getting there](#getting-there-from-the-present-window) are built
+(the same day); the rest is as written. It assumes the registry of questions and engines in kicad2ems's
 `ROADMAP.md` ("The study: questions and engines").
 
 ## What is wrong with the present window
@@ -132,12 +133,18 @@ Details that make it explain itself:
 In an order where each step leaves a working window:
 
 1. The study model, with the present widgets reading and writing it (no visible change; most of the risk).
+   *Not done: the widgets still hold the state.*
 2. The questions list grouped, the engine on the row, the Solvers section folded into it (the registry's step 4).
-3. `level` on options; the inspector with "More settings".
-4. The fixed layout: the board in the middle, the drawer, the activity bar; docking removed.
-5. "Still needed", and the Run button's wording.
+   *Done.*
+3. `level` on options; the inspector with "More settings". *Done for the solvers' settings (an option's `level`,
+   a solver's `basic`, a search box). An analysis's panel is still its groups, the first one open.*
+4. The fixed layout: the board in the middle, the drawer, the activity bar; docking removed. *Done, with these
+   differences from the drawing above: the toolbar is the one it was (no header with the five steps); the drawer's
+   tabs are the Results page and the Run page whole, not Plots, Report, Tables and Log; the status bar is the
+   activity bar; Filter Synthesis is already a window of its own.*
+5. "Still needed", and the Run button's wording. *Done: `rf_needs` and an analysis's `missing` (kicad2ems API 2.9).*
 6. The start page and the examples gallery.
 7. Picking on the board.
-8. The Tools menu; the Filter page and the Circuit page's file buttons go.
+8. The Tools menu; the Circuit page's file buttons go.
 
-Steps 1 to 5 are about two weeks; 6 to 8 about one more.
+Step 1 and 6 to 8 are about two weeks.

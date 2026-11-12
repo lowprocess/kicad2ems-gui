@@ -56,7 +56,8 @@ class _Run:
     def options(self):return [o for o in self._p.options() if o['key']!='model']
     def tag(self,values):return self._page.run_tag()
 
-    def command(self,values,board,out,preview=False,results=None):
+    def _ready(self,values,board):
+        """(the model as edited, whether it is a general one, its board), or ValueError: what a run still needs."""
         page=self._page
         try:c=page.values()
         except (ValueError,KeyError) as e:raise ValueError(f'The model needs attention: {e}') from None
@@ -66,6 +67,16 @@ class _Run:
         if (on('copper') or on('fields')) and not (board and Path(board).is_file()):
             raise ValueError("Choose the model's board: Import KiCad… a .kicad_pcb, or name one under Files" if general
                              else 'Choose a PCB for the copper: name one under Files, or the study\'s board')
+        return c,general,board
+
+    def missing(self,values,board,results=None):
+        """What a run of the model as edited still needs (kicad2ems 2.9); nothing is written."""
+        try:self._ready(values,board)
+        except ValueError as e:return [dict(text=str(e),key=None)]
+        return []
+
+    def command(self,values,board,out,preview=False,results=None):
+        c,general,board=self._ready(values,board)
         os.makedirs(out,exist_ok=True)
         model=os.path.join(out,'model-input.json');Path(model).write_text(json.dumps(c,indent=2))
         kind='general' if general else 'bridge'

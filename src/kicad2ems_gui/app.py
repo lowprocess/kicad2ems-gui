@@ -26,23 +26,23 @@ window's size, its docks and splitters, and the Results plots are remembered bet
 """
 import json, os, sys
 import numpy as np
-from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings
+from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings, Signal
 from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
                                QLineEdit, QCheckBox, QComboBox, QPushButton, QLabel, QPlainTextEdit, QProgressBar,
-                               QFileDialog, QScrollArea, QMessageBox, QDockWidget, QToolBar, QStyle, QToolButton,
+                               QFileDialog, QScrollArea, QMessageBox, QToolBar, QStyle, QToolButton,
                                QDialog, QTabWidget, QApplication, QTreeWidget, QTreeWidgetItem, QHeaderView,
-                               QStackedWidget, QMenu)
+                               QStackedWidget, QMenu, QSplitter)
 import pyqtgraph as pg
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, Run, EventTail, stop_runs, settings_values,
-                     extra_values, find_results, save_config, solvers_from_form, solver_ticks)
+                     extra_values, find_results, save_config, solvers_from_form, solver_ticks, basic_keys)
 from kicad2ems.api.frontend import G_DUMP
 from .splot import SPlot, default_layout
 from .curveplot import CurvePlot
 from .curves import load_sets
 from .reportview import ReportView
 from .analysispanel import AnalysisPanel, config_values
-from .panels import Section, FlowLayout
+from .panels import Section, FlowLayout, NeededList
 from .systempanel import SystemPanel
 from .viewer import Viewer, VIEWS
 from .statusbar import MemoryMeters, EstimateButton
@@ -66,7 +66,6 @@ def editor_page(key, win):
     from .powercircuittab import PowerCircuitTab
     return {'circuit': PowerCircuitTab}[key](win)
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
-STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
 
@@ -89,7 +88,27 @@ class SetupTab(QWidget):
         rf = QVBoxLayout()                                          # the S-parameter run's own sections
         rf.setContentsMargins(0, 0, 0, 0)
         rf.setSpacing(2)
-        top_of = lambda group: left if group == 'Board' else rf     # the board: above the analyses, for all
+        # the few settings a run is set up with first (runner.basic_keys), the others under "More settings", in
+        # their sections and found by name; the board's others in a section inside the board's
+        basic = basic_keys()
+        form = lambda box: (lambda f: (f.setContentsMargins(0, 0, 0, 0), f.setRowWrapPolicy(QFormLayout.WrapLongRows),
+                                       f.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow), f)[-1])(QFormLayout(box))
+        basic_box, more_box, board_more = QWidget(), QWidget(), QWidget()
+        self.basic_form, self.board_more_form = form(basic_box), form(board_more)
+        self.basic_form.setContentsMargins(8, 4, 4, 6)
+        more = QVBoxLayout(more_box)
+        more.setContentsMargins(0, 0, 0, 0)
+        more.setSpacing(2)
+        self.find = QLineEdit()
+        self.find.setPlaceholderText('Find a setting')
+        self.find.setClearButtonEnabled(True)
+        self.find.textChanged.connect(self._find)
+        more.addWidget(self.find)
+        rf.addWidget(basic_box)
+        self.more = Section('More settings', more_box)
+        rf.addWidget(self.more)
+        self.rows, self.row_text, self._found = {}, {}, set()      # key: (its form, its row's widget); its label
+        top_of = lambda group: left if group == 'Board' else more   # the board: above the analyses, for all
         groups, self.sections, self.group_of, self.solver_boxes, self.solver_labels = {}, {}, {}, {}, {}
         self.parents = {}                                           # 'openEMS': (its section, the layout of its subs)
         self.field_labels = {}                                      # key: its label (greyed with the field)
@@ -101,7 +120,7 @@ class SetupTab(QWidget):
                 sub.setContentsMargins(0, 0, 0, 0)
                 sub.setSpacing(2)
                 self.parents[top] = (Section(SECTION_TITLES.get(top, top), holder), sub)
-                rf.addWidget(self.parents[top][0])
+                more.addWidget(self.parents[top][0])
             if group not in groups:
                 box = QWidget()
                 groups[group] = QFormLayout(box)
@@ -119,6 +138,10 @@ class SetupTab(QWidget):
                 self.sections[group] = Section(group.split('/')[-1], box, extra=extra)
                 (self.parents[group.split('/')[0]][1] if '/' in group else top_of(group)).addWidget(self.sections[group])
             self.group_of[key] = group
+            into = groups[group] if (key in basic) == (group == 'Board') else \
+                self.basic_form if key in basic else self.board_more_form
+            if into is self.basic_form and group.split('/')[0] in SECTION_SOLVERS:      # among the first few: whose
+                label = f"{group.split('/')[0]}: {label[0].lower()}{label[1:]}"
             if kind == 'bool':
                 w = QCheckBox()
                 w.toggled.connect(self._changed)
@@ -144,18 +167,24 @@ class SetupTab(QWidget):
                 holder = QWidget()
                 holder.setLayout(row)
                 row.setContentsMargins(0, 0, 0, 0)
-                groups[group].addRow(label, holder)
+                into.addRow(label, holder)
+                self.rows[key], self.row_text[key] = (into, holder), label
             elif key.startswith(TICK):                              # a solver: ticked on the list's RF rows (the
                 w.setText(label)                                    # box is its state: not in the form)
                 self.solver_labels[key[len(TICK):]] = label
                 w.setParent(self)
                 w.hide()
             else:
-                groups[group].addRow(label, w)
-            self.field_labels[key] = None if key.startswith(TICK) else groups[group].labelForField(w)
+                into.addRow(label, w)
+                self.rows[key], self.row_text[key] = (into, w), label
+            self.field_labels[key] = None if key.startswith(TICK) else into.labelForField(w)
             self.edits[key] = (w, kind)
             if key == 'mode':                                       # the list's Antenna row says it
-                groups[group].setRowVisible(w, False)
+                into.setRowVisible(w, False)
+                del self.rows[key]
+        if self.board_more_form.rowCount() and 'Board' in groups:
+            self.board_more = Section('More about the board', board_more)
+            groups['Board'].addRow(self.board_more)
         if G_DUMP in groups:                                        # an FDTD solver installed
             groups[G_DUMP].addRow('Add a dump', self._dump_builder())
         for top, need in SECTION_SOLVERS.items():                   # a solver's own section, when it also shares
@@ -169,35 +198,47 @@ class SetupTab(QWidget):
         self.study_slot = QVBoxLayout()
         self.study_slot.setContentsMargins(0, 0, 0, 0)
         left.addLayout(self.study_slot)
+        left.addStretch(1)
+        # the selected question's settings: the window's right column (self.inspector), not under the list
+        right = QVBoxLayout()
+        right.setSpacing(2)
         self.panel_title = QLabel('')                               # whose settings follow
         self.panel_title.setStyleSheet('font-weight: bold; padding: 8px 4px 2px 4px;')
         self.panel_title.hide()
-        left.addWidget(self.panel_title)
+        right.addWidget(self.panel_title)
         self.rf_box = QWidget()
         self.rf_box.setLayout(rf)
         self.panels = {'rf': self.rf_box}                           # analysis: its settings (one shown)
-        left.addWidget(self.rf_box)
-        left.addStretch(1)
-        self._left = left
-        lw = QWidget()
-        lw.setLayout(left)
-        scroll = QScrollArea()
-        scroll.setWidget(lw)
-        scroll.setWidgetResizable(True)
-        # the form wraps its rows instead of scrolling sideways: as wide as its narrowest layout, plus room for
-        # the vertical scroll bar (a long form shows it, and without that room a sideways one appeared too)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll, self._lw = scroll, lw
+        right.addWidget(self.rf_box)
+        self.needed = NeededList()                                  # what the selected question's run still needs
+        self.needed.hide()
+        right.addWidget(self.needed)
+        right.addStretch(1)
+        self._left = right                                          # (where set_study puts the analyses' panels)
+
+        def scrolled(layout):
+            w = QWidget()
+            w.setLayout(layout)
+            sc = QScrollArea()
+            sc.setWidget(w)
+            sc.setWidgetResizable(True)
+            # a form wraps its rows instead of scrolling sideways: as wide as its narrowest layout, plus room for
+            # the vertical scroll bar (a long form shows it, and without that room a sideways one appeared too)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            return sc, w
+        (self.scroll, self._lw), (self.inspector, self._rw) = scrolled(left), scrolled(right)
         self._fit_width()
-        outer.addWidget(scroll)
+        outer.addWidget(self.scroll)
         self._update_sections()                                     # before any config: nothing ticked, all greyed
 
     def _fit_width(self):
         """The dock at least as wide as its widest settings (the hidden analyses' too: selecting one must not
         cut its fields off, the form having no sideways scroll bar)."""
         bar = self.scroll.verticalScrollBar().sizeHint().width()
-        need = max([self._lw.minimumSizeHint().width()] + [p.minimumSizeHint().width() for p in self.panels.values()])
-        self.scroll.setMinimumWidth(max(270, min(need, 420) + bar + 2 * self.scroll.frameWidth() + 2))
+        pad = bar + 2 * self.scroll.frameWidth() + 2
+        self.scroll.setMinimumWidth(max(250, min(self._lw.minimumSizeHint().width(), 380) + pad))
+        need = max([self._rw.minimumSizeHint().width()] + [p.minimumSizeHint().width() for p in self.panels.values()])
+        self.inspector.setMinimumWidth(max(270, min(need, 420) + pad))
 
     def set_study(self, study, panels):
         """The questions' list under the board, and each run's settings {key: widget} ('rf': the solvers' own
@@ -392,11 +433,13 @@ class SetupTab(QWidget):
                 on = w.currentIndex() > 0 and w.currentText() != str(getattr(self.defaults, key, ''))
             else:
                 on = bool(w.text().strip())
-            counts[self.group_of[key]] += on
+            if self.rows.get(key, (None,))[0] is not self.basic_form:   # (the first few are in view as they are)
+                counts[self.group_of[key]] += on
         for g, n in counts.items():
             self.sections[g].set_count(n)
         for top, (sec, _) in self.parents.items():                  # a solver's section: its sub-sections' sum
             sec.set_count(sum(n for g, n in counts.items() if g.split('/')[0] == top))
+        self.more.set_count(sum(n for g, n in counts.items() if g != 'Board'))
 
     def _update_sections(self):
         """A solver's section (and the shared ones) greyed while none of its solvers is ticked: auto may run
@@ -418,6 +461,9 @@ class SetupTab(QWidget):
             names = ', '.join(self.solver_labels.get(n, n) for n in sorted(need) if n in self.solver_labels)
             sec.setToolTip('' if on else f"for {names}: choose it on the S-parameters row of the list to use these "
                            "settings")
+            for key, (frm, roww) in self.rows.items():              # its settings among the first few: shown with it
+                if frm is self.basic_form and self.group_of[key].split('/')[0] == top:
+                    frm.setRowVisible(roww, on)
         from .runner import ANTENNA_FIELDS
         mode = self.edits.get('mode', (None,))[0]
         radiating = [n for n, sv in registry().items() if sv.capabilities.get('antenna', 'no').split(':')[0] != 'no']
@@ -432,6 +478,56 @@ class SetupTab(QWidget):
                 lab.setEnabled(antenna)
             w.setToolTip('' if antenna else "antenna mode only (tick Antenna pattern in the list, with " +
                          " or ".join(self.solver_labels.get(n, n) for n in radiating) + ")")
+
+    def focus(self, key):
+        """A setting's field in view: its section open (under "More settings", or the board's), the cursor in it."""
+        w = self.edits.get(key, (None,))[0]
+        if w is None:
+            return
+        frm, g = self.rows.get(key, (None,))[0], self.group_of[key]
+        if g == 'Board':
+            self.sections['Board'].set_expanded(True)
+            if frm is self.board_more_form:
+                self.board_more.set_expanded(True)
+        elif frm is not self.basic_form:
+            self.more.set_expanded(True)
+            if g.split('/')[0] in self.parents:
+                self.parents[g.split('/')[0]][0].set_expanded(True)
+            self.sections[g].set_expanded(True)
+        w.setFocus()
+        QTimer.singleShot(0, lambda: (self.scroll if g == 'Board' else self.inspector).ensureWidgetVisible(w))
+
+    def _find(self, text):
+        """The settings under "More settings" whose label or key holds the text: their rows alone, their sections
+        open; without text, every row again and the sections it opened closed."""
+        t = text.strip().lower()
+        title = lambda g: ' '.join([SECTION_TITLES.get(g.split('/')[0], g.split('/')[0])] + g.split('/')[1:]).lower()
+        hit = lambda key: not t or t in self.row_text.get(key, '').lower() or t in key.replace('_', ' ') \
+            or t in title(self.group_of[key])
+        found = {}
+        for key, (frm, roww) in self.rows.items():
+            g = self.group_of[key]
+            if frm is self.basic_form or g == 'Board':
+                continue
+            frm.setRowVisible(roww, hit(key))
+            found[g] = found.get(g, False) or hit(key)
+        for g, sec in self.sections.items():
+            if g == 'Board':
+                continue
+            sec.setVisible(found.get(g, not t))
+            if t and found.get(g) and not sec.expanded:
+                sec.set_expanded(True)
+                self._found.add(sec)
+        for top, (sec, _) in self.parents.items():
+            on = any(v for g, v in found.items() if g.split('/')[0] == top)
+            sec.setVisible(on or not t)
+            if t and on and not sec.expanded:
+                sec.set_expanded(True)
+                self._found.add(sec)
+        if not t:
+            for sec in self._found:
+                sec.set_expanded(False)
+            self._found.clear()
 
     def _dump_builder(self):
         """FIELD, where (a layer, an x / y / z plane, the volume), GHz -> a spec appended to the dumps."""
@@ -550,6 +646,8 @@ class SetupTab(QWidget):
         self._count()
         self._update_sections()
         self.touch()
+        if hasattr(self.win, 'needs_soon'):
+            self.win.needs_soon()
         if hasattr(self.win, 'update_estimate'):                    # the toolbar's: the solvers ticked now
             self.win.update_estimate()
 
@@ -1341,6 +1439,97 @@ class ViewerWindow(QWidget):
             self.setWindowTitle(f"{self.runs.currentText()} - Viewer - kicad2ems")
 
 
+class Place:
+    """Where a page is in the window's fixed layout, by the page's name: the board or an editor in the middle,
+    the Results and Run pages in the drawer, Filter Synthesis in its own window."""
+    def __init__(self, win, name, widget):
+        self.win, self.name, self.w = win, name, widget
+
+    def widget(self):
+        return self.w
+
+    def isHidden(self):
+        """Not in the window at all: an editor without its tab, Filter Synthesis's window closed."""
+        if self.name == 'Filter':
+            return not self.win.filter_window.isVisible()
+        return self.name not in self.win.drawer.pages and self.win.stage.indexOf(self.w) < 0
+
+    def isVisible(self):
+        return self.w.isVisible()
+
+    def in_front(self):
+        """In view: the tab in front in the middle or in the open drawer, or its window shown."""
+        if self.name == 'Filter':
+            return self.win.filter_window.isVisible()
+        if self.name in self.win.drawer.pages:
+            return not self.win.drawer.is_folded and self.win.drawer.current() == self.name
+        return self.win.stage.currentWidget() is self.w
+
+    def show(self):
+        self.win.show_panel(self.name, front=False)
+
+    def hide(self):
+        self.win.hide_panel(self.name)
+
+    def raise_(self):
+        self.win.show_panel(self.name)
+
+
+class Drawer(QWidget):
+    """What is not a map, under the board: pages as tabs (the Results page, the Run page), with a button that
+    folds it to its tab bar. A tab clicked while it is folded opens it."""
+    folded = Signal(bool)
+
+    def __init__(self, pages):
+        super().__init__()
+        from PySide6.QtWidgets import QTabBar
+        self.pages, self.is_folded = dict(pages), False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 4, 0)
+        self.tabs = QTabBar()
+        self.tabs.setExpanding(False)
+        self.tabs.setDrawBase(False)
+        self.stack = QStackedWidget()
+        for name, w in self.pages.items():
+            self.tabs.addTab(name)
+            self.stack.addWidget(w)
+        self.tabs.currentChanged.connect(self.stack.setCurrentIndex)
+        self.tabs.tabBarClicked.connect(lambda _i: self.is_folded and self.set_folded(False))
+        bar.addWidget(self.tabs)
+        bar.addStretch(1)
+        self.fold_btn = QToolButton()
+        self.fold_btn.setAutoRaise(True)
+        self.fold_btn.setArrowType(Qt.DownArrow)
+        self.fold_btn.setToolTip('fold the drawer to its tabs, or open it')
+        self.fold_btn.clicked.connect(lambda: self.set_folded(not self.is_folded))
+        bar.addWidget(self.fold_btn)
+        self.bar = QWidget()
+        self.bar.setLayout(bar)
+        lay.addWidget(self.bar)
+        lay.addWidget(self.stack, 1)
+
+    def current(self):
+        return list(self.pages)[self.tabs.currentIndex()]
+
+    def open(self, name, front=True):
+        """The page there; front: its tab in front and the drawer open."""
+        if front:
+            self.tabs.setCurrentIndex(list(self.pages).index(name))
+            self.set_folded(False)
+
+    def set_folded(self, on):
+        if on == self.is_folded:
+            return
+        self.is_folded = on
+        self.stack.setVisible(not on)
+        self.fold_btn.setArrowType(Qt.UpArrow if on else Qt.DownArrow)
+        self.setMaximumHeight(self.bar.sizeHint().height() if on else 16777215)
+        self.folded.emit(on)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config=None):
         super().__init__()
@@ -1363,52 +1552,51 @@ class MainWindow(QMainWindow):
         self.system.ready.connect(lambda *_: self.update_estimate())
         self._est_basis = None                                      # the settings the estimates were made with
         self.solvers_dialog = SolversDialog(self, self.system)
-        # the study (the board, the analyses, the selected one's settings): a dock of the window; the pages:
-        # Viewer, Run, Results and each analysis's own (tabbed, split or floated)
-        sd = QDockWidget('Study', self)
-        sd.setObjectName('Settings')                                # its name in saved layouts, from when it was
-        sd.setWidget(self.setup)
-        # closable, as the pages: not closable, its View action is disabled, and a layout saved with it hidden
-        # (or a floated dock the window manager closed) left no way to open it again
-        sd.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
-        self.addDockWidget(Qt.LeftDockWidgetArea, sd)
-        self.settings_dock = sd
-        self.work = QMainWindow()
-        self.work.setObjectName('work')
-        self.work.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowTabbedDocks | QMainWindow.AllowNestedDocks)
-        self.work.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
-        hidden = QWidget()
-        hidden.hide()
-        self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
-        self.docks = {}
+        # one fixed layout (docs/redesign.md): the questions on the left, the board in the middle with what is not
+        # a map in a drawer under it (the Results and Run pages), the selected question's settings on the right.
+        # The side columns and the drawer fold (View); nothing floats. An editor's page (the circuit's schematic)
+        # is a tab beside the board while its question is asked; Filter Synthesis is a window of its own.
+        self.stage = QTabWidget()
+        self.stage.setDocumentMode(True)
+        self.stage.addTab(self.viewer, 'Board')
+        self.stage.tabBar().hide()
+        self.drawer = Drawer({'Results': self.results, 'Run': self.runtab})
+        self.mid = QSplitter(Qt.Vertical)
+        self.mid.addWidget(self.stage)
+        self.mid.addWidget(self.drawer)
+        self.mid.setStretchFactor(0, 3)
+        self.mid.setStretchFactor(1, 2)
+        self.mid.setChildrenCollapsible(False)
+        self.drawer.folded.connect(self._drawer_folded)
+        self.cols = QSplitter(Qt.Horizontal)
+        for i, w in enumerate((self.setup, self.mid, self.setup.inspector)):
+            self.cols.addWidget(w)
+            self.cols.setStretchFactor(i, 1 if w is self.mid else 0)
+        self.cols.setChildrenCollapsible(False)
+        self.setCentralWidget(self.cols)
+        self.filter_window = QWidget(None, Qt.Window)
+        self.filter_window.setWindowTitle('Filter Synthesis - kicad2ems')
+        fl = QVBoxLayout(self.filter_window)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.addWidget(self.filter)
+        self.filter_window.resize(1300, 850)
         widgets = {'Viewer': self.viewer, 'Run': self.runtab, 'Results': self.results, 'Filter': self.filter,
                    **{BY_KEY[k].page: p for k, p in self.editors.items()}}
-        for name in PANELS:
-            if name not in widgets:                                 # an analysis's page this window has no editor for
-                continue
-            w = widgets[name]
-            d = QDockWidget(TITLES.get(name, name), self.work)
-            d.setObjectName(name)
-            d.setWidget(w)
-            # closable: a page can be hidden and shown again (View menu); not closable, a floated page the window
-            # manager closed (or that went behind the window) had no way back, its View action disabled
-            d.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable |
-                          QDockWidget.DockWidgetClosable)
-            d.topLevelChanged.connect(lambda floating, d=d: floating and QTimer.singleShot(100, lambda: self._fit_floating(d)))
-            self.work.addDockWidget(Qt.TopDockWidgetArea, d)
-            if self.docks:
-                self.work.tabifyDockWidget(self.docks[PANELS[0]], d)
-            self.docks[name] = d
-            key = EDITORS.get(name)
-            if key:                                                 # an analysis's page in front: its settings
-                d.visibilityChanged.connect(lambda on, k=key: on and self._study_ready and self.study.select(k))
-        self.docks[PANELS[0]].raise_()
-        self.setCentralWidget(self.work)
+        self.places = {name: Place(self, name, widgets[name]) for name in PANELS if name in widgets}
+        self.stage.currentChanged.connect(self._stage_changed)
         self._toolbar()
         self._menus()
         self.statusBar().addPermanentWidget(self.meters)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
+        self._needs_timer = QTimer(self)
+        self._needs_timer.setSingleShot(True)
+        self._needs_timer.timeout.connect(self.update_needed)
+        self.setup.needed.picked.connect(self.go_to_need)
+        self.study.selected.connect(lambda _q: self.update_needed())
+        for page in self.pages.values():
+            getattr(page, 'panel', page).changed.connect(self.needs_soon)
+        self.update_needed()
         self._restore_shape()
         self.update_title()
         self._study_ready = True
@@ -1492,7 +1680,71 @@ class MainWindow(QMainWindow):
                     asked.setdefault(q, [])
         return Study(asked)
 
+    # ---- what a run still needs: the list under the selected question's settings, the Run button's wording ----
+    def needs(self, runs):
+        """{run: [dict(text, key, run)]} of the runs `runs` ('rf', or an analysis): what each still needs before
+        it can start (kicad2ems's rf_needs and the solvers chosen; an analysis's own check)."""
+        out, before = {}, []                                # before: the analyses of this Run that come first
+        for run in runs:
+            if run == 'rf':
+                from kicad2ems.api.frontend import rf_needs
+                try:
+                    got = rf_needs(self.setup.values())
+                except Exception:                                   # noqa: BLE001 (a field half typed)
+                    got = []
+                if not any(w.isChecked() for w in self.setup.solver_boxes.values()):
+                    got.append(dict(text='no solver chosen: pick one on the S-parameters row', key=None))
+            elif run in self.pages:
+                page = self.pages[run]
+                got = getattr(page, 'panel', page).needs(self.study.asked_of(run, None), before)
+                before.append(run)
+            else:
+                got = []
+            out[run] = [dict(m, run=run) for m in got]
+        return out
+
+    def needs_soon(self):
+        """The list and the Run button brought up to date shortly (a change, typed: not at every key)."""
+        if getattr(self, '_study_ready', False):
+            self._needs_timer.start(250)
+
+    def update_needed(self):
+        if not getattr(self, '_study_ready', False) or not hasattr(self, 'acts'):
+            return
+        q = self.study.current_question()
+        mine = self.study.panels_of(q) if q in self.study.rows else ['rf']
+        asked = self.study.jobs(False)
+        needs = self.needs(asked)                           # in the Run's order: each knows what comes before it
+        needs.update(self.needs([r for r in mine if r not in needs]))
+        self.setup.needed.show_items([m for r in mine for m in needs.get(r, [])], q in self.study.asked())
+        first = next((m for r in asked for m in needs.get(r, [])), None)
+        self._need = first
+        run = self.acts['Run']
+        if first is not None:
+            text = first['text'][0].upper() + first['text'][1:]
+            run.setText(text if len(text) <= 30 else text[:29].rstrip() + '…')
+            run.setToolTip(f"{BY_KEY[first['run']].title} still needs: {first['text']}\n(click: go to where it is "
+                           f"set; Run > Run the selected question alone runs one whatever the others need)")
+        else:
+            titles = [BY_KEY[k].title for k in asked]
+            run.setText(f"Run {len(titles)}" if len(titles) > 1 else 'Run')
+            run.setToolTip(('Run ' + ', then '.join(titles) if titles else 'Tick a question in the list first')
+                           + ' (Ctrl+R)')
+
+    def go_to_need(self, item):
+        """Where a thing a run still needs is set: its question selected, its field in view."""
+        run, key = item.get('run'), item.get('key')
+        if run and self.study.current() != run and run not in self.study.panels_of(self.study.current_question()):
+            self.study.select(run)
+        if run == 'rf' and key:
+            self.setup.focus(key)
+        elif run in self.pages and key:
+            page = self.pages[run]
+            getattr(page, 'panel', page).focus(key)
+        self.statusBar().showMessage(f"{BY_KEY[run].title if run in BY_KEY else 'The run'} still needs: {item['text']}", 8000)
+
     def ticks_changed(self):
+        self.needs_soon()
         if getattr(self, '_study_ready', False):
             st = self.study.study()
             self.qsettings.setValue('study/asked', json.dumps(dict(asked=st.asked, fields=st.fields)))
@@ -1615,8 +1867,27 @@ class MainWindow(QMainWindow):
                 **{k: p.split for k, p in self.editors.items()},
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
+    def _stage_changed(self, i):
+        """An editor's page in front: its question selected (its settings in the inspector)."""
+        w = self.stage.widget(i)
+        key = next((k for k, p in self.editors.items() if p is w), None)
+        if key and self._study_ready:
+            self.study.select(key)
+
+    def _drawer_folded(self, on):
+        """The drawer folded to its tab bar, or open again at the height it had."""
+        if on:
+            self._drawer_sizes = self.mid.sizes()
+            self.mid.setSizes([sum(self.mid.sizes()), 0])
+        elif getattr(self, '_drawer_sizes', None) and self._drawer_sizes[1] > 80:
+            self.mid.setSizes(self._drawer_sizes)
+        else:
+            total = sum(self.mid.sizes())
+            self.mid.setSizes([int(0.58 * total), int(0.42 * total)])
+
     def _restore_shape(self):
-        """The size, position, docks and splitters of the last session; the first time, most of the screen."""
+        """The size and position of the last session, how its columns, drawer and splitters stood; the first
+        time, most of the screen."""
         q = self.qsettings
         geo = q.value('window/geometry')
         if geo is None or not self.restoreGeometry(geo):
@@ -1627,41 +1898,28 @@ class MainWindow(QMainWindow):
                 self.move(scr.x() + (scr.width() - self.width()) // 2, scr.y() + (scr.height() - self.height()) // 2)
             else:
                 self.resize(1500, 950)
-        for key, obj in (('window/state', self), ('work/state', self.work)):
-            st = q.value(key)
-            if st is not None:
-                obj.restoreState(st, STATE_VERSION)
+        self.reset_layout()
         for name, sp in self._splitters().items():
             st = q.value(f"splitter/{name}")
             if st is not None:
                 sp.restoreState(st)
-        saved = q.value('work/pages')
-        saved = [saved] if isinstance(saved, str) else list(saved or PANELS[:3])    # before the Filter page: 3
-        for name, d in self.docks.items():
-            if name not in saved:                                   # a page newer than the saved layout: Qt would
-                d.setFloating(False)                                # leave it floating; tabbed with the others
-                self.work.addDockWidget(Qt.TopDockWidgetArea, d)
-                self.work.tabifyDockWidget(self.docks[PANELS[0]], d)
-            d.show()                                                # a page closed last time: back
+        folded = q.value('layout/folded')
+        folded = [folded] if isinstance(folded, str) else list(folded or [])
+        for name, act in self.fold_acts.items():
+            if name in folded:
+                act.setChecked(False)
         self._page_visibility(opening=True)
-        self.docks[PANELS[0]].raise_()
-        if self.settings_dock.isHidden():                           # the study: always there when the window opens
-            if self.settings_dock.isFloating():
-                self.settings_dock.setFloating(False)
-            self.settings_dock.show()
 
     def _page_visibility(self, opening=False):
-        """The pages that come and go: Filter Synthesis closed when the window opens (the toolbar's Filter, or
-        View, opens it); Circuit there while Circuit is ticked under Analyses, and gone when it is unticked."""
+        """The pages that come and go: Filter Synthesis closed when the window opens (the toolbar's Filter opens
+        its window); the Circuit page there, beside the board, while Circuit is asked, and gone when it is not."""
         if opening:
             for name in ON_DEMAND:
-                self.docks[name].hide()
+                self.places[name].hide()
         ticked = set(self.study.ticked())
         for name, key in FOLLOWS_TICK.items():
-            d = self.docks[name]
+            d = self.places[name]
             if key in ticked and d.isHidden():
-                if d.isFloating() and not opening:
-                    d.setFloating(False)
                 d.show()
             elif key not in ticked and not d.isHidden() and not (self.job == key or self.queue and key in self.queue):
                 d.hide()
@@ -1669,29 +1927,23 @@ class MainWindow(QMainWindow):
     def _save_shape(self):
         q = self.qsettings
         q.setValue('window/geometry', self.saveGeometry())
-        q.setValue('window/state', self.saveState(STATE_VERSION))
-        q.setValue('work/state', self.work.saveState(STATE_VERSION))
-        q.setValue('work/pages', list(PANELS))
+        q.setValue('layout/folded', [n for n, a in self.fold_acts.items() if not a.isChecked()])
         for name, sp in self._splitters().items():
             q.setValue(f"splitter/{name}", sp.saveState())
 
     def reset_layout(self):
-        """The pages tabbed again, the settings on the left, the splitters at their first sizes."""
-        self.settings_dock.setFloating(False)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.settings_dock)
-        self.settings_dock.show()
-        for d in self.docks.values():
-            d.setFloating(False)
-            self.work.addDockWidget(Qt.TopDockWidgetArea, d)
-            d.show()
-        for name in PANELS[1:]:
-            self.work.tabifyDockWidget(self.docks[PANELS[0]], self.docks[name])
-        self._page_visibility(opening=True)
-        self.docks[PANELS[0]].raise_()
+        """The columns and the drawer shown at their first sizes, the board in front."""
+        for act in getattr(self, 'fold_acts', {}).values():
+            act.setChecked(True)
+        w, h = max(self.width(), 900), max(self.height(), 600)
+        left = max(self.setup.minimumWidth() + 40, 420)             # the list's four columns in view
+        right = max(self.setup.inspector.minimumWidth() + 40, 400)
+        self.cols.setSizes([left, max(w - left - right, 300), right])
+        self.mid.setSizes([int(0.58 * h), int(0.42 * h)])
+        self.stage.setCurrentWidget(self.viewer)
         self.viewer.split.setSizes([880, 380])
         self.results.splot.split.setSizes([220, 1000])
 
-    # ---- toolbar, pages, menus, title, recent files ----
     def _toolbar(self):
         tb = QToolBar('Main')
         tb.setObjectName('Main toolbar')
@@ -1741,27 +1993,32 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, tb)
 
     def show_panel(self, name, front=True):
-        """Open a page (it may have been closed) and, front: bring it to the front of its tab group. A floated page
-        that was closed comes back docked: on Wayland a separate window can't be raised or placed by the app."""
-        d = self.docks[name]
-        if d.isFloating() and not d.isVisible():
-            d.setFloating(False)
-        closed = d.isHidden()
-        d.show()
-        if closed and not d.isFloating() and name != PANELS[0] and \
-                d not in self.work.tabifiedDockWidgets(self.docks[PANELS[0]]):    # a page that starts closed: tabbed
-            self.work.tabifyDockWidget(self.docks[PANELS[0]], d)            # with the others, not beside them
-        if front:
-            d.raise_()
+        """Bring a page into view: the board or an editor in the middle (an editor's tab made if it is not there),
+        the Results or Run page in the drawer (opened if folded), Filter Synthesis in its window. front: in front
+        of what shares its place; else only there."""
+        w = self.places[name].w
+        if name == 'Filter':
+            self.filter_window.show()
+            if front:
+                self.filter_window.raise_()
+        elif name in self.drawer.pages:
+            self.drawer.open(name, front)
+        else:
+            if self.stage.indexOf(w) < 0:
+                self.stage.addTab(w, TITLES.get(name, name))
+                self.stage.tabBar().setVisible(self.stage.count() > 1)
+            if front:
+                self.stage.setCurrentWidget(w)
 
-    def _fit_floating(self, d):
-        """A page just floated: at most 80 % of the screen, centred on the window (a floated page as wide as the
-        whole workspace could open partly off the screen)."""
-        scr = (self.screen() or d.screen()).availableGeometry()
-        w, h = min(d.width(), int(0.8 * scr.width())), min(d.height(), int(0.8 * scr.height()))
-        d.resize(w, h)
-        c = self.frameGeometry().center()
-        d.move(max(scr.x(), min(c.x() - w // 2, scr.right() - w)), max(scr.y(), min(c.y() - h // 2, scr.bottom() - h)))
+    def hide_panel(self, name):
+        """An editor's page off the middle, Filter Synthesis's window closed (the board and the drawer's pages stay)."""
+        w = self.places[name].w
+        if name == 'Filter':
+            self.filter_window.hide()
+        elif name not in self.drawer.pages and w is not self.viewer and self.stage.indexOf(w) >= 0:
+            self.stage.removeTab(self.stage.indexOf(w))
+            w.setParent(None)
+            self.stage.tabBar().setVisible(self.stage.count() > 1)
 
     def second_viewer(self):
         """A Viewer window of its own, showing another run of the board (ViewerWindow); one at a time."""
@@ -1807,12 +2064,23 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.close)
         fm.addAction(a)
         vm = self.menuBar().addMenu('&View')
-        vm.addAction(self.settings_dock.toggleViewAction())
-        for name in PANELS:
-            a = self.docks[name].toggleViewAction()
-            a.triggered.connect(lambda on, d=self.docks[name]: on and d.isFloating() and d.setFloating(False))  # back, docked
+        self.fold_acts = {}                                         # what folds away: the columns, the drawer
+        for name, key, show in (('Questions', 'Ctrl+1', self.setup.setVisible),
+                                ('Settings', 'Ctrl+2', self.setup.inspector.setVisible),
+                                ('Results and Run drawer', 'Ctrl+3', lambda on: self.drawer.set_folded(not on))):
+            a = QAction(name, self)
+            a.setCheckable(True)
+            a.setChecked(True)
+            a.setShortcut(QKeySequence(key))
+            a.toggled.connect(show)
             vm.addAction(a)
+            self.fold_acts[name] = a
+        self.drawer.folded.connect(lambda on: self.fold_acts['Results and Run drawer'].setChecked(not on))
         vm.addSeparator()
+        for name in ('Results', 'Run'):
+            a = QAction(name, self)
+            a.triggered.connect(lambda _=False, n=name: self.show_panel(n))
+            vm.addAction(a)
         for name in VIEWS:
             a = QAction(f"Viewer: {name}", self)
             a.triggered.connect(lambda _=False, n=name: (self.show_panel('Viewer'), self.viewer.set_view(n)))
@@ -1974,6 +2242,7 @@ class MainWindow(QMainWindow):
             self.system.stop()
             self.meters.stop()
             self.solvers_dialog.close()
+            self.filter_window.close()
             if getattr(self, '_viewer2', None) is not None:
                 self._viewer2.close()
             ev.accept()
@@ -2289,6 +2558,11 @@ class MainWindow(QMainWindow):
         self.run_study(preview=True)
 
     def run(self):
+        """Run what is asked; something it still needs: there instead (the button says which)."""
+        self.update_needed()
+        if getattr(self, '_need', None) is not None:
+            self.go_to_need(self._need)
+            return
         self.run_study()
 
     def stop(self):

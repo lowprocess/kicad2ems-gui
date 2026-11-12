@@ -3,7 +3,7 @@ GUI building blocks: a collapsible settings section, an image panel (model, mesh
 row of controls that wraps when narrow.
 """
 import os
-from PySide6.QtCore import Qt, QRect, QPoint, QSize
+from PySide6.QtCore import Qt, QRect, QPoint, QSize, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QToolButton, QLabel, QScrollArea, QSizePolicy,
                                QFrame, QLayout)
@@ -57,6 +57,47 @@ class Section(QWidget):
     def set_count(self, n):
         """n: how many settings of the section differ from their defaults (shown in the header)."""
         self.head.setText(f"{self.title}" + (f"  ({n} set)" if n else ''))
+
+
+class NeededList(QWidget):
+    """What a run of the selected question still needs: a line each, which leads to where it is set (picked: the
+    item, dict(text, key, run)). Nothing needed: it says so; a question not asked and complete: hidden."""
+    picked = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 10, 4, 4)
+        lay.setSpacing(3)
+        self.title = QLabel('Still needed')
+        self.title.setStyleSheet('font-weight: bold;')
+        lay.addWidget(self.title)
+        self.rows = QVBoxLayout()
+        self.rows.setSpacing(2)
+        lay.addLayout(self.rows)
+        self.items = []
+
+    def show_items(self, items, asked=True):
+        while self.rows.count():
+            w = self.rows.takeAt(0).widget()
+            if w is not None:
+                w.hide()                                    # (gone now: deleteLater alone left it drawn under the new)
+                w.setParent(None)
+                w.deleteLater()
+        self.items = list(items)
+        self.setVisible(bool(items) or asked)
+        if not items:
+            lab = QLabel('nothing: ready to run')
+            lab.setEnabled(False)
+            self.rows.addWidget(lab)
+            return
+        for i, it in enumerate(self.items):
+            lab = QLabel(f'<a href="{i}" style="text-decoration: none; color: #9a5b00;">&#9888;&nbsp; {it["text"]}</a>')
+            lab.setWordWrap(True)
+            lab.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+            lab.setToolTip('go to where it is set')
+            lab.linkActivated.connect(lambda n: self.picked.emit(self.items[int(n)]))
+            self.rows.addWidget(lab)
 
 
 class ImagePanel(QWidget):

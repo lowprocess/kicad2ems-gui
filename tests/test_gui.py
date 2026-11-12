@@ -68,7 +68,7 @@ def test_window_tabs(tmp_path):
     assert v['dump'] == ['E@F.Cu@2,6', 'H@volume'] and v['mode'] == 'antenna'
     w.setup.extra = dict(air=3.0)
     assert w.setup.values()['air'] == 3.0
-    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']    # no page per analysis: an editor's
+    assert list(w.places) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']   # no page per analysis: an editor's
     assert w.viewer.view() in ('3D', 'Plan')                         # 3D when OpenGL can be had
     w.viewer.set_view('Plan')
     assert w.viewer.view() == 'Plan' and w.viewer.buttons['Plan'].isChecked()
@@ -863,7 +863,7 @@ def test_filter_page(tmp_path):
     from kicad2ems_gui.app import MainWindow
     app = QApplication.instance() or QApplication([])
     w = MainWindow()
-    assert 'Filter' in w.docks and w.filter.desc is not None
+    assert 'Filter' in w.places and w.filter.desc is not None
     page = w.filter
     page.set_values(dict(type='lowpass', topology='radial', f0='2G', out=base))
     v = page.values()
@@ -896,9 +896,11 @@ def test_filter_page(tmp_path):
     w.close()
 
 
-def test_new_page_docks_into_an_older_layout(monkeypatch, tmp_path):
-    """A layout saved before a page existed (the Filter page): the page is docked, not floating, and the toolbar
-    opens it tabbed with the others (it is closed when the window opens)."""
+def test_one_fixed_layout(monkeypatch, tmp_path):
+    """The window's one layout: the questions on the left, the board in the middle with the Results and Run pages
+    in a drawer under it, the selected question's settings on the right. The columns and the drawer fold (View)
+    and stay folded for the next window; nothing floats; a dock layout an older window saved is not read. Filter
+    Synthesis is a window of its own, closed until asked for."""
     pytest.importorskip('PySide6')
     pytest.importorskip('pyqtgraph')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -908,16 +910,38 @@ def test_new_page_docks_into_an_older_layout(monkeypatch, tmp_path):
     from kicad2ems_gui.app import MainWindow
     app = QApplication.instance() or QApplication([])
     QSettings('kicad2ems', 'gui').clear()
+    QSettings('kicad2ems', 'gui').setValue('window/state', b'what an older window saved of its docks')
     w = MainWindow()
-    w.docks['Filter'].setFloating(True)                             # as Qt leaves a dock the saved state lacks
+    w.show()
+    app.processEvents()
+    assert [w.cols.widget(i) for i in range(3)] == [w.setup, w.mid, w.setup.inspector]
+    assert [w.mid.widget(i) for i in range(2)] == [w.stage, w.drawer] and w.stage.currentWidget() is w.viewer
+    assert list(w.drawer.pages) == ['Results', 'Run'] and not w.drawer.is_folded and w.stage.tabBar().isHidden()
+    assert w.setup.isAncestorOf(w.study) and w.setup.inspector.isAncestorOf(w.setup.rf_box)
+    assert not w.setup.isAncestorOf(w.setup.rf_box)                 # the settings: the right column's, not the list's
+    assert w.places['Viewer'].in_front() and w.places['Results'].in_front() and not w.places['Run'].in_front()
+    w.show_panel('Run')
+    assert w.places['Run'].in_front() and not w.places['Results'].in_front() and w.drawer.current() == 'Run'
+    w.fold_acts['Results and Run drawer'].trigger()                 # folded to its tabs
+    assert w.drawer.is_folded and w.drawer.stack.isHidden() and not w.places['Run'].in_front()
+    w.show_panel('Results')                                         # asked for: open again
+    assert not w.drawer.is_folded and w.places['Results'].in_front()
+    w.show_panel('Run', front=False)                                # only there: what is in front stays
+    assert w.drawer.current() == 'Results'
+    for name, col in (('Questions', w.setup), ('Settings', w.setup.inspector)):
+        w.fold_acts[name].trigger()
+        assert col.isHidden()
     w.setup.dirty = False
-    w.close()                                                       # saves the layout, the page floating
-    QSettings('kicad2ems', 'gui').setValue('work/pages', ['Viewer', 'Run', 'Results'])   # saved before it existed
+    w.close()                                                       # the columns folded: so the next window opens
     w = MainWindow()
-    assert not w.docks['Filter'].isFloating() and w.docks['Filter'].isHidden()     # closed until asked for
+    w.show()
+    app.processEvents()
+    assert w.setup.isHidden() and w.setup.inspector.isHidden() and not w.drawer.is_folded
+    w.reset_layout()
+    assert not w.setup.isHidden() and not w.setup.inspector.isHidden()
+    assert w.places['Filter'].isHidden() and not w.filter_window.isVisible()       # closed until asked for
     w.acts['Filter'].trigger()
-    assert w.docks['Filter'].isVisibleTo(w)
-    assert w.docks['Filter'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])     # with the others
+    assert not w.places['Filter'].isHidden() and w.filter_window.isVisible() and w.filter_window.isAncestorOf(w.filter)
     if w.filter.desc is not None:
         assert w.filter.w['substrate'].findText('FR4-1.6') >= 0 and w.filter.design_btn.isEnabled()
     w.setup.dirty = False

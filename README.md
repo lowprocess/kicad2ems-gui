@@ -5,7 +5,7 @@ results. S-parameter plots and the report, the board in plan and 3D with the lin
 animations, antenna patterns and beam steering, dfsynth's filter synthesis (the Filter page), and whatever
 analyses are installed beside S-parameters (pcbqs's power integrity, near field, circuit and thermal).
 
-![A hairpin filter's S-parameters from gfdtd, mom25d and the line model, with a Smith chart](https://github.com/lowprocess/kicad2ems/raw/main/docs/img/readme/gui_sparams.png)
+![The window: the questions, a hairpin filter's board with its S-parameters from gfdtd, mom25d and the line model under it, and the settings](https://github.com/lowprocess/kicad2ems/raw/main/docs/img/readme/gui_sparams.png)
 
 The settings form is made from kicad2ems's option tables and its solver registry, so an installed solver package
 (openEMS, mom25d, gfdtd or any other plugin) gets its tick box and its settings with no change here. The analyses
@@ -13,10 +13,19 @@ come the same way, from kicad2ems's analysis registry (`kicad2ems.api.frontend.a
 of them by name. Each run is a process of its own (`kicad2ems.runs`, or the analysis's command), so the window
 needs nothing of a solver's and closing it never loses a run. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/docs/gui.md) covers using it.
 
+## The window
+
+One fixed layout (`docs/redesign.md`): the board and the **Questions** asked of it on the left; the board itself
+in the middle, in the Viewer, with the Results and Run pages in a drawer under it; the settings of the question
+selected on the right, the few a run is set up with in view and the rest under a searchable **More settings**
+(an option's `level`, a solver's `basic`: kicad2ems API 2.9); under them **Still needed**, what a run of that
+question lacks (`rf_needs`, an analysis's `missing`), each line leading to where it is set. The Run button says
+what it will run, or the first thing missing. The columns and the drawer fold (View); nothing docks or floats.
+
 ## The study
 
-The dock on the left is the study: the board (one for every question), the **Questions** asked of it and the
-settings of the question selected there. The list is kicad2ems's (`kicad2ems.api.frontend.study_tree`): the
+The left column is the study: the board (one for every question) and the **Questions** asked of it; the
+settings of the question selected there are the right column. The list is kicad2ems's (`kicad2ems.api.frontend.study_tree`): the
 questions by group (RF, Power, Thermal), each with the engines installed that answer it. A row's *Answered by*
 cell is a menu: *auto*, or a tick per engine, and several ticked all run and are compared; *Fields* asks for its
 field dumps where an engine can write them. The three RF questions are kicad2ems's own run, with the solvers
@@ -53,10 +62,10 @@ and written back when it is saved. A config that names no analyses is an S-param
 the installed analyses ship: Circuits). A circuit to start from is an example like any other: it opens as a study
 with its board, its model on the Circuit page and the circuit ticked.
 
-Filter Synthesis opens from the toolbar's Filter (it is closed when the window opens). The **Circuit** page, the
-one analysis with an editor of its own, is there while Circuit is asked. It is the model's editor only (its
+Filter Synthesis opens from the toolbar's Filter, in a window of its own. The **Circuit** page, the
+one analysis with an editor of its own, is a tab beside the board while Circuit is asked. It is the model's editor only (its
 schematic, its JSON): the model is a file the config names, saved back beside the config with the study. The
-circuit's settings are a panel in the Study dock like any analysis's, made from the plugin's options (the two
+circuit's settings are a panel in the right column like any analysis's, made from the plugin's options (the two
 tools' own tables, the options of the other kind of model hidden), with a *Model* section for a general model's
 parameters and sweep; the full bridge's operating points show the model's values, and what is typed there goes
 into the model. Its results are on the Results page and its log on the Run page, as every analysis's.
@@ -69,14 +78,14 @@ into the model. Its results are on the Results page and its log on the Run page,
 
     kicad2ems-gui [config.toml]                         # or: python -m kicad2ems_gui
 
-It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 261112 or later (its API 2.5). The
+It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 261112.post9 or later (its API 2.9). The
 analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 
 ## Inside
 
 | Module | Contents |
 |---|---|
-| `app.py` | `MainWindow`: the study dock, the pages, a run of the ticked analyses and its events |
+| `app.py` | `MainWindow`: the fixed layout (the questions, the board and its drawer, the settings), a run of the ticked analyses and its events, what a run still needs |
 | `study.py` | the runs a board can have (the solvers', then each analysis), what follows what, and the list in the Study dock: a row per question, who answers it, its Fields tick and its state |
 | `analysispanel.py` | an analysis's settings and its run, for any plugin: the form from its options, its command as a child process |
 | `curves.py`, `curveplot.py` | an analysis's curves on the Results page (a rail's impedance, a spectrum, waveforms), other runs over them |
@@ -93,7 +102,7 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 | `powercircuittab.py`, `schematicview.py` | the Circuit page: the circuit analysis's model as a schematic to edit; its settings panel (the plugin's options, and the model's own values) |
 | `toolprocess.py` | a tool as a child process (an analysis's command, dfsynth) |
 | `systempanel.py`, `statusbar.py`, `meters.py` | what this machine can run, memory, estimates |
-| `panels.py` | a collapsible section, an image panel, a row of controls that wraps |
+| `panels.py` | a collapsible section, the Still-needed list, an image panel, a row of controls that wraps |
 | `api.py` | what other packages may use (the KiCad plugin): `PlanView`, `SectionView`, `API_VERSION` |
 
 ## Tests

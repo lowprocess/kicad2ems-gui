@@ -65,25 +65,34 @@ def gui_media(only):
             app.processEvents()
             time.sleep(0.03)
 
-    def window(case, size=(1500, 900)):
+    def window(case, size=(1600, 950)):
         """The window with the case's config in the settings and its run in the pages (no preview of its own)."""
         w = MainWindow(os.path.join(REPO, 'examples', CASES[case][0] + '.toml'))
         pump()                                                      # not on the screen yet: no automatic preview
         w.resize(*size)
         w.show()
+        pump()
+        w.reset_layout()
         w.open_results(os.path.join(RUNS, case), quiet=True)
+        if os.environ.get('QT_QPA_PLATFORM') == 'offscreen':        # no 3D there: the board from above
+            w.viewer.set_view('Plan')
         pump(40)
         return w
 
     def shot(w, path, page=None, view=None):
-        """The window with `page` in front (and the Viewer's `view`), saved to path (None: only shown)."""
+        """The window with `page` in front (and the Viewer's `view`), saved to path (None: only shown). A page of
+        the drawer gets most of the middle's height, the board the rest; the board's own pictures the other way
+        round. Filter Synthesis is its own window: that is what is saved."""
         if page:
             w.show_panel(page)
+            if page != 'Filter':
+                h = sum(w.mid.sizes())
+                w.mid.setSizes([int(0.3 * h), int(0.7 * h)] if page in w.drawer.pages else [int(0.78 * h), int(0.22 * h)])
         if view:
             w.viewer.set_view(view)
         pump(30)
         if path:
-            w.grab().save(path)
+            (w.filter_window if page == 'Filter' else w).grab().save(path)
             print(f"  {os.path.relpath(path, REPO)}")
 
     def close(w):
@@ -157,6 +166,7 @@ def gui_media(only):
         w = MainWindow()
         w.resize(1500, 900)
         w.show()
+        w.filter_window.resize(1500, 900)
         w.filter.set_values(dict(args, out=base))
         w.filter.show_result(ft.load_design(base))
         shot(w, os.path.join(GUI, 'filter.png'), 'Filter')

@@ -243,6 +243,7 @@ class Thermal(_Fake):
     about = "the board's steady temperature from its parts' losses"
     paths = ('circuit',)
     provides = ('thermal',)
+    uses = ('circuit',)                                             # its losses, when none are typed
     OPTIONS = (opt('loss', 'list', [], 'Heat'), opt('circuit', group='Heat'), opt('film', 'float', 10.0, 'Air'),
                opt('scale', 'float', 1.0, 'Air'))
 

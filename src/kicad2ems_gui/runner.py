@@ -74,6 +74,13 @@ def make_fields():
 
 
 FIELDS = make_fields()
+
+
+def basic_keys():
+    """The few settings a run is set up with, shown first (Option.level = 'basic': kicad2ems's own, and those a
+    solver names in Solver.basic); the rest are under "More settings"."""
+    from kicad2ems.api.frontend import all_options
+    return {o.key for _, o in all_options() if getattr(o, 'level', None) == 'basic'}
 SEMICOLON_LISTS = ('ports', 'dump')                       # items that may hold commas themselves
 # the tick boxes are not settings of their own: the form's values carry solvers = the ticked solvers (see
 # solvers_from_form). 'solvers', 'mom' and 'fast' belong to the boxes, like the fields

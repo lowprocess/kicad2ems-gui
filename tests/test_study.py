@@ -66,7 +66,7 @@ def test_study_dock(window):
     from kicad2ems_gui.analysispanel import AnalysisPanel
     w, app, MainWindow = window
     st, tree = w.setup, w.study
-    assert w.settings_dock.windowTitle() == 'Study' and st.study is tree
+    assert st.study is tree and st.isAncestorOf(tree)               # the list: the window's left column
     groups = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
     assert [g.text(0) for g in groups] == ['RF', 'Power', 'Thermal']
     assert [[g.child(k).text(0) for k in range(g.childCount())] for g in groups] == [
@@ -84,7 +84,8 @@ def test_study_dock(window):
     assert list(w.pages) == ['pdn', 'mqs', 'circuit', 'thermal', 'elmer_thermal']
     assert not st.rf_box.isHidden() and st.panels['pdn'].isHidden() and st.panel_title.text() == 'S-parameters settings'
     assert st.sections['Board'].parentWidget() is not st.rf_box              # the board: for every question
-    assert st.sections['Frequency'].parentWidget() is st.rf_box
+    assert st.rf_box.isAncestorOf(st.more) and st.more.isAncestorOf(st.sections['Frequency'])   # under More settings
+    assert w.setup.inspector.isAncestorOf(st.rf_box) and not st.isAncestorOf(st.rf_box)         # the right column
     tree.select('dc')
     assert st.rf_box.isHidden() and not st.panels['pdn'].isHidden() and tree.current() == 'pdn'
     assert st.panel_title.text() == 'Rail drop settings' and st.engine_titles['pdn'].isHidden()        # one engine
@@ -94,7 +95,7 @@ def test_study_dock(window):
     assert not mqs.find_btn.isHidden()                               # it fills the form: it stays
     assert st.panels['circuit'] is w.pages['circuit'].panel and st.panels['circuit'].isAncestorOf(w.pages['circuit'].params)
     assert pdn.board.placeholderText() == "the study's board"
-    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']    # no page per analysis: the
+    assert list(w.places) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']   # no page per analysis: the
     tree.rows['dc'].setCheckState(0, Qt.Checked)                                 # circuit's editor alone
     assert tree.asked() == dict(sparams=[], dc=[]) and tree.ticked() == ['rf', 'pdn'] and '2 asked' in st.study_section.head.text()
     assert tree.asked_of('pdn') == ('dc',) and tree.asked_of('rf') == ('sparams',)
@@ -238,10 +239,10 @@ def test_an_analysis_page_in_front_selects_its_settings(window):
     assert w.study.current() == 'circuit'
     w.show_analysis('pdn')                                          # one without a page of its own: its settings,
     app.processEvents()                                             # and where its results are
-    assert w.study.current() == 'pdn' and not w.docks['Results'].visibleRegion().isEmpty()
+    assert w.study.current() == 'pdn' and w.places['Results'].in_front()
     w.show_analysis('circuit')
     app.processEvents()
-    assert w.study.current() == 'circuit' and not w.docks['Circuit'].visibleRegion().isEmpty()
+    assert w.study.current() == 'circuit' and w.places['Circuit'].in_front()
     w.close()
 
 
@@ -261,12 +262,12 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     monkeypatch.setattr(w, '_start_job', start)
     pump = lambda: [app.processEvents() for _ in range(5)]
     w.study.set_ticked(['rf', 'mqs', 'circuit'])
-    w.run()
+    w.run_study()
     assert started == [('rf', False)] and w.job == 'rf' and w.queue == ['mqs', 'circuit']
     assert w.study.state('rf') == 'running' and w.study.state('circuit') == 'queued'
     assert not w.runtab.jobs.isHidden() and w.runtab.jobs.topLevelItemCount() == 3
     assert w.acts['Stop'].isEnabled()
-    w.run()                                                         # a run is going
+    w.run_study()                                                         # a run is going
     assert said and 'stop it first' in said[-1] and len(started) == 1
     w._job_done('mqs', 0)                                           # not the one running: nothing
     assert w.job == 'rf'
@@ -284,7 +285,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     started.clear()
     why['rf'] = 'Choose a board first'
     w.study.set_ticked(['rf', 'pdn'])
-    w.run()
+    w.run_study()
     assert started == [('rf', False), ('pdn', False)] and w.job == 'pdn'
     assert w.study.state('rf') == 'not started: Choose a board first'
     assert w.study.rows['sparams'].text(3) == 'not started'          # the column: short, the tooltip whole
@@ -296,7 +297,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     stopped = []
     monkeypatch.setattr(w.pages['pdn'], 'stop', lambda: stopped.append('pdn'))
     w.study.set_ticked(['pdn', 'circuit'])
-    w.run()
+    w.run_study()
     assert w.job == 'pdn'
     w.stop()
     assert stopped == ['pdn'] and w.queue == [] and w.study.state('circuit') == 'not run: stopped'
@@ -318,7 +319,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
     w._job_done('circuit', 0)
     pump()
     w.study.set_ticked([])
-    w.run()
+    w.run_study()
     assert 'Tick a question' in said[-1] and w.job is None
     w.close()
 
@@ -342,8 +343,10 @@ def test_an_analysis_runs_from_the_window(window, tmp_path):
     w.show()
     pdn, th = w.pages['pdn'], w.pages['thermal']
     w.study.set_ticked(['pdn'])
-    w.run()                                                         # no board, no rail
-    assert w.job is None and w.study.state('pdn').startswith('not started: choose a board')
+    w.run()                                                         # no board, no rail: Run says so, and starts nothing
+    assert w.job is None and w.study.state('pdn') == '' and w.acts['Run'].text() == 'Choose a board first'
+    w.run_study()                                                   # started all the same (one question alone is):
+    assert w.job is None and w.study.state('pdn').startswith('not started: choose a board')      # its row says why
     board = tmp_path / 'b.kicad_pcb'
     board.write_text('')
     w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))      # the study's board: the panel's too
@@ -366,7 +369,7 @@ def test_an_analysis_runs_from_the_window(window, tmp_path):
     assert sorted(l.split(',')[0] for l in labels) == ['Power integrity: 3V3', 'Thermal: losses']
     assert w.runs_box.currentData() == th.out and os.path.basename(th.out).startswith('b_thermal_losses_')
     r = w.results
-    assert r.kind() == 'thermal' and r.mode == 'Report' and not w.docks['Results'].visibleRegion().isEmpty()
+    assert r.kind() == 'thermal' and r.mode == 'Report' and w.places['Results'].in_front()
     assert r.info.text() == 'Thermal: hottest copper 75.0 °C' and th.status.text() == 'done: ' + r.info.text()
     cuts = w.viewer.cuts                                            # its map: a temperature, shown as one
     assert [s.label for s in cuts.srcs] == ['thermal board: T F.Cu (static)'] and cuts.src.unit == '°C'
@@ -471,24 +474,110 @@ def test_one_analysis_starts_from_another_s_result(window, tmp_path):
     w.close()
 
 
-def test_the_study_comes_back_after_a_layout_that_hid_it(window):
-    """A layout saved with the Study dock closed opened with it hidden and its View action disabled: no way to
-    choose a board. It is closable now (View toggles it) and shown when the window opens."""
+def test_the_questions_column_folds_and_comes_back(window):
+    """The questions' column folds away from View (and by its key) and comes back the same way; a window that
+    opens with it folded says so in View, where it is one click from back."""
     w, app, MainWindow = window
-    d = w.settings_dock
-    assert d.toggleViewAction().isEnabled()
-    d.hide()
-    w.close()                                                       # the layout is saved with the dock hidden
+    w.show()
+    app.processEvents()
+    act = w.fold_acts['Questions']
+    assert act.isEnabled() and act.isChecked() and not w.setup.isHidden()
+    act.trigger()
+    assert w.setup.isHidden() and not act.isChecked()
+    w.close()                                                       # saved with the column folded
     again = MainWindow()
     try:
-        assert not again.settings_dock.isHidden() and again.settings_dock.toggleViewAction().isEnabled()
         again.show()
         app.processEvents()
-        again.settings_dock.toggleViewAction().trigger()            # View > Study closes it and opens it again
-        assert again.settings_dock.isHidden()
-        again.settings_dock.toggleViewAction().trigger()
-        assert not again.settings_dock.isHidden()
+        act = again.fold_acts['Questions']
+        assert again.setup.isHidden() and act.isEnabled() and not act.isChecked()
+        act.trigger()                                               # View > Questions: back
+        assert not again.setup.isHidden() and again.setup.isAncestorOf(again.study)
     finally:
         again.system.stop()
         again.meters.stop()
         again.close()
+
+
+def test_the_few_settings_first_and_the_rest_found(window):
+    """The settings a run is set up with are in view (the registry says which: an option's level, a solver's
+    `basic`), those of a solver while it is chosen; the others are under "More settings", in their sections, and
+    found by a word of their label, their key or their section. The board's: its file and extra ports first."""
+    from kicad2ems_gui.runner import basic_keys
+    w, app, _ = window
+    w.show()
+    app.processEvents()
+    st = w.setup
+    first = [k for k, (frm, _) in st.rows.items() if frm is st.basic_form]
+    assert first[:3] == ['fmin', 'fmax', 'points'] and set(first) | {'board', 'ports'} == basic_keys() & set(st.rows) | {'board', 'ports'}
+    assert st.rows['board'][0] is not st.basic_form and st.rows['pos'][0] is st.board_more_form     # the board's own
+    assert not st.more.expanded and st.more.head.text().startswith('More settings')
+    assert st.find.placeholderText() == 'Find a setting'
+    solver = next((k for k in first if st.group_of[k].split('/')[0] in ('FDTD', 'mom25d')), None)
+    if solver:                                                      # a solver's, in view while it is chosen
+        top = st.group_of[solver].split('/')[0]
+        assert st.field_labels[solver].text().startswith(top + ': ')
+        for name, box in st.solver_boxes.items():
+            box.setChecked(False)
+        st._update_sections()
+        assert not st.basic_form.isRowVisible(st.rows[solver][1])
+    st.set_values(dict(fmin=1, fmax=2, air=5))
+    assert st.more.head.text() == 'More settings  (1 set)'          # those in view are not counted: they are seen
+    hidden = lambda key: not st.rows[key][0].isRowVisible(st.rows[key][1])
+    st.find.setText('sweep')
+    assert not hidden('sweep') and st.sections['Frequency'].expanded and not st.sections['Frequency'].isHidden()
+    assert st.sections['Output'].isHidden() and not hidden('fmin')  # (the first few stay)
+    st.find.setText('output')                                       # a section's name: all of it
+    assert not st.sections['Output'].isHidden() and not hidden('out') and st.sections['Frequency'].isHidden()
+    st.find.setText('')
+    assert not st.sections['Frequency'].isHidden() and not st.sections['Frequency'].expanded and not hidden('sweep')
+    st.focus('sweep')
+    assert st.more.expanded and st.sections['Frequency'].expanded
+    st.focus('pos')
+    assert st.sections['Board'].expanded and st.board_more.expanded
+    w.setup.dirty = False
+
+
+def test_still_needed_and_what_run_says(window, tmp_path):
+    """What a run still needs is listed under the selected question's settings, each line leading to where it is
+    set, and the Run button says the first of them instead of starting; with nothing missing it says what it will
+    run. An analysis says what it needs itself (Analysis.missing: what its command raises, by default)."""
+    w, app, _ = window
+    w.show()
+    app.processEvents()
+    need, run = w.setup.needed, w.acts['Run']
+    w.update_needed()
+    assert run.text() == 'Choose the board' and [m['text'] for m in need.items] == ['choose the board']
+    assert not need.isHidden() and need.title.text() == 'Still needed'
+    w.run()                                                         # goes there, starts nothing
+    assert not w.busy() and w.setup.sections['Board'].expanded and 'still needs: choose the board' in w.statusBar().currentMessage()
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.update_needed()
+    assert run.text() == 'Run' and need.items == [] and 'S-parameters' in run.toolTip()
+    w.setup.set_values(dict(board=str(board), fmin=5, fmax=2))
+    w.update_needed()
+    assert run.text() == 'F max is not above f min' and need.items[0]['key'] == 'fmax'
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.study.set_ticked(['rf', 'pdn'])                               # an analysis that needs its rail named
+    w.study.select('dc')
+    w.update_needed()
+    assert run.text() == 'Name the rail (its net)' and [m['run'] for m in need.items] == ['pdn']
+    assert run.toolTip().startswith('Power integrity still needs: name the rail')
+    w.study.select('sparams')                                       # the list: the selected question's
+    assert need.items == [] and run.text() == 'Name the rail (its net)'
+    w.pages['pdn'].set_values(dict(rail='+3V3'))
+    w.update_needed()
+    assert run.text() == 'Run 2' and run.toolTip().startswith('Run S-parameters, then Power integrity')
+    w.study.set_ticked(['thermal'])                                 # the temperature alone: it has no losses
+    w.study.select('thermal')
+    w.update_needed()
+    assert 'losses' in need.items[0]['text'] and run.text().startswith('Give the parts')
+    w.study.set_ticked(['circuit', 'thermal'])                      # with the circuit asked, which runs first and
+    w.update_needed()                                               # will give them: nothing to ask for
+    assert [m for m in need.items if m['run'] == 'thermal'] == [] and w.needs(['circuit', 'thermal'])['thermal'] == []
+    w.study.set_ticked([])
+    w.update_needed()
+    assert run.text() == 'Run' and 'Tick a question' in run.toolTip()
+    w.setup.dirty = False

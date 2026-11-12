@@ -114,9 +114,9 @@ class AnalysisPanel(QWidget):
             fl.setContentsMargins(0, 0, 0, 0)
             fl.setRowWrapPolicy(QFormLayout.WrapLongRows)
             for o in opts:
-                if o['kind'] == 'bool':
-                    wid = QCheckBox(o['help'])
-                    wid.setChecked(bool(o['default']))
+                if o['kind'] == 'bool':                             # named as the other options are, what it does
+                    wid = QCheckBox(o['key'].replace('_', ' '))     # in its tooltip: a long line beside the box made
+                    wid.setChecked(bool(o['default']))              # the panel wider than its column
                 elif o['kind'] == 'list':
                     wid = QPlainTextEdit()
                     wid.setPlaceholderText('one a line')
@@ -178,6 +178,33 @@ class AnalysisPanel(QWidget):
     def _edited(self, *_):
         if not self._setting:
             self.changed.emit()
+
+    def needs(self, asked=(), to_come=()):
+        """What a run of these settings still needs, [dict(text, key)]: the options a proposal left without a value,
+        and what the analysis says (Analysis.missing: kicad2ems API 2.9; before it, nothing more). to_come: the
+        analyses asked with it that run before it and have no result yet: what they will give is not missing."""
+        vals = self.values()
+        if asked:
+            vals = self.a.for_questions(vals, tuple(asked))
+        out = [dict(text=f"set {k.replace('_', ' ')}", key=k) for k in sorted(self.required)
+               if not str(vals.get(k, '')).strip()]
+        if hasattr(self.a, 'missing'):
+            latest = self.win.latest_results() if self.win is not None and hasattr(self.win, 'latest_results') else {}
+            latest = {**{k: None for k in to_come}, **latest}
+            try:
+                out += [dict(text=str(m['text']), key=m.get('key')) for m in self.a.missing(vals, self.board_path() or None, latest)]
+            except Exception:                                       # noqa: BLE001 (a plugin's check: never the window's end)
+                pass
+        return out
+
+    def focus(self, key):
+        """The field of an option in view, its section open; no such option: the first section."""
+        wid = self.w.get(key)
+        for g, fl in self.forms.items():
+            if wid is not None and fl.indexOf(wid) >= 0 and g in self.sections:
+                self.sections[g].set_expanded(True)
+        if wid is not None:
+            wid.setFocus()
 
     def _browse(self):
         p, _ = QFileDialog.getOpenFileName(self, 'Board', '', 'KiCad board (*.kicad_pcb);;kicad2ems board (*.json)')
