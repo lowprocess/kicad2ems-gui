@@ -33,8 +33,11 @@ class _Solve(QThread):
 
 
 class SectionView(QWidget):
-    def __init__(self):
+    def __init__(self, model_line=True):
+        """model_line: the read-out also says what the line model has for the section (False: a cross-section that
+        is no board's, the impedance calculator's)."""
         super().__init__()
+        self.model_line = model_line
         self.e, self.v, self.items, self._jobs, self._want, self.ink = None, None, [], [], None, (255, 255, 255)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -147,6 +150,8 @@ class SectionView(QWidget):
             elif k != 'nodes':
                 parts.append(f"{k} {x:.1f} Ω")
         parts.append(f"{v.values['nodes']:,} nodes")
+        if not self.model_line:
+            return f"<b>{' · '.join(parts)}</b>"
         model = f"line model: Z0 {e['z0']:.1f} Ω{ov.source_note(e)}" if e.get('z0') else 'no Z0 in the line model'
         return f"<b>{' · '.join(parts)}</b><br>{model}<br>{ov.describe(e)}"
 

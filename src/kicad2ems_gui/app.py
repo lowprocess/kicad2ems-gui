@@ -1658,6 +1658,11 @@ class MainWindow(QMainWindow):
             a.setShortcut(QKeySequence(key))
             a.triggered.connect(slot)
             rm.addAction(a)
+        tm = self.menuBar().addMenu('&Tools')                    # what is not about the open board's run
+        a = QAction('&Impedance calculator…', self)
+        a.setToolTip("A line's impedance in a stack-up, and the width of a target: the field solver without a board")
+        a.triggered.connect(self.show_impedance)
+        tm.addAction(a)
         hm = self.menuBar().addMenu('&Help')
         a = QAction('&Solvers and hardware…', self)
         a.triggered.connect(self.show_solvers)
@@ -1667,6 +1672,19 @@ class MainWindow(QMainWindow):
         hm.addAction(a)
         self._fill_recent()
         self._fill_examples()
+
+    def show_impedance(self):
+        """Tools > Impedance calculator: one window, kept; the open board's layers offered as its stack."""
+        from .impedance import ImpedanceCalculator
+        board = self.setup.values().get('board') or None
+        if getattr(self, 'impedance', None) is None:
+            self.impedance = ImpedanceCalculator(self, board)
+        elif board != self.impedance.board:
+            self.impedance.set_board(board)
+        self.impedance.show()
+        self.impedance.raise_()
+        self.impedance.activateWindow()
+        return self.impedance
 
     def _fill_examples(self):
         """The examples, kicad2ems's own and those the installed analyses ship (pcbqs's circuits), as a menu of
