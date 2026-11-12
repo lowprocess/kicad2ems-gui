@@ -459,6 +459,7 @@ def test_one_analysis_starts_from_another_s_result(window, tmp_path):
     b.click()
     assert pdn.values()['rail'] == 'VBUS' and pdn.values()['load'] == '' and pdn.values()['scale'] == ''
     assert pdn.board.text() == str(board) and pdn.required == {'volts'} and w.study.current() == 'pdn'
+    assert {'dc', 'pdn'} <= set(w.study.asked())                    # proposed for it: asked, so Run includes it
     assert pdn.status.text() == 'The input rail is copied.' and w.setup.dirty
     w.run_study(only='pdn')
     assert w.job is None and w.study.state('pdn').startswith('not started: Set volts before Run')

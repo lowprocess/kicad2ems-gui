@@ -2407,19 +2407,32 @@ class MainWindow(QMainWindow):
 
     def apply_suggestion(self, source, s):
         """What one analysis's result proposes for another (Analysis.suggest): those settings into the other's
-        panel, on the same board; the options it had no value for must be set before a run."""
+        panel, on the same board, and its questions asked; the options it had no value for must be set before a
+        run. For the analysis
+        with an editor of its own (the circuit), a model the proposal names is opened there, as the study's own
+        (a config then writes it beside itself, not into the result it came from)."""
         target = self.pages.get(s.get('to'))
-        if target is None or not hasattr(target, 'set_values'):
+        if target is None:
             return
         values = dict(s.get('values') or {})
-        target.reset()
-        if source.board.text().strip():                             # a board of its own: the same one there
-            target.set_own(source.board.text().strip(), None)
-        target.set_values(values)
-        target.required = {k for k in s.get('need') or [] if not str(values.get(k) or '').strip()}
-        target.status.setText(s.get('note', ''))
-        target.changed.emit()
-        self.study.select(s['to'])
+        own = source.board.text().strip()                           # a board of its own: the same one there
+        if hasattr(target, 'set_values'):
+            panel = target
+            panel.reset()
+            if own:
+                panel.set_own(own, None)
+            panel.set_values(values)
+        elif hasattr(target, 'load_settings'):
+            target.load_settings(dict(values, **({'board': own} if own else {})))
+            target.model_path = None
+            panel = target.settings_panel()
+        else:
+            return
+        panel.required = {k for k in s.get('need') or [] if not str(values.get(k) or '').strip()}
+        panel.status.setText(s.get('note', ''))
+        panel.changed.emit()
+        self.study.ask(s['to'])                                     # proposed for it: asked, so Run includes it
+        self.show_analysis(s['to'])                                 # its settings, and its page (the schematic)
 
     # ---- this board's runs: a folder each (runfolders.py) ----
     def board_loaded(self):

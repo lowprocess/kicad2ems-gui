@@ -30,9 +30,14 @@ questions by group (RF, Power, Thermal), each with the engines installed that an
 cell is a menu: *auto*, or a tick per engine, and several ticked all run and are compared; *Fields* asks for its
 field dumps where an engine can write them. The three RF questions are kicad2ems's own run, with the solvers
 ticked on those rows. The others' engines are the analysis plugins installed (`kicad2ems --check` lists them):
-each one's settings are a panel made from the options its plugin declares, with what else it offers (Near
-field's *Find converters*, which lists the board's converters to pick from; after a near-field run, *Copy the
-input rail to Power integrity*). None installed: those rows are greyed, and say how to install an engine.
+each one's settings are a panel made from the options its plugin declares, with what else it offers: Near
+field's *Find converters*, which lists the board's converters to pick from, and, after a run, what its result
+proposes for another question. A near field's: *Copy the input rail to Power integrity* and *Open U702 as a
+circuit* (the converter in the Circuit editor, its capacitors and inductor from the board); a circuit's: *Copy
+the rail +5V and what is drawn from it to Power integrity* (its loads' currents and their spectra, for the
+ripple on the rail) and *Copy U702's input current to Near field*. A click fills that question's settings, ticks
+it so that Run includes it, and shows it. None installed: those rows are greyed, and say how to install an
+engine.
 
 **Preview** and **Run** make the runs the questions asked take, one after the other: the solvers', then each
 analysis in the registry's order; the Run page lists them with each one's state, time and log. Run > *Run the

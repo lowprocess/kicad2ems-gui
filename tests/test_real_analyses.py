@@ -94,3 +94,80 @@ def test_a_circuit_example_runs_to_its_temperatures(window, tmp_path):
     run, tables = read_analyses(w.setup.path)
     assert run is None and tables['circuit'] == dict(model=str(folder / '01_rc_filter.json'))
     assert list(read_study(w.setup.path).asked) == ['circuit', 'thermal']
+
+
+def _regulator(folder):
+    """A buck regulator's board, as pcbqs's own tests make it: U1 where the islands in and sw meet the ground
+    strip, C1 on its input, L1 from sw to out, C2 on the output."""
+    from shapely.geometry import box
+    from pcbqs.circuit import boards as B
+    b = B.Board('regulator', 40, 23)
+    b.row(['in', 'sw', 'out'], [12, 8, 14], height=14)
+    b.place(dict(parts=[dict(ref='C1', type='capacitor', nodes=['in', '0'], value=22e-6),
+                        dict(ref='C2', type='capacitor', nodes=['out', '0'], value=47e-6),
+                        dict(ref='L1', type='inductor', nodes=['sw', 'out'], value=10e-6)]),
+            packages=dict(C1='C_0805', C2='C_0805'))
+    b.footprints.append(dict(ref='U1', value='BUCK', lib='Package_SO:SOIC-8', x=14.2, y=9.0, pads=[
+        ('1', 'VIN', 'in', box(12.4, 4.0, 13.6, 6.0)), ('2', 'SW', 'sw', box(14.8, 4.0, 16.0, 6.0)),
+        ('3', 'GND', 'GND', box(13.4, 17.0, 15.0, 18.0))]))
+    b.check()
+    return b.write(folder)
+
+
+def _wait(w, app, seconds=240):
+    t0 = time.time()
+    while w.busy() and time.time() - t0 < seconds:
+        app.processEvents()
+        time.sleep(0.02)
+    for _ in range(10):
+        app.processEvents()
+
+
+def test_a_converter_goes_from_the_near_field_to_its_circuit_and_on_to_its_rail(window, tmp_path):
+    """What one result proposes to the next, through the window: a near field's converter opened as a circuit (the
+    model the run wrote, now the study's own), and what that circuit draws from its supply copied to the power
+    integrity (the rail, its DC load, its current spectrum) and back to the near field (its input current)."""
+    w, app = window
+    w.show()
+    board = _regulator(tmp_path)
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    mqs, pdn, page = w.pages['mqs'], w.pages['pdn'], w.pages['circuit']
+    w.study.set_ticked(['mqs'])
+    mqs.set_values(dict(vin_volts=12, vout=5, fsw=250e3, current=2, cap_radius=30, harmonics='1', scan_points=9,
+                        heights='2', field_tol=0.2, dmax=3, fine=1.5))
+    w.run_study(only='mqs')
+    _wait(w, app)
+    assert w.study.state('mqs').startswith('done'), mqs.log.toPlainText()[-1500:]
+    assert [b.text() for b in mqs.suggest_btns] == ['Copy the input rail to Power integrity', 'Open U1 as a circuit']
+    mqs.suggest_btns[1].click()
+    c = page.values()
+    assert c['name'] == 'U1: in to out' and c['board'] == dict(file=str(board), parts=dict(QH='U1', QL='U1'),
+                                                               nets={'in': 'in', 'sw': 'sw', 'out': 'out'})
+    assert page.model_path is None and page.copper.isChecked() and w.study.current() == 'circuit' and w.setup.dirty
+    assert w.study.ticked() == ['mqs', 'circuit'] and w.places['Circuit'].in_front()    # asked: its schematic in front
+    assert page.status.text().startswith('U1 as a circuit: its capacitors and inductor from the board')
+    w.run_study(only='circuit')
+    _wait(w, app)
+    if not w.study.state('circuit').startswith('done'):
+        pytest.skip(f"the circuit did not run here (ngspice?): {w.study.state('circuit')}")
+    proposed = page.panel.suggest_btns
+    assert [b.text() for b in proposed] == ['Copy the rail in and what is drawn from it to Power integrity',
+                                            "Copy U1's input current to Near field"]
+    proposed[0].click()
+    v = pdn.values()
+    assert v['rail'] == 'in' and float(v['volts']) == 12 and w.study.current() == 'pdn'
+    assert list(w.study.asked()) == ['dc', 'pdn', 'nearfield', 'circuit']      # the rail's two questions asked too
+    ref, _, amps = v['load'].partition('=')
+    assert ref == 'U1' and 0.7 < float(amps) < 1.1                  # 10 W out of 12 V, and its losses
+    spectrum = v['load_spectrum'].partition('=')[2]
+    assert os.path.basename(spectrum) == 'supply-U1.csv' and os.path.isfile(spectrum)
+    assert spectrum.startswith(str(page.out))                       # the run's own file
+    proposed[1].click()
+    v = mqs.values()
+    assert (v['converter'], v['vin'], v['capacitors'], v['spectrum']) == ('U1', 'in', 'C1', spectrum)
+    assert w.study.current() == 'mqs'
+    mqs.set_values(dict(harmonics='1', scan_points=9, heights='2', field_tol=0.2, dmax=3, fine=1.5))
+    w.run_study(only='mqs')                                         # the near field again, of the circuit's current
+    _wait(w, app)
+    assert w.study.state('mqs').startswith('done'), mqs.log.toPlainText()[-1500:]
+    assert w.results.info.text().endswith("of a circuit's input current")

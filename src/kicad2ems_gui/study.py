@@ -372,6 +372,13 @@ class StudyTree(QTreeWidget):
         from kicad2ems.api.frontend import Study
         self.set_study(Study(asked, {q: self.fields.get(q, False) for q in asked}))
 
+    def ask(self, key):
+        """The questions a run answers asked too (those that can be, by that run where it is one of several
+        engines: the others stay as they are): what a result proposed for it is to be run."""
+        for q, it in self.rows.items():
+            if key != RF and key in self.engines_for(q) and self.can_ask(q) and it.checkState(C_Q) != Qt.Checked:
+                it.setCheckState(C_Q, Qt.Checked)
+
     def set_available(self, key, ok, why=''):
         """A run that cannot be made here: its engine is not offered, and a question nobody else answers is
         greyed, unticked, its State and tooltip saying why."""
