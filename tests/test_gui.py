@@ -68,7 +68,7 @@ def test_window_tabs(tmp_path):
     assert v['dump'] == ['E@F.Cu@2,6', 'H@volume'] and v['mode'] == 'antenna'
     w.setup.extra = dict(air=3.0)
     assert w.setup.values()['air'] == 3.0
-    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit', 'Thermal']
+    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']    # no page per analysis: an editor's
     assert w.viewer.view() in ('3D', 'Plan')                         # 3D when OpenGL can be had
     w.viewer.set_view('Plan')
     assert w.viewer.view() == 'Plan' and w.viewer.buttons['Plan'].isChecked()
@@ -1165,7 +1165,8 @@ def test_filter_page_from_the_description(monkeypatch):
 
 
 def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
-    """File > Examples lists kicad2ems's installed examples; one opens from the user's folder, its board made."""
+    """File > Examples lists the installed examples in their groups; one opens from the user's folder, its board
+    made."""
     pytest.importorskip('PySide6')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
@@ -1173,8 +1174,14 @@ def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
     from kicad2ems_gui.app import MainWindow
     QApplication.instance() or QApplication([])
     w = MainWindow()
-    names = [a.text() for a in w.examples_menu.actions()]
-    assert 'rf_gcpw' in names and 'sma_launch' in names
+    assert [a.text() for a in w.examples_menu.actions()] == ['Antennas', 'RF structures', 'Lumped-element demos']
+    assert set(w.example_menus) >= {'/Antennas', '/Antennas/Patches and arrays', '/RF structures/Filters'}
+    assert w.example_sources == {'/Antennas': {'kicad2ems'}, '/RF structures': {'kicad2ems'}, '/Lumped-element demos': {'kicad2ems'}}
+    lines = w.example_menus['/RF structures/Lines and transitions']
+    names = [a.text() for a in lines.actions()]
+    assert 'rf_gcpw' in names and 'sma_launch' in names and 'rf_steplpf' not in names
+    assert next(a for a in lines.actions() if a.text() == 'rf_gcpw').toolTip().startswith('grounded coplanar waveguide')
+    assert [a.text() for a in w.example_menus['/Lumped-element demos'].actions()][0] == 'demo_lowpass'    # no subgroup
     w.setup.dirty = False
     w.open_example('rf_gcpw')
     folder = tmp_path / 'kicad2ems' / 'examples'

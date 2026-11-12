@@ -7,11 +7,11 @@ The study: one board, the analyses made of it, and which of them a Run includes.
     run_order(ticked, preview)  what a Run (a Preview) of the ticked analyses starts, in order
     StudyList                   the list in the Study dock: a tick, what runs it and its state per analysis
 
-An analysis is a tool of its own behind one of the window's pages (kicad2ems itself for S-parameters, pcbqs's
-tools for the power ones): the list only says which to run and shows which settings; the pages still start their
-tools and read their results. `needs` is how one analysis follows another (none does now); the list's order is the
-run's, so Thermal, which takes its losses from the Circuit page's latest run unless they are typed, runs after
-Circuit.
+The first is kicad2ems's own run, S-parameters. The others are the analysis plugins installed (kicad2ems's
+registry, kicad2ems.api.frontend.analyses: pcbqs's power integrity, near field, circuit and thermal), in the
+registry's order, which is also a run's: Thermal, which takes its losses from the latest circuit run unless they
+are typed, runs after Circuit. The list only says which to run and shows which settings; `needs` is how one
+analysis follows another (none does now).
 """
 from dataclasses import dataclass
 
@@ -21,28 +21,29 @@ class Analysis:
     key: str
     title: str
     tool: str               # what runs it, as the list shows it
-    page: str = ''          # its page (a name of app.PANELS); '': the shared Viewer, Run and Results
+    page: str = ''          # its own page (a name of app.PANELS: the circuit's editor); '': Viewer, Run and Results
     needs: tuple = ()       # the analyses whose results it starts from
     preview: bool = False   # it has a preview (the model and meshes, no solve)
     planned: bool = False   # no tool for it yet: listed, greyed
     note: str = ''          # the list's tooltip
 
 
-ANALYSES = (
-    Analysis('rf', 'S-parameters', 'the solvers ticked', preview=True,
-             note="kicad2ems's run: the solvers ticked under Solvers, their S-parameters, fields and antenna results"),
-    Analysis('pdn', 'Power integrity', 'pcbqs.pdn', page='PDN',
-             note="a rail's DC drop and the impedance its loads see"),
-    Analysis('mqs', 'Near field', 'pcbqs.mqs', page='Near field', preview=True,
-             note="a converter's input loop and its magnetic near field"),
-    Analysis('circuit', 'Circuit', 'pcbqs.circuit', page='Circuit',
-             note="ngspice runs of the Circuit page's model: any circuit of parts, nodes and drives, settled, with "
-                  "its targets met; the board's full bridge (the wpthb model) with the copper it extracts when asked"),
-    Analysis('thermal', 'Thermal', 'pcbqs.thermal', page='Thermal',
-             note="the board's steady temperature from its parts' losses: typed (REF=W), or the Circuit page's "
-                  "latest run when none are (it runs after Circuit when both are ticked); each part's temperature "
-                  "and the maps"),
-)
+RF = 'rf'                       # kicad2ems's own run: not a plugin's
+
+
+def installed():
+    """S-parameters, then the analyses of kicad2ems's registry in its order (none: only S-parameters)."""
+    out = [Analysis(RF, 'S-parameters', 'the solvers ticked', preview=True,
+                    note="kicad2ems's run: the solvers ticked under Solvers, their S-parameters, fields and antenna "
+                         "results")]
+    from kicad2ems.api.frontend import analyses
+    for a in analyses().values():
+        out.append(Analysis(a.name, a.label, a.tool, page=a.label if a.page else '', needs=tuple(a.needs),
+                            preview=bool(a.previewed), note=a.about))
+    return tuple(out)
+
+
+ANALYSES = installed()
 BY_KEY = {a.key: a for a in ANALYSES}
 
 

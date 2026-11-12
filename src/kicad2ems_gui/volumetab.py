@@ -517,8 +517,8 @@ class VolumeTab(QWidget):
         i = self.dump.currentIndex()
         if i < 0 or i >= len(self.srcs):
             return
-        if self.srcs[i].field == 'V':                               # a drop or a rise: linear
-            self.log.setChecked(False)
+        if self.srcs[i].field == 'V' or getattr(self.srcs[i], 'spans', False):   # a drop, a rise, a temperature:
+            self.log.setChecked(False)                              # linear
         self.src = self.srcs[i].refresh()
         self.frame.blockSignals(True)
         self.frame.clear()
@@ -578,17 +578,18 @@ class VolumeTab(QWidget):
         vals = [self.vol.scalar(comp, p) for p in phases]
         signed = self.vol.signed(comp, phases[0])
         log = self.log.isChecked() and not signed
-        lo, hi = v3.levels(vals, signed, log, self.decades.value(), self.clip.value())
+        span = bool(getattr(self.src, 'spans', False)) and comp == 'mag' and not signed     # a temperature: its own
+        lo, hi = v3.levels(vals, signed, log, self.decades.value(), self.clip.value(), span=span)   # values' range
         whole = self.whole.isChecked() and len(self.src) > 1
         if whole:                                                   # the top over every frame of the dump
             top = self._whole_top(comp, phases)
             lo, hi = (-top, top) if signed else ((top * 10 ** -self.decades.value(), top) if log else (0.0, top))
         cmap = self.cmap.currentText() if not signed else None          # a signed component: blue - white - red
-        self._frames = [v3.colour(v, lo, hi, log, signed, self.opacity.value() / 100, self.gamma.value() / 10, cmap)
-                        for v in vals]
+        self._frames = [v3.colour(v, lo, hi, log, signed, self.opacity.value() / 100, self.gamma.value() / 10, cmap,
+                                  floor=0.55 if span else 0.0) for v in vals]
         self.k %= len(self._frames)
         self._show(self.k)
-        what = f"|{self.src.field}|" if comp == 'mag' else f"{self.src.field}{comp}"
+        what = (self.src.field if span else f"|{self.src.field}|") if comp == 'mag' else f"{self.src.field}{comp}"
         self.status.setText(f"{what}: {lo:.3g} to {hi:.3g} {self.src.unit}" + (' (log)' if log else '')
                             + (' over every frame' if whole else '')
                             + f"; grid {' x '.join(map(str, self.vol.data.shape[:3]))}; drag to orbit, wheel to zoom, "

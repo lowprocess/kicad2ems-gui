@@ -312,3 +312,17 @@ def test_part_solids(boards):
     assert under[0][2][:, 2].max() == pytest.approx(-0.05)                       # the bottom layer: below the board
     assert v3.part_kind(dict(R=100.0, L=None, C=None)) == 'R' and v3.part_kind(dict(R=0.4, L=2e-9, C=None)) == 'L'
     assert v3.part_kind(dict(R=0.0, L=None, C=None)) == 'short' and v3.part_kind(dict(R=0.1, L=5e-10, C=1e-12)) == 'C'
+
+
+def test_a_temperature_s_colours_span_its_own_values():
+    """A dump whose range is its data's (dump_info.json's "range": "data": a temperature): from its coolest point
+    to its hottest, not from zero; NaN (off the board) clear; its low end still drawn."""
+    t = np.array([[65.0, 70.0], [84.0, np.nan]])
+    assert v3.levels([t], False, False, span=True) == (65.0, 84.0)
+    assert v3.levels([t], False, False)[0] == 0.0                   # a field: from nothing
+    assert v3.levels([np.full((2, 2), 30.0)], False, False, span=True) == (29.5, 30.5)          # one value: a range still
+    rgba = v3.colour(t, 65.0, 84.0, log=False, opacity=1.0, gamma=1.0, floor=0.5)
+    assert rgba.shape == (2, 2, 4) and tuple(rgba[1, 1]) == (0, 0, 0, 0)                  # off the board: nothing
+    assert rgba[0, 0, 3] == 127 and rgba[1, 0, 3] == 255            # the coolest point half there, the hottest whole
+    assert v3.colour(t, 65.0, 84.0, log=False, opacity=1.0, gamma=1.0)[0, 0, 3] == 0      # a field's low end: clear
+    assert F.levels([t], False, False, span=True) == (65.0, 84.0) and F.levels([t], False, False)[0] == 0.0

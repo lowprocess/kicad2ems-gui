@@ -70,14 +70,14 @@ def test_solver_steps_view(tmp_path):
 
 
 def test_opens_on_the_simple_template():
-    """A small circuit to start from, not a board's: a boost converter, in the general model; the examples and
-    the board's bridge are a choice away, and the settings follow the model's kind."""
+    """A small circuit to open on, not a board's: a boost converter, in the general model; the circuits to start
+    from are the window's examples, and the settings follow the model's kind."""
     from PySide6.QtWidgets import QApplication
     app=QApplication.instance() or QApplication([])
     tab=PowerCircuitTab()
     c=tab.values()
     assert c['format']==2 and c['name'].startswith('Boost converter') and [p['ref'] for p in c['parts']]==['V1','C1','L1','Q1','D1','C2','R1']
-    assert tab.start_from.currentData()=='boost' and tab.start_from.count()==11 and tab.start_from.itemData(tab.start_from.count()-1)=='wpthb'
+    assert not hasattr(tab,'start_from') and tab.model_path is None      # no loader of its own: File > Examples > Circuits
     sc=tab.schematic.scene
     assert set(sc.devices)=={'part:'+r for r in ('V1','C1','L1','Q1','D1','C2','R1')}
     assert tab.form.isRowVisible(tab.params) and not tab.form.isRowVisible(tab.frequencies) and not tab.form.isRowVisible(tab.powers)
@@ -174,3 +174,37 @@ def test_general_results_show_the_boards_copper(tmp_path):
     assert 'Fields over the board' in text and '4060' in text and '5.14' in text and 'H to 3.2 MHz' in text
     assert text.index('C1')<text.index('J1') and '0.096' in text
     tab.close()
+
+
+def test_a_study_s_config_holds_the_circuit(tmp_path):
+    """[analysis.circuit] of a config: the model it names loaded (its board found beside it), the copper and fields
+    ticks; saved back: the model written beside the config, its board named relative to it; a run alone goes where
+    it was started, in the window under the study's output folder."""
+    from PySide6.QtWidgets import QApplication
+    app=QApplication.instance() or QApplication([])
+    tab=PowerCircuitTab()
+    assert tab.save_settings(str(tmp_path/'s.toml'))=={}           # never given a model, not ticked: no circuit
+    model=tab.values();model['name']='Mine';model['board']=dict(file='b.kicad_pcb')
+    (tmp_path/'m.json').write_text(json.dumps(model));(tmp_path/'b.kicad_pcb').write_text('')
+    tab.load_settings(dict(model=str(tmp_path/'m.json'),fields=True,out=str(tmp_path/'o')))
+    c=tab.values()
+    assert c['name']=='Mine' and c['board']['file']==str(tmp_path/'b.kicad_pcb') and tab.model_path==str(tmp_path/'m.json')
+    assert tab.copper.isChecked() and tab.fields.isChecked() and tab.outdir.text()==str(tmp_path/'o')
+    assert tab.status.text()=='Model: m.json'
+    tab.params.item(0,1).setText('123456')                         # an edit: saved with the study
+    assert tab.save_settings(str(tmp_path/'s.toml'))==dict(model='m.json',copper=True,fields=True,out='o')
+    saved=json.loads((tmp_path/'m.json').read_text())
+    assert saved['board']['file']=='b.kicad_pcb' and 123456 in saved['parameters'].values()
+    assert tab.default_out(c)=='circuit'                            # alone: where it was started
+    tab.load_settings({})                                           # a study without a circuit: the page as it opens
+    assert tab.model_path is None and tab.values()['name'].startswith('Boost converter') and not tab.copper.isChecked()
+    assert not tab.load_model(str(tmp_path/'none.json')) and 'none.json' in tab.status.text()
+
+    class Win:                                                      # the window's part: the study's output folder
+        def tool_out(self,kind,board,name,preview=False):return str(tmp_path/'out'/f'{kind}_{name}')
+    tab.win=Win();tab.model_path=str(tmp_path/'m.json')
+    assert tab.default_out(c)==str(tmp_path/'out'/'circuit_m')
+    tab.model_path=None
+    assert tab.default_out(dict(format=2,name='Buck, 12 V to 5 V'))==str(tmp_path/'out'/'circuit_Buck__12_V_to_5_V')
+    run=tmp_path/'run';run.mkdir();(run/'circuit.json').write_text(json.dumps(dict(format=2,name='Ran',cases=[],failed=[],complete=True)))
+    assert tab.open_run(str(run)) and tab.out==run and tab.status.text()=='Completed' and not tab.open_run(str(tmp_path))

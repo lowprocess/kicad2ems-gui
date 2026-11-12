@@ -12,3 +12,10 @@ from k2e_fixtures import *                                          # noqa: E402
 import standins                                                     # noqa: E402
 
 standins.install()                                                  # before kicad2ems.config is imported
+
+# the analyses: stand-ins too (fake_analyses.py), before kicad2ems_gui lists the registry's; pcbqs's own are run
+# through the same window in test_real_analyses.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fake_analyses                                                # noqa: E402
+
+fake_analyses.install()

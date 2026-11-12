@@ -240,6 +240,37 @@ def save_config(path, values, template=None):
     os.replace(tmp, path)
 
 
+def write_analyses(path, run, tables):
+    """The [analysis] part of the config at `path` written anew (kicad2ems.analyses.read_config reads it): run,
+    the analyses its study runs (None: not said), and each analysis's table {key: value}. The [analysis] tables
+    there before are replaced, the rest of the file is kept; none to write and none there: the file as it is."""
+    import re
+    with open(path, encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
+    out, skip, had = [], False, False
+    for line in lines:
+        head = re.match(r'^\s*\[\s*([^\]]+?)\s*\]', line)
+        if head:
+            name = head.group(1).strip()
+            skip = name == 'analysis' or name.startswith('analysis.')
+            had = had or skip
+        if not skip:
+            out.append(line)
+    tables = {k: v for k, v in (tables or {}).items() if v}
+    if run is None and not tables and not had:
+        return
+    while out and not out[-1].strip():
+        out.pop()
+    if run is not None or tables:
+        out += ['', '[analysis]']
+        if run is not None:
+            out.append(f"run = {toml_value(list(run))}")
+        for name, tab in tables.items():
+            out += ['', f"[analysis.{name}]"] + [f"{k} = {toml_value(v)}" for k, v in tab.items()]
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(out) + '\n')
+
+
 def _table_keys(name):
     """How save_config reads the keys of a TOML table: {} for one read like the top level ([openems]), {short
     name: setting} for a solver's [solver.<name>], None for another tool's."""

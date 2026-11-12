@@ -75,9 +75,14 @@ def _cmap(name):
     return matplotlib.colormaps[name]
 
 
-def colour(v, lo, hi, log=True, signed=False, opacity=0.6, gamma=1.5, cmap=None):
+def colour(v, lo, hi, log=True, signed=False, opacity=0.6, gamma=1.5, cmap=None, floor=0.0):
     """RGBA voxels (uint8): the colour map of v between lo and hi (log: magnitudes, decades below hi), alpha
-    rising with the value (gamma > 1: the weak field fades out, the strong field stays visible through it)."""
+    rising with the value (gamma > 1: the weak field fades out, the strong field stays visible through it).
+    floor: the least of that rise (a map whose low end is not nothing: a temperature's coolest point is still
+    the board). NaN (off the board) is clear."""
+    nan = np.isnan(v)
+    if nan.any():
+        v = np.where(nan, lo, v)
     if signed:
         t = np.clip(0.5 + 0.5 * v / (hi or 1.0), 0, 1)
         a = np.abs(2 * t - 1)
@@ -91,14 +96,20 @@ def colour(v, lo, hi, log=True, signed=False, opacity=0.6, gamma=1.5, cmap=None)
         a = t
         cm = _cmap(cmap or 'inferno')
     rgba = (cm(t.ravel())[:, :4] * 255).astype(np.uint8).reshape(v.shape + (4,))
-    rgba[..., 3] = (255 * opacity * a ** gamma).astype(np.uint8)
+    rgba[..., 3] = (255 * opacity * (floor + (1 - floor) * a ** gamma)).astype(np.uint8)
+    if nan.any():
+        rgba[nan] = 0
     return rgba
 
 
-def levels(vals, signed, log, decades=2.5, clip=99.9):
+def levels(vals, signed, log, decades=2.5, clip=99.9, span=False):
     """(lo, hi) of a set of frames: symmetric for a signed component, `decades` below the top for log. The top is
-    the `clip` percentile of |values| (a port's gap, a few voxels, would otherwise take the whole colour range)."""
+    the `clip` percentile of |values| (a port's gap, a few voxels, would otherwise take the whole colour range).
+    span: the values' own smallest to largest (a temperature: from the coolest point, not from zero)."""
     a = np.abs(np.concatenate([np.ravel(v) for v in vals]))
+    if span and np.isfinite(a).any():
+        lo, hi = float(np.nanmin(a)), float(np.nanmax(a))
+        return (lo, hi) if hi > lo else (lo - 0.5, lo + 0.5)
     hi = float(np.nanpercentile(a, clip)) or float(np.nanmax(a)) or 1.0
     if signed:
         return -hi, hi

@@ -177,8 +177,8 @@ class FieldsTab(QWidget):
         i = self.dump.currentIndex()
         self.src = self.srcs[i] if 0 <= i < len(self.srcs) else None
         self.lim = None
-        if self.src is not None and self.src.field == 'V':          # a drop or a rise: linear, as volts are
-            self.log.setChecked(False)
+        if self.src is not None and (self.src.field == 'V' or self._spans()):   # a drop, a rise or a temperature:
+            self.log.setChecked(False)                              # linear, as volts and degrees are
         keep=self.layout_layer.currentText()
         self.layout_layer.blockSignals(True);self.layout_layer.clear()
         cu=(self.src.geometry if self.src else {}).get('cu_z',{})
@@ -264,9 +264,9 @@ class FieldsTab(QWidget):
         pos = pl.pos if ax != 1 else -pl.pos
         self.slice_lab.setText(f"{'xyz'[ax]} = {pos:.3f} mm")
         if self.auto.isChecked():
-            self.lim = F.levels([pl.img], pl.signed, self.log.isChecked())
+            self.lim = F.levels([pl.img], pl.signed, self.log.isChecked(), span=self._spans())
         elif self.lim is None:
-            self.lim = F.levels(self._sample(ax), pl.signed, self.log.isChecked())
+            self.lim = F.levels(self._sample(ax), pl.signed, self.log.isChecked(), span=self._spans())
         lo, hi = self.lim
         img, (u0, v0, du, dv) = pl.resample()
         use_log = self._use_log()
@@ -280,7 +280,8 @@ class FieldsTab(QWidget):
         self.cbar.blockSignals(True)
         self.cbar.setLevels((lo, hi))
         self.cbar.blockSignals(False)
-        what = f"|{src.field}|" if self._component() == 'mag' else f"{src.field}_{self._component()}"
+        what = (src.field if self._spans() else f"|{src.field}|") if self._component() == 'mag' else \
+            f"{src.field}_{self._component()}"
         scaled = src.domain == 'FD' and src.scale(i)
         self.cbar.axis.setLabel(('log10 ' if use_log else '') + f"{what} ({src.unit}" +
                                 (', 1 V incident' if scaled else '') + ')')
@@ -313,6 +314,10 @@ class FieldsTab(QWidget):
             for it in self._layout_items:self.view.addItem(it)
         self.layout_layer.setEnabled(axis==2)
         self.components_on.setEnabled(axis==2)
+
+    def _spans(self):
+        """The dump's colours span its own values (a temperature: from the board's coolest point, not from zero)."""
+        return bool(getattr(self.src, 'spans', False)) and self._component() == 'mag'
 
     def _sample(self, ax):
         """Images for one colour range over the series: time domain, up to 12 frames across it; frequency

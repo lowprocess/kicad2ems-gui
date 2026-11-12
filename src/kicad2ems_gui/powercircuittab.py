@@ -1,6 +1,10 @@
 """Circuit models run with ngspice. Two kinds, told apart by the model's "format":
-    2   pcbqs.circuit: any circuit of parts, nodes and drives (the examples to start from are its templates)
-    1   pcbqs.power_circuit: the phase-shifted full bridge on a board's terminals, with its copper and fields"""
+    2   pcbqs.circuit: any circuit of parts, nodes and drives
+    1   pcbqs.power_circuit: the phase-shifted full bridge on a board's terminals, with its copper and fields
+
+A model comes from a file: a study's config names it ([analysis.circuit] model = "buck.json", a path beside the
+config), and the circuits to start from are examples like any other, under File > Examples > Circuits. Saving the
+study writes the model back beside its config."""
 import json,os,subprocess,sys
 import numpy as np
 import pyqtgraph as pg
@@ -79,18 +83,20 @@ class PowerCircuitTab(QWidget):
         self.model.currentTextChanged.connect(self.refresh_schematic)
         self.case=QComboBox();self.case.currentIndexChanged.connect(self.show_waveform);self.open_btn=QPushButton('Open selected case fields');self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_fields);row=QHBoxLayout();row.addWidget(self.case,1);row.addWidget(self.open_btn);root.addLayout(row)
-        self.start_from=QComboBox()
-        for name,text in self.templates().items():
-            self.start_from.addItem('New: '+name.replace('_',' '),name);self.start_from.setItemData(self.start_from.count()-1,text,Qt.ToolTipRole)
-        self.start_from.addItem('New: wpthb (board terminals)','wpthb')
-        self.start_from.setItemData(self.start_from.count()-1,"The wpthb board's full bridge, on its pads, with its copper and fields (the older model format)",Qt.ToolTipRole)
-        self.start_from.setToolTip('Replace the model with one to start from: an example circuit, or the wpthb board\'s bridge')
-        self.start_from.activated.connect(lambda i:self.new_model(self.start_from.itemData(i)))
-        self.top_row.insertWidget(0,self.start_from)
+        self.model_path=None                                        # the file the model came from (a config's, a loaded one)
+        if win is not None:                                         # the circuits to start from: the window's examples
+            self.examples_btn=QPushButton('Examples');self.examples_btn.setToolTip('The circuits to start from: File > Examples > Circuits')
+            self.examples_btn.clicked.connect(self.show_examples);self.top_row.insertWidget(0,self.examples_btn)
         try:
             self.set_model(self.template('simple'))                  # a small circuit to open on, not a board's
-            self.start_from.setCurrentIndex(max(self.start_from.findData('boost'),0))
         except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False);self.schematic.setEnabled(False)
+
+    def show_examples(self):
+        """The window's menu of the circuit examples (File > Examples), here where a circuit is started."""
+        menus=getattr(self.win,'example_menus',{});whose=getattr(self.win,'example_sources',{})
+        menu=next((m for path,m in menus.items() if 'circuit' in whose.get(path,())),None)   # the group the circuit analysis ships
+        if menu is None:self.status.setText('No circuit examples are installed (File > Examples)');return
+        menu.exec(self.examples_btn.mapToGlobal(self.examples_btn.rect().bottomLeft()))
 
     @staticmethod
     def templates():
@@ -117,7 +123,7 @@ class PowerCircuitTab(QWidget):
         return json.loads(p.stdout)
 
     def new_model(self,name):
-        try:self.set_model(self.template(name));self.status.setText(f'Started from the {name} template.')
+        try:self.set_model(self.template(name));self.model_path=None;self.status.setText(f'Started from the {name} template.')
         except (OSError,ValueError,subprocess.SubprocessError) as e:self.status.setText('Template unavailable: '+str(e))
 
     def settings_panel(self):
@@ -241,17 +247,74 @@ class PowerCircuitTab(QWidget):
                     if key=='filter_DCR' and part['ref']=='L3':part['DCR_ohm']=value
         return c
 
-    def load_model(self):
-        p,_=QFileDialog.getOpenFileName(self,'Circuit model','','JSON (*.json)')
-        if p:
-            try:
-                c=json.loads(Path(p).read_text())
-                for part in c.get('parts',[]) if c.get('format')==2 else []:
-                    if part.get('model',{}).get('library'):part['model']['library']=str((Path(p).parent/part['model']['library']).resolve())
-                for model in [c.get('switch_model',{}),*[s.get('model',{}) for s in c.get('switches',[])]]:
-                    if model.get('library'):model['library']=str((Path(p).parent/model['library']).resolve())
-                self.set_model(c)
-            except (OSError,ValueError,KeyError) as e:self.status.setText(str(e))
+    def load_model(self,path=None):
+        """A model from a file (asked for when none is named): its libraries and its board, named beside it, found
+        from where it is. True when it loaded."""
+        p=path or QFileDialog.getOpenFileName(self,'Circuit model','','JSON (*.json)')[0]
+        if not p:return False
+        try:
+            here=Path(p).resolve().parent
+            c=json.loads(Path(p).read_text())
+            for part in c.get('parts',[]) if c.get('format')==2 else []:
+                if part.get('model',{}).get('library'):part['model']['library']=str((here/part['model']['library']).resolve())
+            for model in [c.get('switch_model',{}),*[s.get('model',{}) for s in c.get('switches',[])]]:
+                if model.get('library'):model['library']=str((here/model['library']).resolve())
+            board=(c.get('board') or {}).get('file')
+            if board and not Path(board).is_absolute():c['board']['file']=str((here/board).resolve())
+            self.set_model(c);self.model_path=str(Path(p).resolve())
+            return True
+        except (OSError,ValueError,KeyError) as e:self.status.setText(str(e));return False
+
+    def write_model(self,path,c=None):
+        """The model as a file: its board named relative to it when it is beside it (a study's folder moves whole)."""
+        c=json.loads(json.dumps(self.values() if c is None else c));here=Path(path).resolve().parent
+        board=(c.get('board') or {}).get('file')
+        if board and Path(board).is_absolute() and Path(board).resolve().parent==here:c['board']['file']=Path(board).name
+        Path(path).write_text(json.dumps(c,indent=2))
+
+    # ---- a study's config: [analysis.circuit] ----
+    def load_settings(self,tab):
+        """A config's [analysis.circuit] table (its paths already whole): the model it names, the copper and fields
+        ticks, a board and a folder of its own. An empty one: the page as it opens."""
+        self.board.setText(str(tab.get('board') or ''));self.outdir.setText(str(tab.get('out') or ''))
+        on=lambda k:tab.get(k) is True or str(tab.get(k)).strip().lower() in ('1','true','yes','on')
+        self.copper.setChecked(on('copper') or on('fields'));self.fields.setChecked(on('fields'))
+        if tab.get('jobs'):self.jobs.setValue(int(tab['jobs']))
+        if tab.get('model'):
+            if self.load_model(str(tab['model'])):self.status.setText(f"Model: {Path(str(tab['model'])).name}")
+        elif self.model_path is not None:
+            try:self.set_model(self.template('simple'))
+            except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError):pass
+            self.model_path=None
+
+    def save_settings(self,config):
+        """What the config at `config` holds of the circuit, {key: value} (paths relative to it), the model written
+        as a file: the one it came from, else <config>_circuit.json beside the config. {}: the page was never
+        given a model and the analysis is not ticked, so the study has no circuit."""
+        ticked=self.win is not None and hasattr(self.win,'study') and 'circuit' in self.win.study.ticked()
+        if self.model_path is None and not ticked:return {}
+        base=Path(config).resolve().parent;tab={}
+        try:
+            c=self.values()
+            if self.model_path is None:self.model_path=str(base/(Path(config).stem+'_circuit.json'))
+            self.write_model(self.model_path,c)
+        except (ValueError,KeyError,OSError) as e:self.status.setText(f'The model was not saved: {e}')
+        rel=lambda p:os.path.relpath(os.path.abspath(p),base).replace(os.sep,'/')
+        if self.model_path:tab['model']=rel(self.model_path)
+        if self.copper.isChecked():tab['copper']=True
+        if self.fields.isChecked():tab['fields']=True
+        for key,edit in (('board',self.board),('out',self.outdir)):
+            if edit.text().strip():tab[key]=rel(edit.text().strip())
+        return tab
+
+    def open_run(self,folder):
+        """A run's folder as the page's result (picked under Results of): its points, losses and waveforms."""
+        path=next((Path(folder)/n for n in ('circuit.json','power-circuit.json') if (Path(folder)/n).exists()),None)
+        if path is None:return False
+        self.out=Path(folder)
+        try:self.show_result(json.loads(path.read_text()))
+        except (OSError,ValueError,KeyError) as e:self.status.setText(str(e));return False
+        return True
 
     def save_model(self):
         try:c=self.values()
@@ -271,7 +334,7 @@ class PowerCircuitTab(QWidget):
         if not general:self.matching_note.setText(self.matching_text(c))
         board=self.board.text().strip() or (c.get('board') or {}).get('file','') or self.board_path() if general else self.board_path()
         if self.copper.isChecked() and not Path(board).is_file():self.status.setText('Choose a PCB for copper extraction' if not general else "Choose the model's board: Import KiCad… a .kicad_pcb, or name one under PCB");return
-        self.out=Path(self.outdir.text().strip() or ('circuit' if general else 'power-circuit')).expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
+        self.out=Path(self.outdir.text().strip() or self.default_out(c,board)).expanduser().resolve();self.out.mkdir(parents=True,exist_ok=True)
         model=self.out/'model-input.json';model.write_text(json.dumps(c,indent=2))
         argv=['-u','-m','pcbqs.circuit' if general else 'pcbqs.power_circuit',str(model),'--out',str(self.out),'--jobs',str(self.jobs.value())]
         if self.copper.isChecked():argv+=['--copper','--board',board]
@@ -279,6 +342,14 @@ class PowerCircuitTab(QWidget):
         self.run_btn.setEnabled(False);self.stop_btn.setEnabled(True);self.open_btn.setEnabled(False);self.log.clear();self.tabs.setCurrentWidget(self.log);self.status.setText('Running transient cases…')
         self.editor_only.setChecked(False)
         run_tool(self,[sys.executable,*argv],self.read_log,self.finished,env=dict(OPENBLAS_NUM_THREADS='8'))
+
+    def default_out(self,c,board=''):
+        """Where a run goes when no folder is named: in the window a folder per run under the study's output
+        folder (as the other analyses': listed under Results of); alone, a folder where it was started."""
+        general=c.get('format')==2
+        if self.win is None or not hasattr(self.win,'tool_out'):return 'circuit' if general else 'power-circuit'
+        tag=Path(self.model_path).stem if self.model_path else ''.join(ch if ch.isalnum() else '_' for ch in (c.get('name') or 'circuit')).strip('_')[:40] or 'circuit'
+        return self.win.tool_out('circuit',self.board_path() or board or None,tag)
 
     def stop(self):
         if self.proc:self.proc.terminate()

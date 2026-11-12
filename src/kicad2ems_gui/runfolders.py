@@ -56,8 +56,10 @@ def runs(base, board):
     return sorted(out, key=lambda r: os.path.basename(r[0]), reverse=True)
 
 
-TOOL_RESULTS = {'pdn': 'pdn.json', 'mqs': 'mqs.json', 'thermal': 'thermal.json'}   # the file a finished run of each wrote
-TOOL_TITLES = {'pdn': 'Power integrity', 'mqs': 'Near field', 'thermal': 'Thermal'}
+def tool_titles():
+    """{kind: title} of the analyses whose runs are listed: those kicad2ems's registry holds, in its order."""
+    from kicad2ems.api.frontend import analyses
+    return {name: a.label for name, a in analyses().items()}
 
 
 def _tag(text):
@@ -73,27 +75,34 @@ def tool_preview_dir(base, board, kind):
 
 
 def tool_kind(folder):
-    """'pdn' or 'mqs' when the folder holds that tool's result, else None."""
-    return next((k for k, f in TOOL_RESULTS.items() if os.path.isfile(os.path.join(folder or '', f))), None)
+    """The analysis ('pdn', 'thermal' ...) whose finished result the folder holds, else None (a preview's too)."""
+    from kicad2ems.api.frontend import analysis_of
+    made = analysis_of(folder or '')
+    return made[0] if made and not made[1] else None
 
 
 def tool_runs(base, board):
-    """This board's Power integrity and Near field results, the newest first: [(folder, kind, label)], label what
-    was solved (the rail, the converter) and when. Under base: a folder per run; beside the board: the single
-    pdn_<rail> / mqs_<converter> folders those tools wrote to before."""
+    """This board's analysis results (Power integrity, Near field, Circuit, Thermal: what the registry holds), the
+    newest first: [(folder, kind, label)], label what was solved (the rail, the converter) and when. Under base:
+    a folder per run; beside the board: the single pdn_<rail> / mqs_<converter> folders those tools wrote to
+    before."""
     name = board_name(board)
     out = []
-    pat = re.compile(re.escape(name) + r'_(' + '|'.join(TOOL_RESULTS) + r')_(.+)_(\d{8}_\d{6})$')
+    TOOL_TITLES = tool_titles()
+    if not TOOL_TITLES:
+        return out
+    pat = re.compile(re.escape(name) + r'_(' + '|'.join(map(re.escape, TOOL_TITLES)) + r')_(.+)_(\d{8}_\d{6})$')
     for d in glob.glob(os.path.join(base, f"{glob.escape(name)}_*")):
         m = pat.match(os.path.basename(d))
         if m and tool_kind(d) == m.group(1):
             when = datetime.datetime.strptime(m.group(3), STAMP)
             out.append((when, d, m.group(1), f"{TOOL_TITLES[m.group(1)]}: {m.group(2)}, {when:%Y-%m-%d %H:%M:%S}"))
     beside = os.path.dirname(os.path.abspath(board)) if board else None
-    for kind, result in TOOL_RESULTS.items() if beside else ():
-        for f in glob.glob(os.path.join(glob.escape(beside), f"{kind}_*", result)):
-            d = os.path.dirname(f)
-            when = datetime.datetime.fromtimestamp(os.path.getmtime(f))
+    for kind in TOOL_TITLES if beside else ():
+        for d in glob.glob(os.path.join(glob.escape(beside), f"{kind}_*")):
+            if tool_kind(d) != kind:
+                continue
+            when = datetime.datetime.fromtimestamp(os.path.getmtime(d))
             out.append((when, d, kind, f"{TOOL_TITLES[kind]}: {os.path.basename(d)[len(kind) + 1:]}, {when:%Y-%m-%d %H:%M:%S}"))
     tools = list(TOOL_TITLES)
     out.sort(key=lambda r: (tools.index(r[2]), r[3]))                   # runs of one moment: in the tools' order

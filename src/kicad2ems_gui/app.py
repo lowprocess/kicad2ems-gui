@@ -6,13 +6,16 @@ study on the left (the board, the analyses made of it and the settings of the on
              it), field dumps in place or as cuts (live while the run goes), the far field, the run's plots
     Run      the analyses of the run and where each is, openEMS's energy decay and mom25d's adaptive sweep, the
              log of each
-    Results  S-parameters and antenna results as Cartesian, Smith and polar plots you add and remove
+    Results  S-parameters and antenna results as Cartesian, Smith and polar plots you add and remove; an analysis's
+             result as its curves, its report to read, or its tables to sort and export
     Filter Synthesis
              design a microstrip filter with dfsynth, validate and tune it on the solvers, open its board here
-    Power Integrity, Near field, Circuit
-             the results of pcbqs's tools (python -m pcbqs.pdn, .mqs, .power_circuit): a rail's DC drop and PDN
-             impedance, a converter's input loop and its magnetic field, ngspice operating points. Their settings
-             are in the study, and the toolbar's Run starts them with the rest
+    Circuit  the circuit analysis's model as a schematic to edit (pcbqs.circuit), when that analysis is installed
+
+The analyses beside S-parameters are plugins kicad2ems's registry holds (kicad2ems.api.frontend.analyses: pcbqs's
+power integrity, near field, circuit and thermal). The window knows none of them by name: each one's settings are
+a panel in the study made from its options (analysispanel.py), the toolbar's Run starts its command with the rest,
+its maps are field dumps the Viewer shows and its report and curves are on the Results page.
 
 Run starts the analyses ticked in the study one after the other (run_study), each after the one it starts from.
 Every run is the command-line tool started as a separate process with --events; the GUI follows its event
@@ -22,6 +25,7 @@ window's size, its docks and splitters, and the Results plots are remembered bet
     kicad2ems-gui [config.toml]
 """
 import json, os, sys
+import numpy as np
 from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings
 from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -35,26 +39,32 @@ from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, T
 from kicad2ems.api.frontend import G_DUMP
 from .splot import SPlot, default_layout
 from .curveplot import CurvePlot
-from .curves import load_curves
+from .curves import load_sets
+from .reportview import ReportView
+from .analysispanel import AnalysisPanel, config_values
 from .panels import Section, FlowLayout
 from .systempanel import SystemPanel
 from .viewer import Viewer, VIEWS
 from .statusbar import MemoryMeters, EstimateButton
 from .meters import duration
 from .filtertab import FilterTab
-from .pdntab import PdnTab
-from .thermaltab import ThermalTab
-from .mqstab import MqsTab
-from .powercircuittab import PowerCircuitTab
-from .study import StudyList, ANALYSES, BY_KEY, run_order, dependents
+from .study import StudyList, ANALYSES, BY_KEY, RF, run_order, dependents
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
-PANELS = ('Viewer', 'Run', 'Results', 'Filter', 'PDN', 'Near field', 'Circuit', 'Thermal')
-TITLES = {'Filter': 'Filter Synthesis', 'PDN': 'Power Integrity'}                           # a page's tab title, when not its name
+EDITORS = {a.page: a.key for a in ANALYSES if a.page and a.key in ('circuit',)}     # an analysis with a page of its
+                                                            # own here (the circuit's schematic): {page: its key}
+PANELS = ('Viewer', 'Run', 'Results', 'Filter', *EDITORS)
+TITLES = {'Filter': 'Filter Synthesis'}                     # a page's tab title, when not its name
 ON_DEMAND = ('Filter',)                         # pages closed when the window opens: the toolbar's Filter opens it
-FOLLOWS_TICK = {'Circuit': 'circuit', 'Thermal': 'thermal'}           # pages shown while their analysis is ticked (or opened by hand)
+FOLLOWS_TICK = dict(EDITORS)                    # pages shown while their analysis is ticked (or opened by hand)
+
+
+def editor_page(key, win):
+    """The page of an analysis this window has an editor for: the circuit's schematic and model."""
+    from .powercircuittab import PowerCircuitTab
+    return {'circuit': PowerCircuitTab}[key](win)
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
 STATE_VERSION = 2                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
@@ -420,12 +430,16 @@ class SetupTab(QWidget):
             else:
                 w.setText(str(v))
 
-    def _changed(self, *_):
-        self._count()
-        self._update_sections()
+    def touch(self, *_):
+        """Something a config holds changed (a field here, an analysis's settings or its tick): unsaved now."""
         if not self._loading and not self.dirty:
             self.dirty = True
             self.win.update_title()
+
+    def _changed(self, *_):
+        self._count()
+        self._update_sections()
+        self.touch()
         if hasattr(self.win, 'update_estimate'):                    # the toolbar's: the solvers ticked now
             self.win.update_estimate()
 
@@ -450,6 +464,8 @@ class SetupTab(QWidget):
             return
         self.set_values({})
         self.set_estimates(None)                                    # another board: the last one's no longer apply
+        if hasattr(self.win, 'load_analyses'):
+            self.win.load_analyses(None)                            # and no analysis's settings
         self.extra, self.path, self.dirty = {}, None, False
         self.win.update_title()
 
@@ -469,6 +485,8 @@ class SetupTab(QWidget):
             return False
         self.set_values(vals)
         self.set_estimates(None)                                    # another board: the last one's no longer apply
+        if hasattr(self.win, 'load_analyses'):
+            self.win.load_analyses(path)                            # the analyses it runs, and their settings
         self.extra, self.path, self.dirty = extra, os.path.abspath(path), False
         self.win.remember(self.path)
         self.win.update_title()
@@ -496,6 +514,8 @@ class SetupTab(QWidget):
     def _write(self, path):
         try:
             save_config(path, self.values(), template=self.path)       # keeps the comments of the loaded file
+            if hasattr(self.win, 'save_analyses'):
+                self.win.save_analyses(path)
         except Exception as e:
             QMessageBox.warning(self, 'Config', f"could not save {path}: {e}")
             return False
@@ -715,9 +735,13 @@ def run_notes(sm):
 class ResultsTab(QWidget):
     """The Results page: the S-parameters of every solver and, for an antenna, its gain, efficiency and pattern
     cuts, as subplots you add and remove (splot.SPlot). The plots of a page are remembered: one layout for
-    S-parameters, one for antennas. Results that are curves of another kind (a rail's impedance, a near field's
-    spectrum: curves.py) take the page instead (curveplot.CurvePlot). Compare with lays other runs of the same
-    kind over the one shown."""
+    S-parameters, one for antennas. An analysis's result (a rail's drop and impedance, a near field, a circuit, a
+    board's temperature: whatever kicad2ems's registry holds) takes the page instead, in one of three views:
+    Plots, its curves (curveplot.CurvePlot; a result with several sets: one at a time); Report, what it found, to
+    read; Tables, the report's tables to sort, copy and export (reportview.ReportView). Compare with lays other
+    runs of the same kind over the plots."""
+    MODES = ('Plots', 'Report', 'Tables')
+
     def __init__(self, win):
         super().__init__()
         self.win = win
@@ -755,8 +779,27 @@ class ResultsTab(QWidget):
         self.cmp_btn.setMenu(self.cmp_menu)
         top.addWidget(self.cmp_btn)
         self.folder_btn = QPushButton('Open folder')
-        self.folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.win.out_dir())))
+        self.folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(
+            self.out if self.analysis and self.out else self.win.out_dir())))
         top.addWidget(self.folder_btn)
+        self.mode_btns = {}                                         # an analysis's result: how it is shown
+        for m, tip in zip(self.MODES, ("the result's curves", 'what the analysis found, to read',
+                                       "the report's tables: sort, copy, export")):
+            b = QToolButton()
+            b.setText(m)
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, m=m: self.set_mode(m))
+            b.hide()
+            top.addWidget(b)
+            self.mode_btns[m] = b
+        self.set_box = QComboBox()                                  # a result with several curve sets: which
+        self.set_box.setToolTip("The result's curves to plot (a circuit: each point's voltages and currents)")
+        self.set_box.setMinimumWidth(220)
+        self.set_box.currentIndexChanged.connect(self._pick_set)
+        self.set_box.hide()
+        top.addWidget(self.set_box)
         lay.addLayout(top)
         from .steering import SteeringBar
         self.steer = SteeringBar()
@@ -766,12 +809,16 @@ class ResultsTab(QWidget):
         self.splot = SPlot()
         self.splot.layout_changed.connect(self._save_layout)
         self.curveplot = CurvePlot()
-        self.views = QStackedWidget()                               # the S-parameter plots, or an analysis's curves
-        self.views.addWidget(self.splot)
+        self.reportview = ReportView()
+        self.views = QStackedWidget()                               # the S-parameter plots, or an analysis's
+        self.views.addWidget(self.splot)                            # curves, report or tables
         self.views.addWidget(self.curveplot)
+        self.views.addWidget(self.reportview)
         lay.addWidget(self.views, 1)
         self.report, self.added, self._files, self.out, self._mode = None, [], [], None, None
-        self.curves, self.added_curves = None, []                   # the curves shown (None: S-parameters), others'
+        self.analysis, self.analysis_report = None, None            # the analysis whose result is shown, its report
+        self.curve_sets, self.curves, self.added_sets = [], None, []    # its curve sets, the one plotted, other runs'
+        self.mode = None                                            # the view of an analysis's result
         self._restore_layout('sparams')
 
     # ---- the plots a page has: remembered per kind of result ----
@@ -801,13 +848,13 @@ class ResultsTab(QWidget):
             QMessageBox.information(self, 'Results', f"No {'S-parameters' if self.curves is None else self.curves.title.lower()} in {d}")
 
     def kind(self):
-        """What the page shows: 'rf' (S-parameters, antenna) or the analysis its curves are of ('pdn', 'mqs')."""
-        return self.curves.kind if self.curves is not None else 'rf'
+        """What the page shows: 'rf' (S-parameters, antenna) or the analysis whose result it is ('pdn', 'thermal')."""
+        return self.analysis or 'rf'
 
     def compared(self):
         """The folders laid over the run shown (of its kind)."""
-        if self.curves is not None:
-            return [o.folder for o in self.added_curves if o.kind == self.curves.kind]
+        if self.analysis is not None:
+            return [sets[0].folder for sets in self.added_sets if sets and sets[0].kind == self.analysis]
         return [d for _label, _files, d in self.added]
 
     def add_folder(self, d):
@@ -816,12 +863,12 @@ class ResultsTab(QWidget):
         d = os.path.abspath(d)
         if d in self.compared():
             return True
-        if self.curves is not None:
-            cs = load_curves(d)
-            if cs is None or cs.kind != self.curves.kind:
+        if self.analysis is not None:
+            sets = load_sets(d)
+            if not sets or sets[0].kind != self.analysis:
                 return False
-            self.added_curves.append(cs)
-            self._show_curves()
+            self.added_sets.append(sets)
+            self._show_analysis()
             return True
         files = find_results(d)
         if not files:
@@ -832,9 +879,10 @@ class ResultsTab(QWidget):
 
     def remove_folder(self, d=None):
         """One compared run off the page (None: all of the kind shown)."""
-        if self.curves is not None:
-            self.added_curves = [o for o in self.added_curves if o.kind != self.curves.kind or (d and o.folder != d)]
-            self._show_curves()
+        if self.analysis is not None:
+            self.added_sets = [sets for sets in self.added_sets
+                               if sets[0].kind != self.analysis or (d and sets[0].folder != d)]
+            self._show_analysis()
         else:
             self.added = [a for a in self.added if d and a[2] != d]
             self.show(self._files)
@@ -872,25 +920,92 @@ class ResultsTab(QWidget):
         a.setEnabled(bool(on))
         a.triggered.connect(lambda: self.remove_folder(None))
 
-    def load_curves(self, out_dir):
-        """A folder's curves (curves.load_curves) onto the page in place of the S-parameter plots; False: it has
-        none, and the page shows S-parameters."""
-        self.curves = load_curves(os.path.abspath(out_dir)) if out_dir else None
-        self._show_curves()
-        return self.curves is not None
+    def load_analysis(self, out_dir):
+        """A folder's result of an analysis (whichever kicad2ems's registry says it is of) onto the page in place
+        of the S-parameter plots: its report and its curves. False: it holds none, and the page shows
+        S-parameters."""
+        from kicad2ems.api.frontend import analyses, analysis_of
+        made = analysis_of(out_dir) if out_dir else None
+        rep, sets = None, []
+        if made is not None and made[0] in analyses():
+            folder = os.path.abspath(out_dir)
+            try:
+                rep = analyses()[made[0]].report(folder)
+            except Exception:                                       # a plugin's fault, a damaged file: no report
+                rep = None
+            sets = load_sets(folder)
+        self.analysis = made[0] if made is not None and (rep or sets) else None
+        self.analysis_report, self.curve_sets = (rep, sets) if self.analysis else (None, [])
+        if self.analysis:
+            self.out = os.path.abspath(out_dir)
+        keep = self.set_box.currentText()
+        self.set_box.blockSignals(True)
+        self.set_box.clear()
+        self.set_box.addItems([cs.title for cs in self.curve_sets])
+        self.set_box.setCurrentIndex(max(self.set_box.findText(keep), 0) if self.curve_sets else -1)
+        self.set_box.blockSignals(False)
+        self._show_analysis()
+        return self.analysis is not None
 
-    def _show_curves(self):
-        cs = self.curves
-        self.views.setCurrentWidget(self.curveplot if cs is not None else self.splot)
-        if cs is None:
+    load_curves = load_analysis                                     # its name before reports
+
+    def _pick_set(self, *_):
+        if self.analysis is not None:
+            self._show_analysis()
+
+    def modes(self):
+        """The views the result shown has: Plots (it has curves), Report, Tables (its report has tables)."""
+        rep = self.analysis_report
+        has = dict(Plots=bool(self.curve_sets), Report=bool(rep),
+                   Tables=bool(rep) and any(sec.get('table') for sec in rep.get('sections', [])))
+        return [m for m in self.MODES if has[m]] if self.analysis else []
+
+    def set_mode(self, mode):
+        """An analysis's result as its Plots, its Report or its Tables (one the result has; else its first)."""
+        has = self.modes()
+        if not has:
             return
-        others = [o for o in self.added_curves if o.kind == cs.kind and o.folder != cs.folder]
-        self.curveplot.set_sets(cs, others)
+        self.mode = mode if mode in has else has[0]
+        for m, b in self.mode_btns.items():
+            b.setChecked(m == self.mode)
+        self.set_box.setVisible(self.mode == 'Plots' and len(self.curve_sets) > 1)
+        self.cmp_btn.setEnabled(self.mode == 'Plots')
+        if self.mode == 'Plots':
+            self.views.setCurrentWidget(self.curveplot)
+        else:
+            self.reportview.set_mode(self.mode)
+            self.views.setCurrentWidget(self.reportview)
+
+    def _show_analysis(self):
+        """The result of an analysis in the page's views; none: the S-parameter plots."""
+        has = self.modes()
+        for m, b in self.mode_btns.items():
+            b.setVisible(bool(has))
+            b.setEnabled(m in has)
+        if not has:
+            self.curves = None
+            self.set_box.hide()
+            self.cmp_btn.setEnabled(True)
+            self.views.setCurrentWidget(self.splot)
+            return
+        i = self.set_box.currentIndex()
+        self.curves = self.curve_sets[i] if 0 <= i < len(self.curve_sets) else None
+        if self.curves is not None:                                 # other runs: their set of the same title
+            others = [next((o for o in sets if o.title == self.curves.title), None) for sets in self.added_sets
+                      if sets and sets[0].kind == self.analysis and sets[0].folder != self.curves.folder]
+            self.curveplot.set_sets(self.curves, [o for o in others if o is not None])
+        else:
+            others = []
+            self.curveplot.set_sets(None)
+        self.reportview.set_report(self.analysis_report)
         self.which.hide()
         self.steer.hide()
-        self.set_notes([], [])
         self.report = None
-        self.info.setText(cs.info + (f"  ·  with {', '.join(o.label for o in others)}" if others else ''))
+        rep = self.analysis_report or {}
+        self.set_notes([], [])                                      # the report has its own
+        head = rep.get('summary') or (self.curves.info if self.curves is not None else '')
+        self.info.setText(head + (f"  ·  with {', '.join(o.label for o in others if o is not None)}" if others else ''))
+        self.set_mode(self.mode if self.mode in has else has[0])
 
     def _load(self):
         d = QFileDialog.getExistingDirectory(self, 'A results folder (the run\'s output folder)', self.win.out_dir())
@@ -982,7 +1097,7 @@ class ResultsTab(QWidget):
         """The S-parameters of a run's files (openEMS, mom25d, line model) and a compare file."""
         from .traces import load_traces
         self._files = list(files)
-        if self.curves is not None:                                 # an analysis's curves have the page
+        if self.analysis is not None:                               # an analysis's result has the page
             return
         self.report = next((p for l, p in files if p.endswith('_report.html')), None)
         z0 = 50.0
@@ -1088,10 +1203,7 @@ class MainWindow(QMainWindow):
         self.setup, self.runtab, self.results = SetupTab(self), RunTab(self), ResultsTab(self)
         self.viewer = Viewer(self)
         self.filter = FilterTab(self)
-        self.pdn = PdnTab(self)
-        self.thermal = ThermalTab(self)
-        self.mqs = MqsTab(self)
-        self.circuit = PowerCircuitTab(self)
+        self._analyses()
         self._study()
         self.fields, self.volume = self.viewer.cuts, self.viewer.volume      # the field views, inside the viewer
         if getattr(self.volume, 'steer', None) is not None:          # its Far field section steers too
@@ -1121,7 +1233,12 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         self.docks = {}
-        for name, w in zip(PANELS, (self.viewer, self.runtab, self.results, self.filter, self.pdn, self.mqs, self.circuit, self.thermal)):
+        widgets = {'Viewer': self.viewer, 'Run': self.runtab, 'Results': self.results, 'Filter': self.filter,
+                   **{BY_KEY[k].page: p for k, p in self.editors.items()}}
+        for name in PANELS:
+            if name not in widgets:                                 # an analysis's page this window has no editor for
+                continue
+            w = widgets[name]
             d = QDockWidget(TITLES.get(name, name), self.work)
             d.setObjectName(name)
             d.setWidget(w)
@@ -1134,7 +1251,7 @@ class MainWindow(QMainWindow):
             if self.docks:
                 self.work.tabifyDockWidget(self.docks[PANELS[0]], d)
             self.docks[name] = d
-            key = next((a.key for a in ANALYSES if a.page == name), None)
+            key = EDITORS.get(name)
             if key:                                                 # an analysis's page in front: its settings
                 d.visibilityChanged.connect(lambda on, k=key: on and self._study_ready and self.study.select(k))
         self.docks[PANELS[0]].raise_()
@@ -1151,15 +1268,32 @@ class MainWindow(QMainWindow):
             self.setup.load(config)
 
     # ---- the study: the analyses, which a Run includes, their settings in the dock ----
+    def _analyses(self):
+        """What runs each analysis of the registry: a settings panel made from its options (analysispanel.py), or,
+        for the one this window has an editor for (the circuit's schematic), that page."""
+        from kicad2ems.api.frontend import analyses
+        self.registry = analyses()
+        self.panels, self.editors = {}, {}
+        for a in ANALYSES:
+            plugin = self.registry.get(a.key)
+            if plugin is None:
+                continue
+            if a.page and a.key in EDITORS.values():
+                self.editors[a.key] = editor_page(a.key, self)
+            else:
+                self.panels[a.key] = AnalysisPanel(plugin, self)
+                self.panels[a.key].changed.connect(lambda: self.setup.touch())     # a config holds its settings
+        self.pages = {a.key: (self.panels.get(a.key) or self.editors.get(a.key)) for a in ANALYSES
+                      if a.key in self.panels or a.key in self.editors}
+
     def _study(self):
-        """The analyses' list into the settings dock, with each page's own settings under it (the pages keep
-        their results); the ticks of the last session (the first time: S-parameters, as Run always did)."""
-        from . import pdntab, mqstab, thermaltab
+        """The analyses' list into the settings dock, with each one's settings under it; the ticks of the last
+        session (the first time: S-parameters, as Run always did)."""
         self._study_ready = False
         self.queue, self.job, self._job_t0, self._queue_preview, self._queue_stopped = [], None, 0.0, False, False
-        self.pages = {'pdn': self.pdn, 'mqs': self.mqs, 'circuit': self.circuit, 'thermal': self.thermal}
         self.study = StudyList()
-        panels = {k: p.settings_panel() for k, p in self.pages.items()}
+        panels = dict(self.panels)
+        panels.update({k: p.settings_panel() for k, p in self.editors.items()})
         for a in ANALYSES:
             if a.planned:                                           # no tool, so no settings: what it will be
                 note = QLabel(a.note)
@@ -1168,13 +1302,16 @@ class MainWindow(QMainWindow):
                 note.setContentsMargins(6, 0, 6, 0)
                 panels[a.key] = note
         self.setup.set_study(self.study, panels)
-        for key, mod in (('pdn', pdntab), ('mqs', mqstab), ('thermal', thermaltab)):
-            if self.pages[key].desc is None:
-                self.study.set_available(key, False, mod.why_not() or pdntab.QS_PIP)
-        if not self.circuit.run_btn.isEnabled():                    # its template could not be made: why
-            self.study.set_available('circuit', False, self.circuit.status.text())
         for key, page in self.pages.items():
+            ok, why = self.registry[key].check()
+            if not ok:
+                self.study.set_available(key, False, why)
+            elif key in self.editors and not page.run_btn.isEnabled():     # its model could not be made: why
+                self.study.set_available(key, False, page.status.text())
             self.runtab.add_log(key, BY_KEY[key].title, page.log)
+        for a in ANALYSES:                                          # listed without a plugin here (a test's)
+            if a.key != RF and a.key not in self.pages and not a.planned:
+                self.study.set_available(a.key, False, 'not installed')
         saved = self.qsettings.value('study/ticked')
         saved = ['rf'] if saved is None else ([saved] if isinstance(saved, str) else list(saved))
         self.study.set_ticked([k for k in saved if k in BY_KEY])
@@ -1185,6 +1322,8 @@ class MainWindow(QMainWindow):
         if getattr(self, '_study_ready', False):
             self.qsettings.setValue('study/ticked', self.study.ticked() or '')
             self._page_visibility()
+            if self.setup.path:                                     # an open config says which analyses its study
+                self.setup.touch()                                  # runs (without one, the next window remembers)
 
     def show_analysis(self, key):
         """An analysis's page in front (S-parameters: Results), its settings in the dock."""
@@ -1273,7 +1412,7 @@ class MainWindow(QMainWindow):
         if code == 0:
             self._job_state(key, f"done {time.strftime('%H:%M')}", seconds=took)
             out = getattr(self.pages.get(key), 'out', None)
-            if key in ('pdn', 'mqs', 'thermal') and out and os.path.isdir(str(out)):   # its maps and curves, its summary
+            if key != RF and out and os.path.isdir(str(out)):       # its maps, its report and its curves
                 self.refresh_runs(select=str(out))
                 self.open_results(str(out), quiet=True, front=False)
         else:
@@ -1286,16 +1425,16 @@ class MainWindow(QMainWindow):
             return
         self._next_job()                                            # none left: the toolbar's Stop
         if key != 'rf' and code == 0:                               # S-parameters: _finished chose its page
-            if key == 'mqs' and self._queue_preview:                # a mesh preview: the mesh, in the plan
+            if self._queue_preview:                                 # a mesh preview: the mesh, in the plan
                 self.viewer.set_view('Plan')
                 self.show_panel('Viewer')
-            else:
-                self.show_panel(BY_KEY[key].page)
+            else:                                                   # its editor, else its report
+                self.show_panel(BY_KEY[key].page if key in self.editors else 'Results')
 
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
         return {'viewer': self.viewer.split, 'results': self.results.splot.split, 'filter': self.filter.split,
-                'pdn': self.pdn.split, 'mqs': self.mqs.split, 'circuit': self.circuit.split, 'thermal': self.thermal.split,
+                **{k: p.split for k, p in self.editors.items()},
                 **({'viewer3d': self.volume.split} if getattr(self.volume, 'split', None) is not None else {})}
 
     def _restore_shape(self):
@@ -1530,16 +1669,32 @@ class MainWindow(QMainWindow):
         self._fill_examples()
 
     def _fill_examples(self):
-        """kicad2ems's examples (installed with it): one opens from a folder of the user's, where it is copied, its
-        board made if it is generated."""
-        from kicad2ems.api.frontend import examples
+        """The examples, kicad2ems's own and those the installed analyses ship (pcbqs's circuits), as a menu of
+        their groups; one opens from a folder of the user's, where it is copied, its board made if it is generated."""
+        from kicad2ems.api.frontend import example_index
         self.examples_menu.clear()
-        names = list(examples())
-        for n in names:
-            a = QAction(n, self)
-            a.triggered.connect(lambda _=False, n=n: self.open_example(n))
-            self.examples_menu.addAction(a)
-        self.examples_menu.setEnabled(bool(names))
+        try:
+            entries = example_index()
+        except Exception:                                           # a plugin's fault: no examples, not no window
+            entries = []
+        menus, self.example_sources = {}, {}                        # {group path: its menu}, {top group: whose}
+        for e in entries:
+            m, path = self.examples_menu, ''
+            for part in [p.strip() for p in (e.get('group') or '').split('/') if p.strip()]:
+                path += '/' + part
+                if path not in menus:                               # kept here: QAction.menu() must not be asked
+                    menus[path] = m.addMenu(part)                   # for them (PySide deletes the menu with the
+                    menus[path].setToolTipsVisible(True)            # wrapper it hands back)
+                m = menus[path]
+            top = '/' + (e.get('group') or '').split('/')[0].strip()
+            self.example_sources.setdefault(top, set()).add(e.get('source'))
+            a = QAction(e['name'], self)
+            a.setToolTip(e.get('title') or '')
+            a.setStatusTip(e.get('title') or '')
+            a.triggered.connect(lambda _=False, n=e['name']: self.open_example(n))
+            m.addAction(a)
+        self.example_menus = menus
+        self.examples_menu.setEnabled(bool(entries))
 
     def open_example(self, name):
         from kicad2ems.api.frontend import prepare_example
@@ -1614,8 +1769,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev):
         if self.setup.maybe_save():
             self._save_shape()
-            self.circuit.stop()
-            if self.circuit.proc is not None:self.circuit.proc.waitForFinished(3000)
+            for page in self.pages.values():                         # a tool still running: stopped with the window
+                if page.proc is not None:
+                    page.stop()
+                    if page.proc is not None:
+                        page.proc.waitForFinished(3000)
             self.system.stop()
             self.meters.stop()
             self.solvers_dialog.close()
@@ -1628,18 +1786,18 @@ class MainWindow(QMainWindow):
     # ---- results into the pages ----
     def open_results(self, out_dir, quiet=False, front=True):
         """The results already in a folder, whatever analysis wrote them: the viewer (board, meshes, line model,
-        dumps, far field), the results page (S-parameters and antenna, or the analysis's curves) and, for a
-        Power integrity or Near field result, its page's summary; front: the page with something new in front."""
-        from .runfolders import tool_kind
+        dumps, far field) and the results page (S-parameters and antenna, or an analysis's report and curves);
+        front: the page with something new in front."""
+        from kicad2ems.api.frontend import analysis_of
         files = find_results(out_dir)
         ant = self.results.load_antenna(out_dir)                    # first: it decides the page's plots
-        curves = self.results.load_curves(out_dir)                  # an analysis's curves: the page is theirs
+        shown = self.results.load_analysis(out_dir)                 # an analysis's result: the page is its
         if files:
             self.results.show(files)
         seen = self.viewer.load(out_dir)
-        kind = tool_kind(out_dir)
-        if kind in self.pages:
-            self._show_tool_result(kind, out_dir)
+        made = analysis_of(out_dir)
+        if made is not None and made[0] in self.pages:
+            self._show_tool_result(made[0], out_dir, preview=made[1])
         if self.system.load_estimates(out_dir):
             self.new_estimates(self.system.est)
         self.acts['Report'].setEnabled(bool(self.results.report))
@@ -1650,30 +1808,115 @@ class MainWindow(QMainWindow):
             self.show_panel('Results')
         elif front and seen:
             self.show_panel('Viewer')
-        elif front and curves:
+        elif front and shown:
             self.show_panel('Results')
-        if not quiet and not (files or seen or ant or curves):
+        if not quiet and not (files or seen or ant or shown):
             QMessageBox.information(self, 'Results', f"No results in {out_dir}")
 
-    def _show_tool_result(self, kind, out_dir):
-        """A Power integrity or Near field folder: its page's summary, and in the viewer the map to start from
-        (the rail's drop on the layer that drops most; the near field's own mesh in the plan)."""
-        from . import pdntab, mqstab, thermaltab
+    def _show_tool_result(self, kind, out_dir, preview=False):
+        """An analysis's folder is the one shown: its panel (or page) takes it as its result, and the viewer starts
+        where its report says (the dump of a field with the largest values: the layer that drops most, the hottest;
+        a mesh in the plan)."""
         page = self.pages[kind]
+        if kind in self.editors:
+            if not preview and os.path.abspath(str(page.out or '')) != os.path.abspath(out_dir):
+                page.open_run(out_dir)                              # not its own run just finished: shown there too
+        else:
+            if not preview:
+                page.out = out_dir
+            page.show_result(out_dir)
+        rep = self.results.analysis_report or {}
+        show, mesh = rep.get('show') or {}, rep.get('mesh')
+        if show.get('field'):
+            srcs = [s for s in self.viewer.cuts.srcs if s.field == show['field'] and show.get('run') in (None, s.run)]
+
+            def top(src):
+                try:
+                    return float(np.nanmax(np.abs(src.load(0)[1])))
+                except Exception:                                   # a dump half written
+                    return -1.0
+            if srcs:
+                self.viewer.show_dump(max(srcs, key=top).label)
+        if mesh and self.viewer.plan.mesh.findData(mesh) >= 0:
+            self.viewer.plan.mesh.setCurrentIndex(self.viewer.plan.mesh.findData(mesh))
+
+    def latest_results(self):
+        """{analysis: the folder of its latest result on this board}: the one its panel shows (its last run here,
+        or the one picked under Results of), else the newest listed. An analysis that starts from another's result
+        (the temperature, from a circuit's losses) is given these."""
+        from .runfolders import tool_kind
+        out = {}
+        for src in self.sources():                                  # each kind's newest first
+            if src['kind'] in self.pages:
+                out.setdefault(src['kind'], src['folder'])
+        for key, page in self.pages.items():
+            d = getattr(page, 'out', None)
+            if d and tool_kind(str(d)) == key:
+                out[key] = str(d)
+        return out
+
+    def load_analyses(self, path=None):
+        """A config's [analysis] tables into the study (kicad2ems.api.frontend.read_analyses): the analyses it
+        runs ticked (it names none: S-parameters), each one's settings from its table, the others' cleared.
+        path None: a new study, nothing set. A table of an analysis not installed here is kept, and saved back."""
+        from kicad2ems.api.frontend import read_analyses
+        run, tables = None, {}
+        if path:
+            try:
+                run, tables = read_analyses(path)
+            except Exception as e:
+                self.statusBar().showMessage(f"{path}: its [analysis] tables could not be read ({e})", 8000)
+        base = os.path.dirname(os.path.abspath(path)) if path else os.getcwd()
+        loading, self.setup._loading = self.setup._loading, True
         try:
-            res = {'pdn': pdntab, 'mqs': mqstab, 'thermal': thermaltab}[kind].load_result(out_dir)
-        except (OSError, ValueError, KeyError):
-            res = None
-        if res is None:
+            for key, page in self.pages.items():
+                tab = dict(tables.get(key) or {})
+                for k in ('board', 'out'):                          # its own board and folder: beside the config
+                    if tab.get(k) and not os.path.isabs(str(tab[k])):
+                        tab[k] = os.path.normpath(os.path.join(base, str(tab[k])))
+                if key in self.editors:
+                    page.load_settings(tab)
+                    continue
+                page.reset()
+                page.set_own(tab.pop('board', None), tab.pop('out', None))
+                page.set_values(tab)
+            self.extra_analyses = {k: v for k, v in tables.items() if k not in self.pages}
+            self.study.set_ticked([k for k in (run if run is not None else [RF]) if k in BY_KEY])
+        finally:
+            self.setup._loading = loading
+        first = (self.study.ticked() or [RF])[0]                    # the study's first analysis: its settings shown,
+        self.study.select(first)                                    # its editor (a circuit's) in front
+        if path and first in self.editors:
+            self.show_panel(BY_KEY[first].page)
+
+    def save_analyses(self, path):
+        """The study's analyses into a config's [analysis] tables: the ones ticked, each one's settings that are
+        set. A study of S-parameters alone with nothing else set writes none."""
+        from .runner import write_analyses
+        base = os.path.dirname(os.path.abspath(path))
+        tables = dict(getattr(self, 'extra_analyses', {}))
+        for key, page in self.pages.items():
+            tab = page.save_settings(path) if key in self.editors else config_values(page, base)
+            if tab:
+                tables[key] = tab
+        run = self.study.ticked()
+        write_analyses(path, None if run == [RF] and not tables else run, tables)
+
+    def apply_suggestion(self, source, s):
+        """What one analysis's result proposes for another (Analysis.suggest): those settings into the other's
+        panel, on the same board; the options it had no value for must be set before a run."""
+        target = self.pages.get(s.get('to'))
+        if target is None or not hasattr(target, 'set_values'):
             return
-        page.out = out_dir
-        page.show_result(res)
-        if kind == 'pdn':
-            drops = [s for s in self.viewer.cuts.srcs if s.field == 'V' and s.run == 'power']
-            if drops:
-                self.viewer.show_dump(max(drops, key=lambda s: float(abs(s.load(0)[1]).max())).label)
-        elif kind == 'mqs' and self.viewer.plan.mesh.findData('mqs') >= 0:
-            self.viewer.plan.mesh.setCurrentIndex(self.viewer.plan.mesh.findData('mqs'))
+        values = dict(s.get('values') or {})
+        target.reset()
+        if source.board.text().strip():                             # a board of its own: the same one there
+            target.set_own(source.board.text().strip(), None)
+        target.set_values(values)
+        target.required = {k for k in s.get('need') or [] if not str(values.get(k) or '').strip()}
+        target.status.setText(s.get('note', ''))
+        target.changed.emit()
+        self.study.select(s['to'])
 
     # ---- this board's runs: a folder each (runfolders.py) ----
     def board_loaded(self):
@@ -1691,10 +1934,11 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._auto_preview)
 
     def _auto_preview(self):
-        """The preview a newly opened config gets: only in a window on the screen (not a test's), when idle."""
+        """The preview a newly opened config gets: only in a window on the screen (not a test's), when idle, and
+        only of a study that runs S-parameters (the preview is that run's: a circuit's board has no ports for it)."""
         board = self.setup.values().get('board')
-        if self.isVisible() and board and os.path.exists(board) and not self.busy():
-            self.start(True)                                        # kicad2ems's own: the board, whatever is ticked
+        if self.isVisible() and board and os.path.exists(board) and not self.busy() and RF in self.study.ticked():
+            self.start(True)                                        # kicad2ems's own: the board
 
     def sources(self):
         """This board's results, as the Results of box lists them: [{folder, kind, label}], kind 'preview', 'rf'
@@ -1744,7 +1988,7 @@ class MainWindow(QMainWindow):
             base = self.setup.values().get('out')
         except ValueError:
             base = None
-        base = base or default_out(board)
+        base = base or (default_out(board) if board else os.path.join(os.getcwd(), 'out'))
         return tool_preview_dir(base, board, kind) if preview else tool_dir(base, board, kind, name)
 
     def _pick_run(self, folder):

@@ -1,5 +1,6 @@
-"""Every analysis's results in the pages: the run folders of pcbqs's tools (runfolders), their curves on the Results
-page (curves.py, curveplot.py) with other runs over them, the pages that come and go, a second Viewer."""
+"""Every analysis's results in the pages: the run folders of the analyses' tools (runfolders), their curves on the
+Results page (curves.py, curveplot.py) with other runs over them, a result's three views (its plots, its report,
+its tables), the pages that come and go, a second Viewer. The analyses are the stand-ins (fake_analyses.py)."""
 import json
 import os
 import time
@@ -7,30 +8,11 @@ import time
 import numpy as np
 import pytest
 
+import fake_analyses as FA
 from kicad2ems_gui import curves, runfolders
 
-
-def _pdn(folder, scale=1.0, rail='P'):
-    os.makedirs(folder, exist_ok=True)
-    f = np.logspace(4, 8, 21)
-    z = dict(U1=dict(mag=(scale * 0.01 * (1 + f / 1e6)).tolist(), deg=[0] * 21, bare=(1e3 / f).tolist(), target=0.05, over=[]))
-    res = dict(format=1, rail=rail, nets=[rail], ground=['GND'], volts=3.3, assumed_loads=False, tree=[], source=['L1'],
-               loads=dict(U1=dict(I=2, V=3.29, drop=0.01, power_drop=0.006, ground_rise=0.004)), series={},
-               loss_W=0.1, vias=dict(power=[], ground=[]), vertices=dict(power=10, ground=10), seconds=dict(total=1),
-               notes=[], figures=[], pdn=dict(f=f.tolist(), target=0.05, z=z, cavities=[], parts={}, vertices=5))
-    with open(os.path.join(folder, 'pdn.json'), 'w') as fh:
-        json.dump(res, fh)
-    return folder
-
-
-def _mqs(folder):
-    os.makedirs(folder, exist_ok=True)
-    res = dict(format=1, selection=dict(converter='U3', vin='VIN', ground='GND', capacitors=['C1']), triangles=100,
-               frequencies_Hz=[5e5, 1e6, 1.5e6], harmonic_peak_A=[1, .5, .3], copper_R_ohm=[1e-3] * 3,
-               copper_L_H=[1e-9] * 3, peak_H_Am=[[3, 2], [1.5, 1], [0.9, 0.5]], notes=[])
-    with open(os.path.join(folder, 'mqs.json'), 'w') as fh:
-        json.dump(res, fh)
-    return folder
+_pdn = lambda folder, scale=1.0, rail='P': FA.write('pdn', folder, rail=rail, scale=scale)
+_mqs = lambda folder: FA.write('mqs', folder, converter='U3')
 
 
 def test_tool_run_folders(tmp_path):
@@ -39,14 +21,19 @@ def test_tool_run_folders(tmp_path):
     a = runfolders.tool_dir(base, board, 'pdn', '+3V3', now=t0)
     assert os.path.basename(a) == 'b_pdn_3V3_20261111_013136'
     assert runfolders.tool_preview_dir(base, board, 'mqs').endswith('b_mqs_preview')
+    assert runfolders.tool_titles() == dict(pdn='Power integrity', mqs='Near field', circuit='Circuit', thermal='Thermal')
     _pdn(a)
     os.makedirs(runfolders.tool_dir(base, board, 'pdn', 'X', now=t0.replace(second=40)))     # stopped: no result
     _mqs(str(tmp_path / 'mqs_U3'))                                  # the old place: beside the board
     _pdn(str(tmp_path / 'out' / 'other_pdn_P_20261111_013136'))     # another board's
+    FA.write('mqs', runfolders.tool_preview_dir(base, board, 'mqs'), preview=True)      # a preview: not a run
+    th = FA.write('thermal', runfolders.tool_dir(base, board, 'thermal', 'circuit', now=t0.replace(second=50)))
     found = runfolders.tool_runs(base, board)
-    assert [(os.path.basename(d), k) for d, k, _ in found] == [('mqs_U3', 'mqs'), ('b_pdn_3V3_20261111_013136', 'pdn')]
-    assert found[1][2] == 'Power integrity: 3V3, 2026-11-11 01:31:36'
-    assert runfolders.tool_kind(a) == 'pdn' and runfolders.tool_kind(str(tmp_path)) is None
+    assert [(os.path.basename(d), k) for d, k, _ in found] == [
+        ('mqs_U3', 'mqs'), ('b_thermal_circuit_20261111_013150', 'thermal'), ('b_pdn_3V3_20261111_013136', 'pdn')]
+    assert found[2][2] == 'Power integrity: 3V3, 2026-11-11 01:31:36' and found[1][2].startswith('Thermal: circuit, ')
+    assert runfolders.tool_kind(a) == 'pdn' and runfolders.tool_kind(str(tmp_path)) is None and runfolders.tool_kind(th) == 'thermal'
+    assert runfolders.tool_kind(runfolders.tool_preview_dir(base, board, 'mqs')) is None
     assert curves.run_label(a) == '3V3, 11-11 01:31:36' and curves.run_label(str(tmp_path / 'mqs_U3')) == 'mqs_U3'
 
 
@@ -59,7 +46,11 @@ def test_curves(tmp_path):
     assert curves.value_at(u1, 1e3) is None
     ms = curves.load_curves(_mqs(str(tmp_path / 'm')))
     assert ms.kind == 'mqs' and list(ms.curves[0].y) == [3, 1.5, 0.9] and not ms.curves[0].role != 'data'
-    assert curves.load_curves(str(tmp_path)) is None
+    assert curves.load_curves(str(tmp_path)) is None and curves.load_sets(str(tmp_path)) == []
+    sets = curves.load_sets(FA.write('circuit', str(tmp_path / 'c')))     # several sets: a circuit's waveforms
+    assert [x.title for x in sets] == ['light: voltages', 'light: currents', 'full: voltages', 'full: currents']
+    assert not sets[0].logx and not sets[0].logy and curves.value_at(sets[0].curves[0], 0.25, False, False) == 1.0
+    assert curves.load_sets(FA.write('thermal', str(tmp_path / 't'))) == []         # a result with none
     curves.export_csv(str(tmp_path / 'c.csv'), [cs, ms])
     import csv
     head, *rows = list(csv.reader(open(tmp_path / 'c.csv')))
@@ -79,6 +70,7 @@ def window(tmp_path, monkeypatch):
     QSettings('kicad2ems', 'gui').clear()
     w = MainWindow()
     yield w, app
+    w.setup.dirty = False
     w.system.stop()
     w.meters.stop()
     w.close()
@@ -86,7 +78,6 @@ def window(tmp_path, monkeypatch):
 
 
 def test_results_of_lists_every_analysis_and_compares_runs(window, tmp_path):
-    from kicad2ems_gui.curveplot import CurvePlot
     w, app = window
     board = tmp_path / 'b.kicad_pcb'
     board.write_text('')
@@ -103,6 +94,7 @@ def test_results_of_lists_every_analysis_and_compares_runs(window, tmp_path):
     w._pick_run(new)
     r = w.results
     assert r.kind() == 'pdn' and r.views.currentWidget() is r.curveplot and 'rail P' in r.info.text()
+    assert r.modes() == ['Plots', 'Report', 'Tables'] and r.mode == 'Plots' and r.set_box.isHidden()
     assert w.runs_box.currentData() == new
     assert r.add_folder(old) and r.compared() == [os.path.abspath(old)]
     assert not r.add_folder(nf)                                     # another kind: not over these
@@ -117,12 +109,49 @@ def test_results_of_lists_every_analysis_and_compares_runs(window, tmp_path):
     assert [a.text() for a in acts] == ['Power integrity: P, 2026-11-11 01:00:00'] and acts[0].isChecked()
     acts[0].setChecked(False)
     assert r.compared() == []
-    w._pick_run(nf)                                                 # the near field: its spectrum, its summary
+    w._pick_run(nf)                                                 # the near field: its spectrum, its report
     assert r.kind() == 'mqs' and cp.main.curves[0].name == 'peak |H|'
-    assert 'U3' in w.mqs.summary.toPlainText()
-    assert w.mqs.tabs.count() == (1 if w.mqs.desc is not None else w.mqs.tabs.count())
+    assert 'U3' in r.reportview.page.toPlainText() and r.info.text() == 'Near field, U3 on VIN: 3 harmonics'
     w.open_results(str(tmp_path), quiet=True)                       # nothing of an analysis: S-parameters again
-    assert r.kind() == 'rf' and r.views.currentWidget() is r.splot
+    assert r.kind() == 'rf' and r.views.currentWidget() is r.splot and r.modes() == []
+    assert all(b.isHidden() for b in r.mode_btns.values())
+
+
+def test_a_result_as_its_plots_its_report_or_its_tables(window, tmp_path):
+    """The Results page's three views of an analysis's result, whichever analysis: the ones the result has."""
+    w, app = window
+    w.show()
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    w.setup.set_values(dict(board=str(board)))
+    base = w.out_dir()
+    th = FA.write('thermal', runfolders.tool_dir(base, str(board), 'thermal', 'losses'), loss='L1=0.48\nQ2=0.2')
+    ci = FA.write('circuit', runfolders.tool_dir(base, str(board), 'circuit', 'buck'))
+    pd = FA.write('pdn', runfolders.tool_dir(base, str(board), 'pdn', 'P'), note=True)
+    r = w.results
+    w.refresh_runs()
+    w._pick_run(th)                                                 # no curves: its report in front
+    assert r.kind() == 'thermal' and r.modes() == ['Report', 'Tables'] and r.mode == 'Report'
+    assert r.views.currentWidget() is r.reportview and r.reportview.mode() == 'Report'
+    assert not r.mode_btns['Plots'].isEnabled() and r.mode_btns['Report'].isChecked() and not r.cmp_btn.isEnabled()
+    assert r.info.text() == 'Thermal: hottest copper 73.0 °C' and 'L1' in r.reportview.page.toPlainText()
+    r.mode_btns['Tables'].click()
+    assert r.mode == 'Tables' and r.reportview.mode() == 'Tables' and r.reportview.table()[0] == 'Parts'
+    assert r.reportview.grid.rowCount() == 2 and r.reportview.grid.item(0, 2).text() == '73.0'
+    w._pick_run(pd)                                                 # the view kept, when the next result has it
+    assert r.kind() == 'pdn' and r.mode == 'Tables' and r.reportview.table()[0] == 'Loads at DC'
+    assert r.notes_btn.isHidden() and 'a note' in r.reportview.page.toPlainText()        # its notes: in its report
+    r.set_mode('Plots')
+    assert r.views.currentWidget() is r.curveplot and r.cmp_btn.isEnabled()
+    w._pick_run(ci)                                                 # several curve sets: one at a time
+    assert r.kind() == 'circuit' and r.mode == 'Plots' and not r.set_box.isHidden() and r.set_box.count() == 4
+    assert r.curveplot.main.title == 'light: voltages' and not r.curveplot.main.logx
+    r.set_box.setCurrentIndex(3)
+    assert r.curveplot.main.title == 'full: currents' and r.curves is r.curve_sets[3]
+    r.set_mode('Report')
+    assert r.set_box.isHidden() and 'Stand-in circuit' in r.reportview.page.toPlainText()
+    w._pick_run(th)                                                 # no plots there: its report
+    assert r.mode == 'Report' and r.set_box.isHidden()
 
 
 def test_pages_that_come_and_go(window):
