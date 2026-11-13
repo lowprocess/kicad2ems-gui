@@ -26,7 +26,7 @@ window's size, its docks and splitters, and the Results plots are remembered bet
 """
 import json, os, sys
 import numpy as np
-from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings, Signal
+from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings, Signal, QThread
 from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
                                QLineEdit, QCheckBox, QComboBox, QPushButton, QLabel, QPlainTextEdit, QProgressBar,
@@ -1457,9 +1457,37 @@ class PageDock(QDockWidget):
         return not self.visibleRegion().isEmpty()
 
 
+_READING = set()                                            # layout threads at work, kept until they are done: a
+                                                            # QThread destroyed while it runs aborts the program
+
+
+class _Layout(QThread):
+    """A board's layout read off the event loop (kicad2ems.layout.board_layout: a few seconds on a large board)."""
+    done = Signal(str, object)                              # the board file, its layout (None: not read)
+
+    def __init__(self, board):
+        super().__init__()                                  # no parent: a window closed meanwhile does not take it
+        self.board = board
+        _READING.add(self)
+        self.finished.connect(self._over)
+
+    def _over(self):
+        _READING.discard(self)
+
+    def run(self):
+        try:
+            from kicad2ems.api.frontend import board_layout
+            layout = board_layout(self.board)
+        except Exception:                                   # noqa: BLE001 (a board that cannot be read: no layout)
+            layout = None
+        self.done.emit(self.board, layout)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config=None):
         super().__init__()
+        self._picking, self.drawn = None, None                      # a setting picked on the board (start_pick)
+        self._layout_stamp, self._layout_bad = None, False
         self.setWindowTitle('kicad2ems')
         self.qsettings = QSettings('kicad2ems', 'gui')
         self.proc, self.tail, self.files, self.current, self.ticks = None, None, [], None, 0
@@ -1636,6 +1664,7 @@ class MainWindow(QMainWindow):
     def update_needed(self):
         if not getattr(self, '_study_ready', False) or not hasattr(self, 'acts'):
             return
+        self.want_layout()                                  # (a board chosen in the settings: once a file)
         q = self.study.current_question()
         mine = self.study.panels_of(q) if q in self.study.rows else ['rf']
         asked = self.study.jobs(False)
@@ -2215,6 +2244,9 @@ class MainWindow(QMainWindow):
                         page.proc.waitForFinished(3000)
             self.system.stop()
             self.meters.stop()
+            self.end_pick()
+            for t in list(_READING):                                # a board still being read: let it end
+                t.wait(15000)
             self.solvers_dialog.close()
             if getattr(self, '_viewer2', None) is not None:
                 self._viewer2.close()
@@ -2446,6 +2478,78 @@ class MainWindow(QMainWindow):
         self.study.ask(s['to'])                                     # proposed for it: asked, so Run includes it
         self.show_analysis(s['to'])                                 # its settings, and its page (the schematic)
 
+    # ---- the board as drawn, before anything is run; a setting picked on it ----
+    def want_layout(self):
+        """The chosen board's layout (kicad2ems.layout) into the Viewer's plan wherever no run's board is shown
+        there: read in a thread (a second or a few), once a board file. True: there, or being read."""
+        board = self.setup.values().get('board')
+        if not board or not str(board).lower().endswith('.kicad_pcb') or not os.path.isfile(board):
+            if self._layout_stamp is not None:                      # the board taken away: its drawing too
+                self._layout_stamp, self.drawn = None, None
+                self.viewer.show_layout(None)
+            return False
+        stamp = (os.path.abspath(board), os.path.getmtime(board))
+        if stamp == self._layout_stamp:
+            return not self._layout_bad
+        self._layout_stamp, self.drawn, self._layout_bad = stamp, None, False
+        t = _Layout(stamp[0])
+        t.done.connect(self._layout_ready)
+        t.start()
+        return True
+
+    def _layout_ready(self, board, layout):
+        if board != (self._layout_stamp or (None,))[0]:             # (another board chosen since)
+            return
+        self.drawn, self._layout_bad = layout, layout is None       # the board as drawn; None: not one to read
+        self.viewer.show_layout(layout)
+        if self._picking:                                           # a pick was waiting for it
+            self._begin_pick()
+
+    def start_pick(self, panel, key):
+        """Setting `key` of an analysis's panel is picked on the board: the Viewer's plan in front, showing the
+        board as drawn (in place of a run's board for as long), its clicks into the setting until end_pick."""
+        if self._picking and self._picking != (panel, key):         # one at a time: the other's button let go
+            other, k = self._picking
+            self._picking = None
+            other.pick_btns[k].setChecked(False)
+        if not panel.pick_kind(key):                                # (the table's selected cell: not a net's or a
+            self._no_pick(panel, key, 'select a cell that names a net or a part, then pick')        # part's)
+            return
+        self._picking = (panel, key)
+        self._begin_pick()
+
+    def _no_pick(self, panel, key, why):
+        self.statusBar().showMessage(why, 6000)
+        self._picking = None
+        self.viewer.plan.end_pick()
+        panel.pick_btns[key].setChecked(False)
+
+    def _begin_pick(self):
+        panel, key = self._picking
+        plan = self.viewer.plan
+        reading = self.want_layout()
+        if self.drawn is None and reading:
+            self.statusBar().showMessage('reading the board to pick on it …', 4000)
+            return                                                  # _layout_ready comes back here
+        if self.drawn is None and not plan.board:
+            self._no_pick(panel, key, 'no board to pick on: choose a .kicad_pcb in Files')
+            return
+        self.show_panel('Viewer')
+        self.viewer.buttons['Plan'].setEnabled(True)
+        self.viewer.set_view('Plan')
+        plan.start_pick(panel.pick_kind(key), lambda name: self._picked(name), panel.picked_names(key),
+                        layout=self.drawn)
+
+    def _picked(self, name):
+        if self._picking:
+            panel, key = self._picking
+            self.viewer.plan.set_picked(panel.take_pick(key, name))
+
+    def end_pick(self, panel=None, key=None):
+        if self._picking and (panel is None or self._picking == (panel, key)):
+            self._picking = None
+            self.viewer.plan.end_pick()
+
     # ---- this board's runs: a folder each (runfolders.py) ----
     def board_loaded(self):
         """A config was opened: its newest run into the pages, and a preview to show the board as it is now (the
@@ -2459,6 +2563,7 @@ class MainWindow(QMainWindow):
             self.results.load_antenna(None)
             self.results.show([])
             self.viewer.load(preview_dir(self.out_dir(), board) if board else os.path.join(os.getcwd(), 'out', '-'))
+        self.want_layout()                                          # the board as drawn, where nothing of it is shown
         QTimer.singleShot(0, self._auto_preview)
 
     def _auto_preview(self):

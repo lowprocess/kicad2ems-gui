@@ -140,6 +140,8 @@ class Viewer(QWidget):
         self.plan.selected.connect(lambda i: self.select(i, source='plan'))
         self._picked = None
         self._items = {}
+        self.drawn, self._has = None, {}                            # the board as drawn (show_layout); what each
+                                                                    # view has to show (load)
         self.set_view('3D' if self.volume.gl is not None else 'Plan')
         self._fit()
 
@@ -151,7 +153,9 @@ class Viewer(QWidget):
         self.lines = ov.load_lines(out_dir)
         self.volume.set_lines(self.lines)
         three = self.volume.load(out_dir)
-        plan = self.plan.load(out_dir, self.lines)
+        plan = ran = self.plan.load(out_dir, self.lines)
+        if not plan and self.drawn is not None:                     # a folder without a board: the board as drawn
+            plan = self.plan.set_board(self.drawn, None, {})
         self.cuts.load(out_dir)
         imgs = [p for p in sorted(glob.glob(os.path.join(out_dir, '*.png')))
                 if p.endswith(('_model.png', '_mesh.png', '_tlines.png'))]
@@ -160,9 +164,10 @@ class Viewer(QWidget):
         self.detail.setText(' ')                                    # a new folder: nothing selected
         self._picked = None
         self.section.show_section(None)
-        has = {'3D': self.volume.gl is not None and bool(three or plan), 'Plan': plan,
+        has = {'3D': self.volume.gl is not None and bool(three or ran), 'Plan': plan,
                'Cut': bool(self.cuts.srcs), 'Images': bool(imgs),
                'Section': any(e.get('section') for e in (self.lines or {}).get('elements', []))}
+        self._has = has
         for n, b in self.buttons.items():
             b.setEnabled(has[n])
         cur = self.view()
@@ -173,6 +178,21 @@ class Viewer(QWidget):
             self.set_view(nxt)
         self._fit()
         return any(has.values())
+
+    def show_layout(self, layout):
+        """The board as drawn (kicad2ems.layout; None: none), in the plan wherever no run's board is: now, and
+        after a folder without one is loaded. False: the plan shows no board."""
+        self.drawn = layout
+        shown = self.plan.board
+        if shown and not shown.get('layout_of'):                    # a run's board is there: it stays
+            return True
+        plan = self.plan.set_board(layout, None, {})
+        self._has['Plan'] = plan
+        for n, b in self.buttons.items():
+            b.setEnabled(bool(self._has.get(n)))
+        if plan and not self._has.get(self.view()):                 # the view shown has nothing: the plan has
+            self.set_view('Plan')
+        return plan
 
     def show_dump(self, label):
         """The dump of that label as the one the Cut and 3D views show (a folder's default is its first)."""

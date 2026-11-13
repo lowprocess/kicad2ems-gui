@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, Q
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
 
 UNSET = '(default)'                         # a choice left to the tool's default
+CELL = '(the selected cell)'                # a pick's key for the runs table's selected cell (pick_kind, take_pick)
 
 from .panels import Section, FlowLayout
 from .toolprocess import run_tool
@@ -109,6 +110,7 @@ class AnalysisPanel(QWidget):
             edit.textChanged.connect(self._edited)
         self.sections['Files'] = Section('Files', files)
         v.addWidget(self.sections['Files'])
+        self.pick_btns = {}                                         # {option key: its pick button}
         groups = {}
         for o in self.options:
             groups.setdefault(o.get('group') or 'Settings', []).append(o)
@@ -136,7 +138,11 @@ class AnalysisPanel(QWidget):
                 (wid.toggled if o['kind'] == 'bool' else wid.currentIndexChanged if isinstance(wid, QComboBox)
                  else wid.textChanged).connect(self._edited)
                 self.w[o['key']] = wid
-                fl.addRow(o['key'].replace('_', ' ').capitalize() if o['kind'] != 'bool' else '', wid)
+                label = o['key'].replace('_', ' ').capitalize() if o['kind'] != 'bool' else ''
+                if o.get('pick') and self.win is not None and hasattr(self.win, 'start_pick'):
+                    fl.addRow(self._pick_label(label, o), wid)      # the setting, picked on the board (planview)
+                else:
+                    fl.addRow(label, wid)
             self.forms[g] = fl
             self.sections[g] = Section(g, inner, i == 0)            # the first group open: what a run is of
             v.addWidget(self.sections[g])
@@ -209,6 +215,15 @@ class AnalysisPanel(QWidget):
             b = QPushButton(text)
             b.clicked.connect(slot)
             row.addWidget(b)
+        if self.win is not None and hasattr(self.win, 'start_pick') and any(self.pick_kind(k) for k in self.run_keys):
+            b = QPushButton('pick')                                 # the selected cell, picked on the board
+            b.setCheckable(True)
+            b.setToolTip("Pick the selected cell on the board (a net, or a part: by its column): click in the "
+                         "Viewer's plan; this button again ends it")
+            b.toggled.connect(lambda on: self.win.start_pick(self, CELL) if on else self.win.end_pick(self, CELL))
+            row.addWidget(b)
+            self.pick_btns[CELL] = b
+            t.currentCellChanged.connect(lambda *_: b.isChecked() and self.win.start_pick(self, CELL))   # its column's
         row.addStretch(1)
         lay.addLayout(row)
         self.table = t
@@ -221,6 +236,74 @@ class AnalysisPanel(QWidget):
                 if fl.indexOf(self.w[k]) >= 0:
                     fl.setRowVisible(self.w[k], False)
         self.add_run()
+
+    # ---- a setting picked on the board ----
+    def _pick_label(self, label, o):
+        """A form row's label with a button that picks the setting on the board: clicks in the Viewer's plan
+        name a net or a part into it (the option's `pick`), until the button is let go."""
+        from PySide6.QtWidgets import QToolButton
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(QLabel(label))
+        b = QToolButton()
+        b.setText('pick')
+        b.setCheckable(True)
+        many = o['pick'].endswith('s')
+        b.setToolTip(f"Pick {'them' if many else 'it'} on the board: click "
+                     + ("traces" if o['pick'].startswith('net') else "parts")
+                     + f" in the Viewer's plan ({'again takes one out; ' if many else ''}this button again ends it)")
+        b.toggled.connect(lambda on, key=o['key']: self.win.start_pick(self, key) if on else self.win.end_pick(self, key))
+        lay.addWidget(b)
+        self.pick_btns[o['key']] = b
+        return box
+
+    def _cell(self):
+        """(row, column key) of the table's selected cell, or None."""
+        t = self.table
+        if t is None or t.currentRow() < 0 or t.currentColumn() < 0:
+            return None
+        return t.currentRow(), self.run_keys[t.currentColumn()]
+
+    def pick_kind(self, key):
+        if key == CELL:                                             # the table's selected cell: its column's
+            cell = self._cell()
+            return self.pick_kind(cell[1]) if cell else None
+        return next((o.get('pick') for o in self.options if o['key'] == key), None)
+
+    def picked_names(self, key):
+        """The names a picked setting holds now."""
+        if key == CELL:
+            cell = self._cell()
+            it = self.table.item(cell[0], self.run_keys.index(cell[1])) if cell else None
+            text = it.text() if it is not None else ''
+        else:
+            w = self.w[key]
+            text = w.toPlainText() if isinstance(w, QPlainTextEdit) else w.text()
+        return [x.strip() for x in re.split(r'[\n,]', text) if x.strip()]
+
+    def take_pick(self, key, name):
+        """A name picked on the board into setting `key`: one that holds several takes it in, or out when it is
+        there already; one that holds one is set. Returns the names it now holds."""
+        kind = self.pick_kind(key) or ''
+        if key == CELL:
+            cell = self._cell()
+            if cell is None or not kind:
+                return []
+            names = self.picked_names(key)
+            names = ([n for n in names if n != name] if name in names else names + [name]) if kind.endswith('s') else [name]
+            self.table.item(cell[0], self.run_keys.index(cell[1])).setText(', '.join(names))
+            return names
+        w = self.w[key]
+        if kind.endswith('s'):
+            names = self.picked_names(key)
+            names = [n for n in names if n != name] if name in names else names + [name]
+            (w.setPlainText('\n'.join(names)) if isinstance(w, QPlainTextEdit) else w.setText(', '.join(names)))
+        else:
+            names = [name]
+            w.setPlainText(name) if isinstance(w, QPlainTextEdit) else w.setText(name)
+        return names
 
     def add_run(self, values=None):
         """A row of the table (a run): from values, else empty (its fields' defaults)."""

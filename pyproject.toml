@@ -16,7 +16,7 @@ classifiers = [
 ]
 authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
 dependencies = [
-    "kicad2ems>=261112.post11",    # the board model, settings, solvers, the study, runs, examples (kicad2ems.api.frontend 2.10)
+    "kicad2ems>=261112.post13",    # the board model, settings, solvers, the study, runs, examples (kicad2ems.api.frontend 2.11)
     "PySide6-Essentials>=6.5",
     "pyqtgraph>=0.13",
     "h5py>=3",                     # frequency-domain field dumps, far fields

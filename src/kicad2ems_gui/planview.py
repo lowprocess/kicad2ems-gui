@@ -61,6 +61,9 @@ def section_path(e):
     return _path([[list(p.exterior.coords)] + [list(r.coords) for r in p.interiors] for p in polys])
 
 
+PICKED = '#1f6feb'                          # what a setting has picked on the board: blue, against the copper's orange
+
+
 class PlanView(QWidget):
     selected = Signal(object)                                       # a section id, or None
     copper_colour, other_colour = COPPER, OTHER                     # the layer shown, the others
@@ -69,6 +72,8 @@ class PlanView(QWidget):
         super().__init__()
         self.board, self.box, self.lines, self.meshes = None, None, None, {}
         self.sel, self.hover, self._items, self._sec = None, None, [], {}
+        self._pick, self.picked, self._under = None, [], None       # (kind, callback): a click names a net or a part
+        self._behind = None                                         # what a pick's board as drawn stands in front of
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         bar = FlowLayout()
@@ -129,6 +134,9 @@ class PlanView(QWidget):
         plugin's live board); False when there is no board."""
         from kicad2ems.api.frontend import meshes
         from . import volume3d as v3
+        if self._behind is not None and not (board or {}).get('layout_of'):
+            self._behind = (board, lines, found_meshes)             # a pick is on the board as drawn: this after it
+            return board is not None
         self.board = board
         self.box = v3.board_box(v3.geometry_from_board(board)) if board else None
         self.meshes = found_meshes or {}
@@ -254,6 +262,26 @@ class PlanView(QWidget):
             t.setPos(*p['c'])
             t.setZValue(30)
             add(t)
+        # the footprints of a board as drawn (kicad2ems.layout), outlined and named; what a setting has picked,
+        # marked blue: a net's copper on this layer, a part's box
+        for fp in self.board.get('footprints', []):
+            if fp['layer'] != lay and not fp.get('through'):
+                continue
+            x0, y0, x1, y1 = fp['box']
+            on = fp['ref'] in self.picked
+            box = [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]
+            add(_item(_path([box]), QPen(QColor(PICKED if on else '#8a8f98'), 3.0 if on else 0.6, Qt.SolidLine if on
+                                         else Qt.DotLine), QBrush(QColor(31, 111, 235, 90) if on else Qt.NoBrush), 26))
+            if on or (x1 - x0) * (y1 - y0) > 4.0:                   # a name on the larger ones, and the picked
+                t = pg.TextItem(fp['ref'], color='#0b2a66' if on else '#5b6068', anchor=(0.5, 0.5))
+                t.setPos((x0 + x1) / 2, (y0 + y1) / 2)
+                t.setZValue(32)
+                add(t)
+        if self.picked:
+            polys = [r for it in self.board.get('copper', {}).get(lay, []) if it.get('net') in self.picked
+                     for r in _rings(it['polygon'])]
+            if polys:
+                add(_item(_path(polys), QPen(QColor('#ffffff'), 1.0), QBrush(QColor(PICKED)), 24))
         self._mark()
         if 'active_nets' in self.board:
             self.info.setText('Cyan: simulated copper · grey: layout context · gold: selected components (package approximations)')
@@ -292,17 +320,75 @@ class PlanView(QWidget):
         if i != self.hover:
             self.hover = i
             self._mark()
-        if i is not None:
+        if i is not None and not self._pick:
             text = ov.describe(self.lines['elements'][i])
             self.info.setText(text)
             QToolTip.showText(self.plot.mapToGlobal(self.plot.mapFromScene(pos).toPoint()), text, self.plot)
+            return
+        net, part = self.under(pos)
+        if net is not None or part is not None:                     # the board's own: what is under the cursor
+            self.info.setText(' · '.join(x for x in (f"net {net or '(none)'}" if net is not None else '',
+                                                    f"part {part}" if part else '') if x)
+                              + ('   (click: ' + self._pick[2] + ')' if self._pick else ''))
+        elif self._pick:
+            self.info.setText(f"click {self._pick[2]}")
         elif self.lines and self.show_lines:
             self.info.setText('hover a section to read it; click to select')
+
+    def under(self, scene_pos):
+        """(the net, the part) under a point of the scene on the layer shown, each None where there is none."""
+        if not self.board or not self.plot.sceneBoundingRect().contains(scene_pos):
+            return None, None
+        from kicad2ems.api.frontend import net_at, part_at
+        p = self.plot.getPlotItem().vb.mapSceneToView(scene_pos)
+        lay = self.current_layer()
+        try:
+            return net_at(self.board, lay, p.x(), p.y()), part_at(self.board, lay, p.x(), p.y())
+        except Exception:                                           # noqa: BLE001 (a board dict without polygons)
+            return None, None
 
     def _clicked(self, ev):
         if ev.button() != Qt.LeftButton:
             return
+        if self._pick:                                              # a setting is being picked: the net or the part
+            net, part = self.under(ev.scenePos())
+            name = part if self._pick[0].startswith('part') else net
+            if name:
+                self._pick[1](name)
+            return
         self.select(self._at(ev.scenePos()), emit=True)
+
+    def start_pick(self, kind, callback, picked=(), layout=None):
+        """Clicks name a net ('net', 'nets') or a part ('part', 'parts') to callback(name) until end_pick();
+        picked: the names already chosen, drawn marked. layout: the board as drawn (kicad2ems.layout), shown for
+        the pick in place of a run's board (which has only the nets it simulated, and no parts) and put back
+        after."""
+        what = {'net': 'a trace or a pour: its net', 'nets': 'traces: their nets (again: taken out)',
+                'part': "a part's pads", 'parts': "parts' pads (again: taken out)"}.get(kind, kind)
+        self._pick, self.picked = (kind, callback, what), list(picked)
+        if layout is not None and self.board is not layout:
+            behind = self._behind if self._behind is not None else (self.board, self.lines, self.meshes)
+            self._behind = None
+            self.set_board(layout, None, {}, fit=self.board is None)    # (a run's board: the view stays where it is)
+            self._behind = behind
+        else:
+            self.redraw()
+        self.plot.setCursor(Qt.CrossCursor)
+        self.info.setText(f"click {what}")
+
+    def end_pick(self):
+        self._pick, self.picked = None, []
+        self.plot.unsetCursor()
+        if self._behind is not None:                                # the run's board back
+            behind, self._behind = self._behind, None
+            if behind[0] is not None:
+                self.set_board(*behind, fit=False)
+                return
+        self.redraw()
+
+    def set_picked(self, names):
+        self.picked = list(names)
+        self.redraw()
 
     def select(self, i, emit=False):
         """Select a section (None: none); on its layer (switched to if need be)."""

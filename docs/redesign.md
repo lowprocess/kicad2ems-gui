@@ -144,7 +144,8 @@ In an order where each step leaves a working window:
    activity bar; Filter Synthesis is already a window of its own.*
 5. "Still needed", and the Run button's wording. *Done: `rf_needs` and an analysis's `missing` (kicad2ems API 2.9).*
 6. The start page and the examples gallery.
-7. Picking on the board.
+7. Picking on the board. *Done for nets and parts (an option's `pick`, kicad2ems API 2.11; the plan shows the
+   board as drawn before any run). Not yet: a pad, a layer, and the pick in the 3D view.*
 8. The Tools menu; the Circuit page's file buttons go.
 
 Step 1 and 6 to 8 are about two weeks.
