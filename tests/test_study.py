@@ -68,10 +68,11 @@ def test_study_dock(window):
     st, tree = w.setup, w.study
     assert st.study is tree and st.isAncestorOf(tree)               # the list: the window's left column
     groups = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-    assert [g.text(0) for g in groups] == ['RF', 'Power', 'Thermal']
+    assert [g.text(0) for g in groups] == ['RF', 'Signal integrity', 'Power', 'Thermal']
     assert [[g.child(k).text(0) for k in range(g.childCount())] for g in groups] == [
-        ['S-parameters', 'Antenna pattern', 'Trace impedances'],
-        ['Rail drop', 'Rail impedance', 'Converter near field', 'Circuit', 'Capacitance'], ['Temperature']]
+        ['S-parameters', 'Antenna pattern', 'Trace impedances'], ['Crosstalk'],
+        ['Rail drop', 'Rail impedance', 'Converter near field', 'Circuit', 'Coils and ferrite', 'Capacitance'],
+        ['Temperature']]
     assert tree.headerItem().text(1) == 'Answered by' and tree.headerItem().text(2) == 'Fields'
     by = lambda q: tree.rows[q].text(1).replace('  ▾', '')
     assert [by(q) for q in ('dc', 'pdn', 'nearfield', 'circuit', 'thermal')] == ['fake'] * 5

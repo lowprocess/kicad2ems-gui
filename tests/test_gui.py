@@ -1212,9 +1212,11 @@ def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
     from kicad2ems_gui.app import MainWindow
     QApplication.instance() or QApplication([])
     w = MainWindow()
-    assert [a.text() for a in w.examples_menu.actions()] == ['Antennas', 'RF structures', 'Lumped-element demos']
+    assert [a.text() for a in w.examples_menu.actions()] == ['Antennas', 'RF structures', 'Signal integrity',
+                                                             'Lumped-element demos']
     assert set(w.example_menus) >= {'/Antennas', '/Antennas/Patches and arrays', '/RF structures/Filters'}
-    assert w.example_sources == {'/Antennas': {'kicad2ems'}, '/RF structures': {'kicad2ems'}, '/Lumped-element demos': {'kicad2ems'}}
+    assert w.example_sources == {'/Antennas': {'kicad2ems'}, '/RF structures': {'kicad2ems'},
+                                 '/Signal integrity': {'kicad2ems'}, '/Lumped-element demos': {'kicad2ems'}}
     lines = w.example_menus['/RF structures/Lines and transitions']
     names = [a.text() for a in lines.actions()]
     assert 'rf_gcpw' in names and 'sma_launch' in names and 'rf_steplpf' not in names

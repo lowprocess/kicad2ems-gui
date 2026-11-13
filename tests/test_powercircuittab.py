@@ -33,8 +33,11 @@ def test_the_bridge_s_operating_points_are_the_model_s(tab):
     model. The switch model is the model's own, and the behavioural one is warned of. Overrides by group are the
     run's, not the model's."""
     tab.new_model('wpthb')
-    assert not tab.general and tab.shown()==['copper','fields','field_harmonics','frequencies','powers','coupling','receiver_c','load',
-                                             'switch_type','override','jobs']
+    assert not tab.general and tab.shown()==['copper','fields','field_harmonics','frequencies','powers','coupling','primary_l',
+                                             'secondary_l','receiver_c','load','switch_type','override','jobs']
+    assert tab.panel.w['primary_l'].text()=='24' and tab.panel.w['secondary_l'].text()=='24'    # the coils', uH
+    tab.panel.w['primary_l'].setText('6.45');assert tab.values()['primary']['L_H']==pytest.approx(6.45e-6)
+    tab.panel.w['primary_l'].setText('24')
     assert tab.panel.sections['Model'].isHidden() and not tab.panel.sections['Operating points'].isHidden()
     assert tab.frequencies.text()=='90000,110000' and tab.powers.text()=='5,10,20,30' and tab.coupling.text()=='0.4'
     assert tab.receiver_C.text()=='' and tab.model.currentText()=='vdmos'       # the template's, not the first listed

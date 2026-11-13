@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLine
 # the bridge tool's options that its model holds too: {option: (the model's key, option value -> model value)}
 BOUND=dict(frequencies=('frequencies_Hz',lambda t:[float(x) for x in t.split(',') if x.strip()]),
            powers=('powers_W',lambda t:[float(x) for x in t.split(',') if x.strip()]),
-           coupling=('coupling',float),receiver_c=('secondary_C_F',lambda t:float(t)*1e-9),load=('load_ohm',float))
+           coupling=('coupling',float),primary_l=('primary.L_H',lambda t:float(t)*1e-6),
+           secondary_l=('secondary.L_H',lambda t:float(t)*1e-6),             # (a.b: the model's c['a']['b'])
+           receiver_c=('secondary_C_F',lambda t:float(t)*1e-9),load=('load_ohm',float))
 OPTIONAL=('receiver_c','load')                                      # left empty: the model has none (tuned, matched)
 SWITCH_NOTE=("ngspice may not settle the behavioural 'switch' model on a hard-switched bridge: vdmos is the one the "
              "templates use")
@@ -294,6 +296,7 @@ class PowerCircuitTab(QWidget):
             self.editor.setPlainText(json.dumps(c,indent=2))
             text=lambda v:','.join(f'{x:g}' for x in v) if isinstance(v,list) else f'{v:g}'
             shown=dict(frequencies=text(c['frequencies_Hz']),powers=text(c['powers_W']),coupling=text(c['coupling']),
+                       primary_l=text(c['primary']['L_H']*1e6),secondary_l=text(c['secondary']['L_H']*1e6),
                        receiver_c=text(c['secondary_C_F']*1e9) if c.get('secondary_C_F') is not None else '',
                        load=text(c['load_ohm']) if c.get('load_ohm') is not None else '')
             self.panel.set_values({k:v for k,v in shown.items() if k in self.panel.w})
@@ -328,7 +331,11 @@ class PowerCircuitTab(QWidget):
             wid=self.panel.w.get(key)
             if wid is None:continue
             text=wid.text().strip()
-            if text:c[name]=convert(text)
+            if text:
+                *path,last=name.split('.')
+                d=c
+                for p in path:d=d.setdefault(p,{})
+                d[last]=convert(text)
             elif key in OPTIONAL:c.pop(name,None)
         if self.model is not None and self.model.currentIndex()>0:  # the first: the model's own, left as it is
             c.setdefault('switch_model',{})['type']=self.model.currentText()
