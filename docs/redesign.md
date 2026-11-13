@@ -133,7 +133,10 @@ Details that make it explain itself:
 In an order where each step leaves a working window:
 
 1. The study model, with the present widgets reading and writing it (no visible change; most of the risk).
-   *Not done: the widgets still hold the state.*
+   *Begun (2026-11-13): `study.StudyModel` holds what is asked, who answers, the Fields ticks, what cannot run
+   here and each run's state, with no Qt, and the Study dock's list (`studytree.py`) is its view. Still in the
+   widgets: every analysis's and the solvers' settings (the panels), the board and output folder, and the runs
+   in progress (`app.py`).*
 2. The questions list grouped, the engine on the row, the Solvers section folded into it (the registry's step 4).
    *Done.*
 3. `level` on options; the inspector with "More settings". *Done for the solvers' settings (an option's `level`,

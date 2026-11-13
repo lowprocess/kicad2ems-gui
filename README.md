@@ -101,7 +101,8 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 | Module | Contents |
 |---|---|
 | `app.py` | `MainWindow`: the docks (the study, the settings, the pages in their workspace), a run of the ticked analyses and its events, what a run still needs |
-| `study.py` | the runs a board can have (the solvers', then each analysis), what follows what, and the list in the Study dock: a row per question, who answers it, its Fields tick and its state |
+| `study.py` | the study with no window (no Qt): the runs a board can have (the solvers', then each analysis), what follows what, and `StudyModel`: what is asked, who answers each question, the Fields ticks, what cannot run here, each run's state |
+| `studytree.py` | the list in the Study dock, the model's view: a row per question, who answers it, its Fields tick and its state |
 | `analysispanel.py` | an analysis's settings and its run, for any plugin: the form from its options, its command as a child process |
 | `curves.py`, `curveplot.py` | an analysis's curves on the Results page (a rail's impedance, a spectrum, waveforms), other runs over them |
 | `reportview.py` | an analysis's report on the Results page: the page to read, its tables to sort, copy and export |

@@ -352,7 +352,7 @@ class SetupTab(QWidget):
         if st.is_solver(question):
             if not on:
                 return
-            names, auto = st._solver_names(question)
+            names, auto = st.solver_names(question)
             if auto or not names:
                 names = [e.name for e in st.engines[question] if e.fields]
             vals = self.values()
