@@ -12,14 +12,17 @@ Nothing here knows one analysis from another; what an analysis does differently 
     panel.values(), panel.set_values({...}), panel.reset()
     panel.start(preview=False), panel.stop(), panel.proc, panel.out
     config_values(panel)                     # what a config's [analysis.<name>] table holds of it
+    panel.set_runs([{...}, ...]), panel.runs()   # an analysis a study may hold several of (Analysis.several: a
+                                             # board's rails): a table of what differs, a run each, in order
 """
 import os
 import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
-                               QPlainTextEdit, QCheckBox, QComboBox, QFileDialog, QProgressBar, QLabel, QInputDialog)
+                               QPlainTextEdit, QCheckBox, QComboBox, QFileDialog, QProgressBar, QLabel, QInputDialog,
+                               QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
 
 UNSET = '(default)'                         # a choice left to the tool's default
 
@@ -50,15 +53,15 @@ def typed(option, value):
     return text
 
 
-def config_values(panel, base=None):
-    """What a config's [analysis.<name>] table holds of a panel: the options set, and its own board and folder;
-    paths (the analysis's, and those two) relative to `base` when given."""
+def config_values(panel, base=None, vals=None):
+    """What a config's [analysis.<name>] table holds of a panel: the options set (of vals, a run of its table,
+    when given), and its own board and folder; paths (the analysis's, and those two) relative to `base`."""
     out = {}
     rel = lambda p: os.path.relpath(os.path.abspath(p), base).replace(os.sep, '/') if base else p
     for key, edit in (('board', panel.board), ('out', panel.outdir)):
         if edit.text().strip():
             out[key] = rel(edit.text().strip())
-    vals = panel.values()
+    vals = panel.values() if vals is None else vals
     for o in panel.options:
         v = typed(o, vals.get(o['key']))
         if v is not None:
@@ -71,6 +74,7 @@ class AnalysisPanel(QWidget):
     gives it (Find, what its result proposes for another analysis) and its status line."""
     changed = Signal()                                      # a setting was edited by hand (not set_values: a
                                                             # config loaded, a test)
+    ended = Signal(int)                                     # a run ended, all of its rows: 0, or the first failure
 
     def __init__(self, analysis, win=None):
         super().__init__()
@@ -137,6 +141,13 @@ class AnalysisPanel(QWidget):
             self.sections[g] = Section(g, inner, i == 0)            # the first group open: what a run is of
             v.addWidget(self.sections[g])
         self._after_sections = v.count()                            # where a page's own section goes (add_section)
+        # what a study may hold several of (Analysis.several, its several_keys): those settings as a table, a
+        # row a run (a board's rails), the rest of the form shared by them all
+        self.run_keys = [k for k in getattr(analysis, 'several_keys', ()) or () if k in self.w] \
+            if getattr(analysis, 'several', '') else []
+        self.table = None
+        if self.run_keys:
+            self._run_table(v)
         self.buttons = FlowLayout()
         self.find_btn = None
         if getattr(analysis, 'finds', ''):                          # the board proposes settings
@@ -174,6 +185,115 @@ class AnalysisPanel(QWidget):
             self.setEnabled(False)
             self.status.setText(why)
 
+    # ---- several runs: a table of what differs between them ----
+    def _run_table(self, v):
+        what = self.a.several
+        holder = QWidget()
+        lay = QVBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 0, 0)
+        t = QTableWidget(0, len(self.run_keys))
+        t.setHorizontalHeaderLabels([k.replace('_', ' ').capitalize() for k in self.run_keys])
+        t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)     # each heading whole; the
+        t.horizontalHeader().setStretchLastSection(True)                            # dock scrolls sideways if
+        t.verticalHeader().hide()                                                   # it must
+        t.setSelectionBehavior(QAbstractItemView.SelectRows)
+        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        for c, k in enumerate(self.run_keys):
+            o = next(o for o in self.options if o['key'] == k)
+            t.horizontalHeaderItem(c).setToolTip(f"{o['flag']}: {o['help']}" + (' (several: comma-separated)'
+                                                                                if o['kind'] == 'list' else ''))
+        t.itemChanged.connect(lambda *_: self._edited())
+        lay.addWidget(t)
+        row = QHBoxLayout()
+        for text, slot in ((f"Add a {what}", self.add_run), (f"Remove the {what}", self.remove_run)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.table = t
+        title = what.capitalize() + 's'
+        self.sections[title] = Section(title, holder, True)
+        v.insertWidget(1, self.sections[title])                     # after Files: what the runs are of
+        self._after_sections += 1
+        for k in self.run_keys:                                     # in the table, not the form
+            for fl in self.forms.values():
+                if fl.indexOf(self.w[k]) >= 0:
+                    fl.setRowVisible(self.w[k], False)
+        self.add_run()
+
+    def add_run(self, values=None):
+        """A row of the table (a run): from values, else empty (its fields' defaults)."""
+        t = self.table
+        self._setting += 1
+        try:
+            r = t.rowCount()
+            t.insertRow(r)
+            for c, k in enumerate(self.run_keys):
+                v = (values or {}).get(k)
+                text = ', '.join(map(str, v)) if isinstance(v, (list, tuple)) else ('' if v is None else
+                                                                                    f"{v:g}" if isinstance(v, float) else str(v))
+                t.setItem(r, c, QTableWidgetItem(text))
+        finally:
+            self._setting -= 1
+        self._fit_table()
+        if values is None:
+            self._edited()
+
+    def _fit_table(self):
+        """The table as tall as its rows (two at least), not a box of empty space."""
+        t = self.table
+        rows = max(t.rowCount(), 2)
+        h = t.horizontalHeader().height() + rows * t.verticalHeader().defaultSectionSize() + 2 * t.frameWidth()
+        bar = t.horizontalScrollBar().sizeHint().height()
+        t.setFixedHeight(h + bar)
+
+    def remove_run(self):
+        """The selected row out (the last one stays: a run is of one at least)."""
+        t = self.table
+        r = t.currentRow() if t.currentRow() >= 0 else t.rowCount() - 1
+        if t.rowCount() > 1:
+            t.removeRow(r)
+            self._fit_table()
+            self._edited()
+
+    def _row(self, r):
+        out = {}
+        for c, k in enumerate(self.run_keys):
+            it = self.table.item(r, c)
+            out[k] = it.text().strip() if it is not None else ''
+            o = next(o for o in self.options if o['key'] == k)
+            if o['kind'] == 'list':                                 # a list: its items, comma- or line-separated
+                out[k] = '\n'.join(x.strip() for x in re.split(r'\n|,(?=\s*[^\s,=]+\s*=)', out[k]) if x.strip())
+        return out
+
+    def runs(self):
+        """The runs the table asks, [values]: the shared settings with each row's (one row: values()). A row with
+        nothing in it is left out, unless it is the only one."""
+        if not self.table:
+            return [self.values()]
+        shared = self._shared()
+        rows = [self._row(r) for r in range(self.table.rowCount())]
+        filled = [r for r in rows if any(r.values())] or rows[:1]
+        return [dict(shared, **r) for r in filled]
+
+    def set_runs(self, runs):
+        """The table from several runs' settings ([{key: value}]): each its row, the shared settings the first's."""
+        runs = [dict(r) for r in runs] or [{}]
+        self.set_values(runs[0])
+        if not self.table:
+            return
+        self._setting += 1
+        try:
+            self.table.setRowCount(0)
+        finally:
+            self._setting -= 1
+        for r in runs:
+            self.add_run(r)
+
+    def _shared(self):
+        return {k: v for k, v in self._form_values().items() if k not in self.run_keys}
+
     # ---- the settings ----
     def _edited(self, *_):
         if not self._setting:
@@ -183,18 +303,22 @@ class AnalysisPanel(QWidget):
         """What a run of these settings still needs, [dict(text, key)]: the options a proposal left without a value,
         and what the analysis says (Analysis.missing: kicad2ems API 2.9; before it, nothing more). to_come: the
         analyses asked with it that run before it and have no result yet: what they will give is not missing."""
-        vals = self.values()
-        if asked:
-            vals = self.a.for_questions(vals, tuple(asked))
-        out = [dict(text=f"set {k.replace('_', ' ')}", key=k) for k in sorted(self.required)
-               if not str(vals.get(k, '')).strip()]
-        if hasattr(self.a, 'missing'):
-            latest = self.win.latest_results() if self.win is not None and hasattr(self.win, 'latest_results') else {}
-            latest = {**{k: None for k in to_come}, **latest}
-            try:
-                out += [dict(text=str(m['text']), key=m.get('key')) for m in self.a.missing(vals, self.board_path() or None, latest)]
-            except Exception:                                       # noqa: BLE001 (a plugin's check: never the window's end)
-                pass
+        out = []
+        runs = self.runs()
+        for i, vals in enumerate(runs):                             # each run's (a table's rows: said by which)
+            said = f"{self._label(vals) or f'{self.a.several} {i + 1}'}: " if len(runs) > 1 else ''
+            if asked:
+                vals = self.a.for_questions(vals, tuple(asked))
+            out += [dict(text=said + f"set {k.replace('_', ' ')}", key=k) for k in sorted(self.required)
+                    if not str(vals.get(k, '')).strip()]
+            if hasattr(self.a, 'missing'):
+                latest = self.win.latest_results() if self.win is not None and hasattr(self.win, 'latest_results') else {}
+                latest = {**{k: None for k in to_come}, **latest}
+                try:
+                    out += [dict(text=said + str(m['text']), key=m.get('key'))
+                            for m in self.a.missing(vals, self.board_path() or None, latest)]
+                except Exception:                                   # noqa: BLE001 (a plugin's check: never the window's end)
+                    pass
         return out
 
     def focus(self, key):
@@ -222,6 +346,13 @@ class AnalysisPanel(QWidget):
         return self.sections[title]
 
     def values(self):
+        """The settings: the form's, and with a table of runs the first run's (runs(): all of them)."""
+        out = self._form_values()
+        if self.table:
+            out.update(self._row(0) if self.table.rowCount() else {})
+        return out
+
+    def _form_values(self):
         out = {}
         for k, wid in self.w.items():
             if isinstance(wid, QCheckBox):
@@ -235,7 +366,21 @@ class AnalysisPanel(QWidget):
         return out
 
     def set_values(self, vals):
-        """Some of the form's fields (the others stay): a list as lines, None as empty."""
+        """Some of the form's fields (the others stay): a list as lines, None as empty. With a table of runs, its
+        keys into the first row."""
+        if self.table and any(k in vals for k in self.run_keys):
+            if not self.table.rowCount():
+                self.add_run({})
+            self._setting += 1
+            try:
+                for c, k in enumerate(self.run_keys):
+                    if k in vals:
+                        v = vals[k]
+                        text = ', '.join(map(str, v)) if isinstance(v, (list, tuple)) else (
+                            '' if v is None else f"{v:g}" if isinstance(v, float) else str(v))
+                        self.table.setItem(0, c, QTableWidgetItem(text))
+            finally:
+                self._setting -= 1
         self._setting += 1
         try:
             for k, v in vals.items():
@@ -271,6 +416,11 @@ class AnalysisPanel(QWidget):
         self.required = set()
         self.result = None
         self._suggestions([])
+        if self.table:
+            self._setting += 1
+            self.table.setRowCount(0)
+            self._setting -= 1
+            self.add_run({})
         if self.isEnabled():
             self.status.setText('')
 
@@ -305,10 +455,21 @@ class AnalysisPanel(QWidget):
 
     # ---- a run ----
     def start(self, preview=False):
-        """Start the analysis (its preview); the status line says why when it cannot start."""
+        """Start the analysis (its preview): with a table of runs, each row's after the other (a preview: the
+        first's alone). The status line says why when it cannot start; ended(code) when it all ends."""
         if self.proc is not None or (preview and not self.a.previewed):
             return
-        vals = self.values()
+        runs = self.runs()
+        self._queue = runs[1:] if self.table and not preview else []
+        self._count, self._failed = len(self._queue) + 1, 0
+        self.log.clear()                                            # one log for the rows' runs together
+        while not self._start_one(runs[0], preview):                # (one that cannot start: said, the next tried)
+            if not self._queue:
+                return
+            self._failed = 1
+            runs = [self._queue.pop(0)]
+
+    def _start_one(self, vals, preview):
         asked = tuple(getattr(self, 'asked', None) or ())           # the questions this run is asked (the study's)
         if asked:
             vals = self.a.for_questions(vals, asked)
@@ -316,26 +477,40 @@ class AnalysisPanel(QWidget):
         if unset:
             self.status.setText(f"Set {', '.join(k.replace('_', ' ') for k in unset)} before Run: "
                                 f"{'it was' if len(unset) == 1 else 'they were'} not known where these settings came from")
-            return
+            return False
         board = self.board_path() or None
         try:
             named = self.outdir.text().strip()
+            tag = self.a.tag(vals)
+            if named and self._count > 1:                           # several runs: a folder each under the named one
+                named = os.path.join(named, ''.join(c if c.isalnum() else '_' for c in tag))
             out = (os.path.join(named, 'preview') if preview else named) if named else \
-                self.default_out(board, self.a.tag(vals), preview)
+                self.default_out(board, tag, preview)
             latest = self.win.latest_results() if self.win is not None and hasattr(self.win, 'latest_results') else {}
             argv = self.a.command(vals, board, os.path.abspath(out), preview=preview, results=latest)
         except ValueError as e:
-            self.status.setText(str(e))
-            return
-        self.out, self._preview = os.path.abspath(out), preview
+            self.status.setText((f"{self._label(vals) or self.a.several}: " if self._count > 1 else '') + str(e))
+            return False
+        self.out, self._preview, self._vals = os.path.abspath(out), preview, vals
         from kicad2ems.api.frontend import mark_run
         from kicad2ems.study import provided
         mark_run(self.out, self.a.name, asked or provided(self.a), preview)     # whose run this folder is
-        self.log.clear()
         self.say('$ ' + ' '.join(['python', *argv[1:]] if os.path.basename(argv[0]).startswith('python') else argv))
         self._running(True)
-        self.status.setText('running…')
+        self.status.setText(self._progress('running…'))
         run_tool(self, argv, self._stdout, self._finished, env=dict(self.a.env or {}))
+        return True
+
+    def _label(self, vals):
+        """A run of the table by its first column (the rail's net), or ''."""
+        return str(vals.get(self.run_keys[0]) or '') if self.run_keys else ''
+
+    def _progress(self, text):
+        """A status line that says which run of how many, when there are several."""
+        if getattr(self, '_count', 1) <= 1:
+            return text
+        k = self._count - len(self._queue)
+        return f"{self.a.several} {k} of {self._count} ({self._label(self._vals)}): {text}"
 
     def stop(self):
         if self.proc is not None:
@@ -365,14 +540,23 @@ class AnalysisPanel(QWidget):
             lines = [l for l in self.log.toPlainText().splitlines() if l.strip()]
             errs = [l for l in lines if 'error' in l.lower() or l.startswith(('RuntimeError', 'ValueError'))]
             last = (errs or lines or [''])[-1].strip()
-            self.status.setText(f"the run failed (exit {code})" + (f": {last[:200]}" if last else '')
-                                + ' (the whole log: the Run page)')
+            self.status.setText(self._progress(f"the run failed (exit {code})" + (f": {last[:200]}" if last else '')
+                                               + ' (the whole log: the Run page)'))
             self.status.setToolTip('\n'.join((errs or lines)[-8:]))
-            return
-        self.status.setToolTip('')
-        rep = self.a.report(self.out) or {}
-        self.status.setText('preview ready' if self._preview else ('done: ' + rep['summary'] if rep.get('summary') else 'done'))
-        self.show_result(self.out)
+            self._failed = self._failed or (code or 1)
+        else:
+            self.status.setToolTip('')
+            rep = self.a.report(self.out) or {}
+            self.status.setText(self._progress('preview ready' if self._preview else
+                                               ('done: ' + rep['summary'] if rep.get('summary') else 'done')))
+            self.show_result(self.out)
+        queue = getattr(self, '_queue', [])
+        while queue:                                                # the next row's run (one that cannot start: said,
+            nxt = queue.pop(0)                                      # the others go on)
+            if self._start_one(nxt, False):
+                return
+            self._failed = self._failed or 1
+        self.ended.emit(getattr(self, '_failed', 0) if code == 0 else (code or 1))
 
     # ---- what a result proposes, what the board proposes ----
     def show_result(self, folder):

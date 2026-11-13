@@ -1740,8 +1740,12 @@ class MainWindow(QMainWindow):
         proc = page.proc
         if proc is None:                                            # the page said why on its status line
             return page.status.text() or 'see its page'
-        proc.finished.connect(lambda code, _st=None, k=key: self._job_done(k, code))
-        proc.errorOccurred.connect(lambda err, k=key: err == QProcess.FailedToStart and self._job_done(k, -1))
+        panel = getattr(page, 'panel', page)                         # its settings' panel: it says when it all
+                                                                    # ended (a table of runs: the last row's end)
+        def ended(code, k=key, panel=panel):
+            panel.ended.disconnect(ended)
+            self._job_done(k, code)
+        panel.ended.connect(ended)
         return None
 
     def _job_state(self, key, text, bad=False, seconds=None):
@@ -2317,7 +2321,10 @@ class MainWindow(QMainWindow):
                     continue
                 page.reset()
                 page.set_own(tab.pop('board', None), tab.pop('out', None))
-                page.set_values(tab)
+                if getattr(page, 'table', None) and more.get(key):  # several runs (a board's rails): its table
+                    page.set_runs([tab, *more.pop(key)])
+                else:
+                    page.set_values(tab)
             self.extra_analyses = {k: ([v, *more[k]] if more.get(k) else v) for k, v in tables.items()
                                    if k not in self.pages}
             for key, rest in more.items():                          # an analysis given several tables (a board's
@@ -2389,6 +2396,8 @@ class MainWindow(QMainWindow):
         tables = dict(getattr(self, 'extra_analyses', {}))
         for key, page in self.pages.items():
             tab = page.save_settings(path) if key in self.editors else config_values(page, base)
+            if key not in self.editors and getattr(page, 'table', None) and len(page.runs()) > 1:
+                tab = [config_values(page, base, r) for r in page.runs()]      # a table a row
             if tab:
                 rest = getattr(self, 'more_sets', {}).get(key)      # the config's other tables of it: kept,
                 if rest:                                            # their paths relative to where it is saved

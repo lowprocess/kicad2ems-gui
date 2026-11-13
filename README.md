@@ -41,8 +41,13 @@ ripple on the rail) and *Copy U702's input current to Near field*. A click fills
 it so that Run includes it, and shows it. None installed: those rows are greyed, and say how to install an
 engine.
 
-A config may give an analysis several tables (`[[analysis.pdn]]`: a board's rails, a run each of `kicad2ems
-study`): the window shows and runs the first, says how many more there are, and keeps them when it saves.
+**Several rails.** An analysis a study may hold several of (its `several`: pcbqs's rail tool) shows what differs
+between them as a table at the top of its settings (`several_keys`: the rail, its volts, source, ground source,
+loads and load spectra), a row a rail, with *Add a rail* and *Remove the rail*; the rest of its settings are
+below, shared by every row. Run makes each row's run in turn, each into a folder of its own, as one job of the
+study, and "Still needed" says which row lacks what. A config's several tables (`[[analysis.pdn]]`, as
+`kicad2ems study` runs them) open as the rows, and the rows are saved as them. An analysis that says nothing
+of the kind keeps one form, and a config's further tables of it are kept as they were.
 
 **Preview** and **Run** make the runs the questions asked take, one after the other: the solvers', then each
 analysis in the registry's order; the Run page lists them with each one's state, time and log. Run > *Run the

@@ -111,3 +111,71 @@ def test_a_config_opens_as_a_study_and_saves_back(window, tmp_path):
     assert w.study.ticked() == ['rf'] and w.setup.path is None
     w.study.set_ticked(['rf', 'thermal'])
     assert not w.setup.dirty                                        # no config open: the next window remembers
+
+
+def test_several_rails_are_a_table_and_a_run_each(tmp_path, monkeypatch):
+    """An analysis a study may hold several of (several, several_keys): what differs as a table, a row a run, the
+    rest of its form shared; Run makes each row's run in order as one job of the study; a config of several
+    tables opens as the table's rows and is saved as them; what a run still needs says which row."""
+    pytest.importorskip('PySide6')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    import time
+    import fake_analyses as FA
+    monkeypatch.setattr(FA.PowerIntegrity, 'several', 'rail', raising=False)
+    monkeypatch.setattr(FA.PowerIntegrity, 'several_keys', ('rail', 'volts', 'load'), raising=False)
+    from PySide6.QtCore import QSettings
+    from kicad2ems_gui import application
+    from kicad2ems_gui.app import MainWindow
+    from kicad2ems.api.frontend import read_analysis_sets
+    app = application()
+    QSettings('kicad2ems', 'gui').clear()
+    w = MainWindow()
+    try:
+        pdn = w.pages['pdn']
+        t = pdn.table
+        assert t is not None and t.rowCount() == 1 and pdn.sections['Rails'].expanded
+        assert [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())] == ['Rail', 'Volts', 'Load']
+        assert pdn.forms['Rail'].isRowVisible(pdn.w['scale']) and not pdn.forms['Rail'].isRowVisible(pdn.w['rail'])
+        (tmp_path / 'b.kicad_pcb').write_text('')
+        cfg = tmp_path / 'rails.toml'
+        cfg.write_text('board = "b.kicad_pcb"\nout = "out"\n\n[study]\nrun = ["dc"]\n\n[[analysis.pdn]]\nrail = "+5V"\n'
+                       'volts = 5\nload = ["U1=2"]\nscale = 2\n\n[[analysis.pdn]]\nrail = "+3V3"\nvolts = 3.3\n'
+                       'load = ["U2=1", "U3=0.5"]\nscale = 2\n')
+        assert w.setup.load(str(cfg))
+        assert t.rowCount() == 2 and [t.item(r, 0).text() for r in range(2)] == ['+5V', '+3V3']
+        assert t.item(1, 2).text() == 'U2=1, U3=0.5' and pdn.values()['scale'] == '2'
+        runs = pdn.runs()
+        assert [(r['rail'], r['volts'], r['load'], r['scale']) for r in runs] == [
+            ('+5V', '5', 'U1=2', '2'), ('+3V3', '3.3', 'U2=1\nU3=0.5', '2')]
+        assert 'more of these' not in pdn.status.text() and w.more_sets == {}
+        t.item(1, 0).setText('')                                    # a row without its rail: said, by row
+        assert [n['text'] for n in pdn.needs()] == ['rail 2: name the rail (its net)']     # the row without its rail
+        t.item(1, 0).setText('+3V3')
+        pdn.add_run(dict(rail='+1V8', volts=1.8, load=['U4=0.2']))
+        w.run_study(only='dc')
+        t0 = time.time()
+        while w.busy() and time.time() - t0 < 120:
+            app.processEvents()
+            time.sleep(0.02)
+        for _ in range(10):
+            app.processEvents()
+        assert w.study.state('pdn').startswith('done'), pdn.log.toPlainText()[-800:]
+        made = sorted(os.path.basename(d).split('_pdn_')[1].rsplit('_', 2)[0] for d in
+                      __import__('glob').glob(str(tmp_path / 'out' / 'b_pdn_*')))
+        assert made == ['1V8', '3V3', '5V']                          # a run each, a folder each
+        assert pdn.log.toPlainText().count('$ python') == 3 and pdn.status.text().startswith('rail 3 of 3 (+1V8): done')
+        assert w.setup.save()
+        sets = read_analysis_sets(str(cfg))['pdn']
+        assert [(s['rail'], s.get('volts'), s.get('load'), s.get('scale')) for s in sets] == [   # (3.3: the default)
+            ('+5V', 5.0, ['U1=2'], 2.0), ('+3V3', None, ['U2=1', 'U3=0.5'], 2.0), ('+1V8', 1.8, ['U4=0.2'], 2.0)]
+        pdn.remove_run()                                            # the selected (else the last) row out
+        assert t.rowCount() == 2
+        pdn.reset()
+        assert t.rowCount() == 1 and pdn.runs()[0]['rail'] == ''
+    finally:
+        w.setup.dirty = False
+        w.system.stop()
+        w.meters.stop()
+        w.close()
+        QSettings('kicad2ems', 'gui').clear()
