@@ -47,6 +47,14 @@ def default_layout(antenna=False):
     return [f"{CARTESIAN}:{KINDS[0]}", SMITH_PLOT]
 
 
+def _drop(sp):
+    """A removed subplot hidden and deleted with the event loop, its parent kept until then. setParent(None) made it
+    a hidden window of its own, its wrapper still marked as the parent's, and where no event loop ran its deletion
+    (the tests) PySide 6.12 crashed walking it at the interpreter's exit."""
+    sp.hide()
+    sp.deleteLater()
+
+
 class Subplot(QFrame):
     """One plot of the grid: a header (its type, what it shows, close) and a pyqtgraph plot."""
     def __init__(self, host, kind, option=None):
@@ -276,8 +284,7 @@ class SPlot(QWidget):
         for m in self.markers:
             m['items'].pop(id(sp), None)
         self.grid.removeWidget(sp)
-        sp.setParent(None)
-        sp.deleteLater()
+        _drop(sp)
         self._reflow(force=True)
         self._update_table()
         self.layout_changed.emit()
@@ -291,8 +298,7 @@ class SPlot(QWidget):
         for sp in list(self.subplots):
             self.subplots.remove(sp)
             self.grid.removeWidget(sp)
-            sp.setParent(None)
-            sp.deleteLater()
+            _drop(sp)
         for m in self.markers:
             m['items'] = {}
         for s in spec or []:

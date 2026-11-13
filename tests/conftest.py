@@ -19,3 +19,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_analyses                                                # noqa: E402
 
 fake_analyses.install()
+
+
+
+# The interpreter's own exit is skipped once pytest has reported: PySide 6.12 crashed tearing down what the tests
+# leave (every test passed, then exit 139 on Linux, 127 on Windows, two runs in three). Its QApplication's
+# destruction walks every widget wrapper still alive (110k by the last test), and a pyqtgraph scene's items call
+# their Python overrides (itemChange) from their C++ destructors after their wrappers are gone (gdb:
+# QGraphicsScene::clear -> QGraphicsWidget::~QGraphicsWidget -> a null call). Deleting each test's windows after
+# it hit the same in mid-run. pytest's exit status stands.
+_status = [0]
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _status[0] = int(exitstatus)
+
+
+def pytest_unconfigure(config):
+    if 'PySide6.QtWidgets' in sys.modules and not os.environ.get('K2E_GUI_TEST_TEARDOWN'):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(_status[0])

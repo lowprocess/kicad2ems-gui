@@ -61,11 +61,13 @@ def test_render_and_selection_are_functional(tab):
 def test_import_review_requires_explicit_additions_and_marks_dnp(tab):
     from PySide6.QtCore import Qt
     doc=dict(components=[dict(ref='C25',value='47n',kind='capacitor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),dict(ref='RNEW',value='1k',kind='resistor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',pins=[]),dict(ref='C17',value='33n',kind='capacitor',supported_passive=True,dnp=True,exclude_from_sim=False,sheet='/',pins=[])])
-    dialog=ImportReview(doc,tab.values());assert dialog.selected_refs()==['C25']
+    # (the window's own has the tab as parent; a top-level one left to the interpreter's exit crashed it on Qt 6.12,
+    # after every test had passed: exit 139 on Linux, 127 on Windows)
+    dialog=ImportReview(doc,tab.values(),tab);assert dialog.selected_refs()==['C25']
     assert '33' in dialog.table.item(0,3).text() and dialog.table.item(0,2).text()=='47n'
     dialog.select('all');assert dialog.selected_refs()==['C25','RNEW']
     dialog.table.item(2,0).setCheckState(Qt.Checked);assert 'C17' in dialog.selected_refs()
-    dialog.close()
+    dialog.close();dialog.deleteLater();QApplication.processEvents()
 
 
 def test_cancelled_import_does_not_start_or_overwrite_invalid_json(tab,tmp_path):
