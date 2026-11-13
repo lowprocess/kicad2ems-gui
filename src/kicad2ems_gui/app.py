@@ -1922,6 +1922,12 @@ class MainWindow(QMainWindow):
         """The docks where a new window has them, at their first sizes: the layout the window was built with, put
         back as a saved one is."""
         built = getattr(self, '_built_layout', None)
+        floating = [d for d in (self.study_dock, self.settings_dock, *self.docks.values()) if d.isFloating()]
+        for d in floating:                                          # docked first, and Qt left to finish with the
+            d.setFloating(False)                                    # floating windows before the layout is touched:
+        if floating:                                                # on Windows it aborted in whatever came next
+            from PySide6.QtWidgets import QApplication              # (addDockWidget, show, restoreState)
+            QApplication.processEvents()
         if built is None or not (self.restoreState(built[0], STATE_VERSION) and self.work.restoreState(built[1], STATE_VERSION)):
             self._place_docks()
         for d in (self.study_dock, self.settings_dock, *self.docks.values()):
