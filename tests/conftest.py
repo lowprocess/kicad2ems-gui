@@ -39,4 +39,10 @@ def pytest_unconfigure(config):
     if 'PySide6.QtWidgets' in sys.modules and not os.environ.get('K2E_GUI_TEST_TEARDOWN'):
         sys.stdout.flush()
         sys.stderr.flush()
+        if sys.platform == 'win32':
+            # os._exit is ExitProcess there, which still runs every DLL's detach (Qt's static destructors: an
+            # access violation in it on CI); TerminateProcess runs none
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.TerminateProcess(k32.GetCurrentProcess(), _status[0])
         os._exit(_status[0])
