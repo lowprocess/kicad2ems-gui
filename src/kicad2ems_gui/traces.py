@@ -16,8 +16,8 @@ SMITH = 'Smith chart'                                     # the reflections besi
 DIFF_KINDS = ('Δ|S| (dB)', '|ΔS| (dB)')                   # one solver against another: |S| apart, and S apart
 UNITS = {'|S| (dB)': 'dB', '|S| (linear)': '', 'Phase (deg)': '°', 'Group delay (ns)': 'ns', 'VSWR': '',
          'Smith chart': ''}
-SOURCES = (('openEMS', 'solid'), ('mom25d', 'dashdot'), ('qucsator', 'dot'), ('scikit-rf', 'dot'), ('line model', 'dot'),
-           ('compare', 'dash'))
+SOURCES = (('joined', 'solid'), ('openEMS', 'solid'), ('mom25d', 'dashdot'), ('qucsator', 'dot'), ('scikit-rf', 'dot'),
+           ('line model', 'dot'), ('compare', 'dash'))      # joined: a quasi-static and a full-wave answer, one band
 
 
 class Trace:
@@ -71,7 +71,7 @@ def modes(names):
     return out
 
 
-BY_SUFFIX = dict(openems='openEMS', mom25d='mom25d', qucs='qucsator', scikit='scikit-rf',
+BY_SUFFIX = dict(openems='openEMS', mom25d='mom25d', qucs='qucsator', scikit='scikit-rf', joined='joined',
                  mom='mom25d', fast='line model')             # the last two: file names of older runs
 
 
