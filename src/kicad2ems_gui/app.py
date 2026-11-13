@@ -1802,6 +1802,9 @@ class MainWindow(QMainWindow):
         for d in (self.study_dock, self.settings_dock):
             if d.isFloating():
                 d.setFloating(False)
+            # out of the layout first, as the workspace's docks below: a floating one docked again in place made
+            # Qt abort in addDockWidget on Windows CI (its floating dock a native window)
+            self.removeDockWidget(d)
             self.addDockWidget(Qt.LeftDockWidgetArea, d)
             if d.isHidden():
                 d.show()
