@@ -50,19 +50,26 @@ study, and "Still needed" says which row lacks what. A config's several tables (
 of the kind keeps one form, and a config's further tables of it are kept as they were.
 
 **Preview** and **Run** make the runs the questions asked take, one after the other: the solvers', then each
-analysis in the registry's order; the Run page lists them with each one's state, time and log. Run > *Run the
+analysis in the registry's order; the Log page lists them with each one's state, time and log. Run > *Run the
 selected question alone* (or the list's context menu) runs one whatever is ticked. An analysis may start from
 another's result: Thermal takes its losses from the latest circuit run when none are typed, so with both asked
-it runs after Circuit and on that run's board. When two engines have answered one question, the Results page's
-report has their named figures side by side (*Engines compared*).
+it runs after Circuit and on that run's board. When two engines have answered one question, the Report page
+has their named figures side by side (*Engines compared*).
 
 **What a run leaves is shown where every result is**, not on a page of its own:
 
-- its **maps** in the Viewer, 3D, Plan and Cut (an analysis writes them as field dumps: a rail's drop and current
+- its **maps** in the Viewer, Plan, 2D and 3D (an analysis writes them as field dumps: a rail's drop and current
   per layer, a near field's H, a board's temperature per layer, in °C on a scale from its coolest point);
-- its **curves** on the Results page (a rail's impedance, a near field's spectrum, a circuit's waveforms: Plots);
-- its **report** there too: what it found, to read (Report), or its tables to sort by a column, copy into a
-  spreadsheet or export as CSV (Tables).
+- its **curves** on the Plots page (a rail's impedance, a near field's spectrum, a circuit's waveforms);
+- its **report** on the Report page: what it found, to read; and its tables on the Tables page, to sort by a
+  column, copy into a spreadsheet or export as CSV.
+
+Plots, Report, Tables and the Log are docks of their own (Plots beside the board on a wide window, the others
+tabbed under it), as is Section, the field across the line-model section picked on the plan. A window with no
+board begins on the **Start** page (open a board, a config or a results folder; the examples as tiles with
+their boards drawn), which has the workspace until a board is chosen. The **steps** bar under the toolbar
+(Board, Questions, Set up, Run, Results) says where the study stands; it drags to the bottom of the window and
+hides (View > Steps).
 
 **Results of** (the toolbar) lists every result of the board, each run in a folder of its own under the output
 folder: the preview, the S-parameter runs, and each analysis's runs. Choosing one fills the pages. Results >
@@ -83,7 +90,8 @@ schematic, its JSON): the model is a file the config names, saved back beside th
 circuit's settings are a panel in the Settings dock like any analysis's, made from the plugin's options (the two
 tools' own tables, the options of the other kind of model hidden), with a *Model* section for a general model's
 parameters and sweep; the full bridge's operating points show the model's values, and what is typed there goes
-into the model. Its results are on the Results page and its log on the Run page, as every analysis's.
+into the model. Its results are on the Plots, Report and Tables pages and its log on the Log page, as every
+analysis's.
 
 ## Install
 
@@ -104,13 +112,15 @@ analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 | `study.py` | the study with no window (no Qt): the runs a board can have (the solvers', then each analysis), what follows what, and `StudyModel`: what is asked, who answers each question, the Fields ticks, what cannot run here, each run's state |
 | `studytree.py` | the list in the Study dock, the model's view: a row per question, who answers it, its Fields tick and its state |
 | `analysispanel.py` | an analysis's settings and its run, for any plugin: the form from its options, its command as a child process |
-| `curves.py`, `curveplot.py` | an analysis's curves on the Results page (a rail's impedance, a spectrum, waveforms), other runs over them |
-| `reportview.py` | an analysis's report on the Results page: the page to read, its tables to sort, copy and export |
+| `curves.py`, `curveplot.py` | an analysis's curves on the Plots page (a rail's impedance, a spectrum, waveforms), other runs over them |
+| `reportview.py` | an analysis's report: the Report page to read, the Tables page's tables to sort, copy and export |
+| `startpage.py` | the Start page: open a board, a config or a results folder; the examples as tiles, their boards drawn in a thread and kept in the cache folder |
+| `steps.py` | the steps bar: `steps_of(win)`, where the study stands as plain data, and the toolbar that shows it |
 | `runner.py` | the settings form without Qt: fields, sections, solver tick boxes, configs read and written back |
 | `runfolders.py` | a folder per run and one per board's preview |
 | `planview.py`, `meshpick.py` | the board seen from above, with the line model and the meshes (the KiCad plugin's map too) |
-| `viewer.py`, `volumetab.py`, `volume3d.py` | the plan, cut and 3D views; `volume3d` holds their arrays, without Qt |
-| `sectionview.py` | the field across a line-model section (the KiCad plugin's too) |
+| `viewer.py`, `volumetab.py`, `volume3d.py` | the Viewer's Plan, 2D and 3D views; `volume3d` holds their arrays, without Qt |
+| `sectionview.py` | the field across a line-model section: the Section page (the KiCad plugin's too) |
 | `splot.py`, `traces.py` | S-parameter plots, Smith charts, traces and their export |
 | `fieldtab.py`, `antennatab.py`, `steering.py` | field maps, antenna results, beam steering |
 | `filtertab.py` | the Filter page (dfsynth) |

@@ -1,15 +1,18 @@
 """
 The Viewer: everything about the board and its fields in one page.
 
-    3D       the board in 3D: copper, vias, a solver's mesh, plane and volume dumps in place, the far field
     Plan     the board from above: one layer's copper, a solver's mesh on it, the ports
-    Cut      a cut through a field dump, with its values (time frames, phases, live while openEMS runs)
-    Section  the field across the line-model section picked, solved when it is picked
+    2D       a cut through a field dump, with its values (time frames, phases, live while openEMS runs)
+    3D       the board in 3D: copper, vias, a solver's mesh, plane and volume dumps in place, the far field
     Images   the plots a run wrote (the openEMS mesh with its side views, the model, the line model)
 
-The line model is an overlay of 3D and Plan: its sections coloured by Z0 against the ports' impedance, listed
+The line model is an overlay of Plan and 3D: its sections coloured by Z0 against the ports' impedance, listed
 beside the view with their Z0, length, delay and eeff. Pick a section in the list, or click it in the plan: both
 views mark it. The views a folder has nothing for are disabled.
+
+The field across the section picked is a page of its own, the window's Section (Viewer.section, a SectionView: the
+window puts it in a dock under the board, so the plan and the section are seen together). It is solved only while
+that page is in view (set_section_shown); sections(bool) says whether the folder loaded has any.
 """
 import glob, os
 from PySide6.QtCore import Qt, Signal
@@ -23,11 +26,10 @@ from .planview import PlanView
 from .sectionview import SectionView
 from .volumetab import VolumeTab
 
-VIEWS = ('3D', 'Plan', 'Cut', 'Section', 'Images')
+VIEWS = ('Plan', '2D', '3D', 'Images')      # the buttons' order: the board flat, a field in a cut, 3D, pictures
 TIPS = {'3D': 'the board in 3D: copper, a solver\'s mesh, the line model, dumps in place, the far field',
         'Plan': 'the board from above: one layer, a solver\'s mesh, the line model (hover, click a section)',
-        'Cut': 'a cut through a field dump, with its values',
-        'Section': 'the field across the line-model section picked: strength, equipotentials, the copper, the mesh',
+        '2D': 'a field dump in 2D: a cut through it, with its values',
         'Images': 'the plots the run wrote: the openEMS mesh and its side views, the model, the line model'}
 
 
@@ -68,6 +70,7 @@ def _swatch(rgb):
 
 class Viewer(QWidget):
     view_changed = Signal(str)
+    sections = Signal(bool)                     # a folder was loaded: whether its line model has cross-sections
 
     def __init__(self, win=None):
         super().__init__()
@@ -102,8 +105,8 @@ class Viewer(QWidget):
         lay.addLayout(bar)
 
         self.stack = QStackedWidget()
-        self.views = {'3D': self.volume, 'Plan': self.plan, 'Cut': self.cuts, 'Section': self.section,
-                      'Images': self.images}
+        self.views = {'3D': self.volume, 'Plan': self.plan, '2D': self.cuts, 'Images': self.images}
+        self._section_on = False                                    # the Section page is in view (its dock says)
         for w in self.views.values():
             self.stack.addWidget(w)
         side = QWidget()
@@ -165,19 +168,23 @@ class Viewer(QWidget):
         self._picked = None
         self.section.show_section(None)
         has = {'3D': self.volume.gl is not None and bool(three or ran), 'Plan': plan,
-               'Cut': bool(self.cuts.srcs), 'Images': bool(imgs),
-               'Section': any(e.get('section') for e in (self.lines or {}).get('elements', []))}
+               '2D': bool(self.cuts.srcs), 'Images': bool(imgs)}
         self._has = has
         for n, b in self.buttons.items():
             b.setEnabled(has[n])
         cur = self.view()
         if not has.get(cur):
             vol = bool(self.volume.srcs) if self.volume.gl is not None else False     # volume or plane dumps
-            order = ['3D', 'Plan', 'Cut', 'Images'] if (vol or not self.cuts.srcs) else ['Cut', '3D', 'Plan', 'Images']
+            order = ['3D', 'Plan', '2D', 'Images'] if (vol or not self.cuts.srcs) else ['2D', '3D', 'Plan', 'Images']
             nxt = next((n for n in order if has[n]), cur)
             self.set_view(nxt)
         self._fit()
+        self.sections.emit(self.has_sections())
         return any(has.values())
+
+    def has_sections(self):
+        """Whether the folder shown has a line model with cross-sections to solve (the Section page's)."""
+        return any(e.get('section') for e in (self.lines or {}).get('elements', []))
 
     def show_layout(self, layout):
         """The board as drawn (kicad2ems.layout; None: none), in the plan wherever no run's board is: now, and
@@ -195,14 +202,14 @@ class Viewer(QWidget):
         return plan
 
     def show_dump(self, label):
-        """The dump of that label as the one the Cut and 3D views show (a folder's default is its first)."""
+        """The dump of that label as the one the 2D and 3D views show (a folder's default is its first)."""
         for view in (self.cuts, self.volume):
             labels = [s.label for s in view.srcs]
             if label in labels and view.dump.currentIndex() != labels.index(label):
                 view.dump.setCurrentIndex(labels.index(label))
 
     def follow(self, out_dir):
-        """A running simulation's newest field frames (the Cut view's live mode)."""
+        """A running simulation's newest field frames (the 2D view's live mode)."""
         self.cuts.follow(out_dir)
 
     def _fill_tree(self):
@@ -249,8 +256,6 @@ class Viewer(QWidget):
         for n, b in self.buttons.items():
             b.setChecked(n == name)
         self._fit()
-        if name == 'Section':
-            self._show_section()
         self.view_changed.emit(name)
 
     def view(self):
@@ -258,8 +263,7 @@ class Viewer(QWidget):
 
     def _fit(self):
         """The section list where it means something: a line model, shown, in the 3D or plan view."""
-        on = bool(self.lines) and self.view() in ('3D', 'Plan', 'Section') and \
-            (self.lines_on.isChecked() or self.view() == 'Section')
+        on = bool(self.lines) and self.view() in ('3D', 'Plan') and self.lines_on.isChecked()
         self.side.setVisible(on)
         self.lines_on.setVisible(bool(self.lines) and self.view() in ('3D', 'Plan'))
         n = len([e for e in (self.lines or {}).get('elements', []) if e.get('kind') != 'coupling'])
@@ -292,11 +296,17 @@ class Viewer(QWidget):
             self.tree.blockSignals(False)
         self.detail.setText(ov.describe(self.lines['elements'][i]) if (i is not None and self.lines) else ' ')
         self._picked = i
-        if self.view() == 'Section':
+        if self._section_on:
+            self._show_section()
+
+    def set_section_shown(self, on):
+        """The Section page came into view (or went out of it): the section picked is solved only while it is."""
+        self._section_on = bool(on)
+        if on:
             self._show_section()
 
     def _show_section(self):
-        """The Section view on the section picked; solved only here, while that view is the one shown."""
+        """The Section page on the section picked; solved only here, while that page is in view."""
         i = self._picked
         e = self.lines['elements'][i] if (i is not None and self.lines) else None
         if e is not self.section.e:

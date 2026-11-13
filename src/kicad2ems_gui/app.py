@@ -55,10 +55,15 @@ DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
 MAX_RECENT = 8
 EDITORS = {a.page: a.key for a in ANALYSES if a.page and a.key in ('circuit',)}     # an analysis with a page of its
                                                             # own here (the circuit's schematic): {page: its key}
-PANELS = ('Viewer', 'Run', 'Results', 'Filter', *EDITORS)
-TITLES = {'Filter': 'Filter Synthesis'}                     # a page's tab title, when not its name
-LOWER = ('Results', 'Run')                      # the pages under the board in a new window's layout
+# The pages (each a dock of the workspace, by its name here). A result is on pages of its own kind, not one page
+# with a switch: 'Results' is its plots (the tab reads Plots), Report what an analysis found, to read, Tables the
+# report's tables, and 'Run' the runs' progress and logs (the tab reads Log)
+PANELS = ('Viewer', 'Start', 'Results', 'Report', 'Tables', 'Run', 'Section', 'Filter', *EDITORS)
+TITLES = {'Filter': 'Filter Synthesis', 'Results': 'Plots', 'Run': 'Log'}      # a page's tab title, when not its name
+LOWER = ('Report', 'Tables', 'Run', 'Section')  # the pages under the board in a new window's layout
+BESIDE = ('Results',)                           # and beside it
 ON_DEMAND = ('Filter',)                         # pages closed when the window opens: the toolbar's Filter opens it
+                                                # ('Start' comes and goes with the board: _start_follows)
 FOLLOWS_TICK = dict(EDITORS)                    # pages shown while their analysis is ticked (or opened by hand)
 
 
@@ -67,7 +72,7 @@ def editor_page(key, win):
     from .powercircuittab import PowerCircuitTab
     return {'circuit': PowerCircuitTab}[key](win)
 WAND = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wand.svg')
-STATE_VERSION = 3                                                   # saved dock layouts of older windows: ignored
+STATE_VERSION = 4                                                   # saved dock layouts of older windows: ignored
 COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
 
@@ -946,10 +951,11 @@ class ResultsTab(QWidget):
     """The Results page: the S-parameters of every solver and, for an antenna, its gain, efficiency and pattern
     cuts, as subplots you add and remove (splot.SPlot). The plots of a page are remembered: one layout for
     S-parameters, one for antennas. An analysis's result (a rail's drop and impedance, a near field, a circuit, a
-    board's temperature: whatever kicad2ems's registry holds) takes the page instead, in one of three views:
-    Plots, its curves (curveplot.CurvePlot; a result with several sets: one at a time); Report, what it found, to
-    read; Tables, the report's tables to sort, copy and export (reportview.ReportView). Compare with lays other
-    runs of the same kind over the plots."""
+    board's temperature: whatever kicad2ems's registry holds) takes the page instead with its curves
+    (curveplot.CurvePlot; a result with several sets: one at a time), and has two more pages, which this one
+    fills: Report, what it found, to read (`reportview`), and Tables, the report's tables to sort, copy and
+    export (`tablesview`; reportview.ReportView both). Compare with lays other runs of the same kind over the
+    plots."""
     MODES = ('Plots', 'Report', 'Tables')
 
     def __init__(self, win):
@@ -992,18 +998,6 @@ class ResultsTab(QWidget):
         self.folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(
             self.out if self.analysis and self.out else self.win.out_dir())))
         top.addWidget(self.folder_btn)
-        self.mode_btns = {}                                         # an analysis's result: how it is shown
-        for m, tip in zip(self.MODES, ("the result's curves", 'what the analysis found, to read',
-                                       "the report's tables: sort, copy, export")):
-            b = QToolButton()
-            b.setText(m)
-            b.setCheckable(True)
-            b.setAutoExclusive(True)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, m=m: self.set_mode(m))
-            b.hide()
-            top.addWidget(b)
-            self.mode_btns[m] = b
         self.set_box = QComboBox()                                  # a result with several curve sets: which
         self.set_box.setToolTip("The result's curves to plot (a circuit: each point's voltages and currents)")
         self.set_box.setMinimumWidth(220)
@@ -1019,11 +1013,12 @@ class ResultsTab(QWidget):
         self.splot = SPlot()
         self.splot.layout_changed.connect(self._save_layout)
         self.curveplot = CurvePlot()
-        self.reportview = ReportView()
+        self.reportview, self.tablesview = ReportView(), ReportView()       # the Report and Tables pages
+        self.reportview.set_mode('Report')
+        self.tablesview.set_mode('Tables')
         self.views = QStackedWidget()                               # the S-parameter plots, or an analysis's
-        self.views.addWidget(self.splot)                            # curves, report or tables
+        self.views.addWidget(self.splot)                            # curves
         self.views.addWidget(self.curveplot)
-        self.views.addWidget(self.reportview)
         lay.addWidget(self.views, 1)
         self.report, self.added, self._files, self.out, self._mode = None, [], [], None, None
         self.analysis, self.analysis_report = None, None            # the analysis whose result is shown, its report
@@ -1209,32 +1204,27 @@ class ResultsTab(QWidget):
         return [m for m in self.MODES if has[m]] if self.analysis else []
 
     def set_mode(self, mode):
-        """An analysis's result as its Plots, its Report or its Tables (one the result has; else its first)."""
+        """The page of an analysis's result in front: Plots, Report or Tables (one the result has; else its
+        first). They are pages of their own, so this only brings one forward."""
         has = self.modes()
         if not has:
             return
         self.mode = mode if mode in has else has[0]
-        for m, b in self.mode_btns.items():
-            b.setChecked(m == self.mode)
-        self.set_box.setVisible(self.mode == 'Plots' and len(self.curve_sets) > 1)
-        self.cmp_btn.setEnabled(self.mode == 'Plots')
-        if self.mode == 'Plots':
-            self.views.setCurrentWidget(self.curveplot)
-        else:
-            self.reportview.set_mode(self.mode)
-            self.views.setCurrentWidget(self.reportview)
+        win = self.win
+        if win is not None and hasattr(win, 'docks'):
+            win.show_panel('Results' if self.mode == 'Plots' else self.mode)
 
     def _show_analysis(self):
-        """The result of an analysis in the page's views; none: the S-parameter plots."""
+        """The result of an analysis on its pages (the curves here, the report and its tables on theirs); none:
+        the S-parameter plots here, and nothing on those."""
         has = self.modes()
-        for m, b in self.mode_btns.items():
-            b.setVisible(bool(has))
-            b.setEnabled(m in has)
         if not has:
             self.curves = None
             self.set_box.hide()
             self.cmp_btn.setEnabled(True)
             self.views.setCurrentWidget(self.splot)
+            for view in (self.reportview, self.tablesview):
+                view.set_report(None)
             return
         i = self.set_box.currentIndex()
         self.curves = self.curve_sets[i] if 0 <= i < len(self.curve_sets) else None
@@ -1245,15 +1235,21 @@ class ResultsTab(QWidget):
         else:
             others = []
             self.curveplot.set_sets(None)
-        self.reportview.set_report(self.analysis_report)
+        for view in (self.reportview, self.tablesview):
+            view.set_report(self.analysis_report)
+        self.views.setCurrentWidget(self.curveplot)
+        self.set_box.setVisible(len(self.curve_sets) > 1)
+        self.cmp_btn.setEnabled(bool(self.curve_sets))
         self.which.hide()
         self.steer.hide()
         self.report = None
         rep = self.analysis_report or {}
         self.set_notes([], [])                                      # the report has its own
         head = rep.get('summary') or (self.curves.info if self.curves is not None else '')
+        if not self.curve_sets and rep:
+            head += '  ·  no curves in this result: its Report page has it'
         self.info.setText(head + (f"  ·  with {', '.join(o.label for o in others if o is not None)}" if others else ''))
-        self.set_mode(self.mode if self.mode in has else has[0])
+        self.mode = self.mode if self.mode in has else has[0]
 
     def _load(self):
         d = QFileDialog.getExistingDirectory(self, 'A results folder (the run\'s output folder)', self.win.out_dir())
@@ -1494,6 +1490,9 @@ class MainWindow(QMainWindow):
         self._traceback = self._stopping = False
         self.setup, self.runtab, self.results = SetupTab(self), RunTab(self), ResultsTab(self)
         self.viewer = Viewer(self)
+        from .startpage import StartPage
+        self.start = StartPage(self)                        # where a window with no board begins
+        self._had_board, self._aside = None, None                   # (the pages that stepped aside for Start)
         self.filter = FilterTab(self)
         self._analyses()
         self._study()
@@ -1523,6 +1522,8 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         widgets = {'Viewer': self.viewer, 'Run': self.runtab, 'Results': self.results, 'Filter': self.filter,
+                   'Report': self.results.reportview, 'Tables': self.results.tablesview, 'Start': self.start,
+                   'Section': self.viewer.section,
                    **{BY_KEY[k].page: p for k, p in self.editors.items()}}
         self.docks = {}
         for name in PANELS:
@@ -1534,6 +1535,10 @@ class MainWindow(QMainWindow):
             key = EDITORS.get(name)
             if key:                                                 # an analysis's page in front: its settings
                 d.visibilityChanged.connect(lambda on, k=key: on and self._study_ready and self.study.select(k))
+        # the line model's cross-section: a page under the board, so the plan it is picked on stays in view;
+        # there while the folder shown has sections, solved while it is in view
+        self.docks['Section'].visibilityChanged.connect(self.viewer.set_section_shown)     # (its tab picked)
+        self.viewer.sections.connect(lambda _has: self._section_follows())
         self.places = self.docks                                    # (a page by its name: where it is)
         self._place_docks()
         self.setCentralWidget(self.work)
@@ -1552,7 +1557,7 @@ class MainWindow(QMainWindow):
         self.update_needed()
         # the layout as built, for Reset layout to put back (Qt's own restoreState: docking a floating dock
         # again by hand, removeDockWidget and addDockWidget, made Qt abort on Windows)
-        self._built_layout = (self.saveState(STATE_VERSION), self.work.saveState(STATE_VERSION))
+        self._built_layout = (self.saveState(STATE_VERSION), self.work.saveState(STATE_VERSION), self._wide())
         self._restore_shape()
         self.update_title()
         self._study_ready = True
@@ -1668,6 +1673,7 @@ class MainWindow(QMainWindow):
         if not getattr(self, '_study_ready', False) or not hasattr(self, 'acts'):
             return
         self.want_layout()                                  # (a board chosen in the settings: once a file)
+        self._start_follows()
         q = self.study.current_question()
         mine = self.study.panels_of(q) if q in self.study.rows else ['rf']
         asked = self.study.jobs(False)
@@ -1676,6 +1682,7 @@ class MainWindow(QMainWindow):
         self.setup.needed.show_items([m for r in mine for m in needs.get(r, [])], q in self.study.asked())
         first = next((m for r in asked for m in needs.get(r, [])), None)
         self._need = first
+        self._needs_all = [m for r in asked for m in needs.get(r, [])]      # (the steps bar's Set up)
         run = self.acts['Run']
         if first is not None:
             text = first['text'][0].upper() + first['text'][1:]
@@ -1687,6 +1694,27 @@ class MainWindow(QMainWindow):
             run.setText(f"Run {len(titles)}" if len(titles) > 1 else 'Run')
             run.setToolTip(('Run ' + ', then '.join(titles) if titles else 'Tick a question in the list first')
                            + ' (Ctrl+R)')
+        self.steps.refresh()
+
+    def go_to_step(self, key):
+        """A step of the bar was clicked: where it is done. Board: the study's Board section; Questions: the list;
+        Set up: what is still needed first, else the settings; Run: the runs' log; Results: the result's pages."""
+        if key in ('board', 'questions'):
+            if self.study_dock.isHidden():
+                self.study_dock.show()
+            if key == 'board':
+                self.setup.focus('board')
+            else:
+                self.study.setFocus()
+        elif key == 'setup':
+            if self.settings_dock.isHidden():
+                self.settings_dock.show()
+            if getattr(self, '_need', None):
+                self.go_to_need(self._need)
+        elif key == 'run':
+            self.show_panel('Run')
+        else:
+            self.show_result()
 
     def go_to_need(self, item):
         """Where a thing a run still needs is set: its question selected, its field in view."""
@@ -1716,7 +1744,10 @@ class MainWindow(QMainWindow):
         if key in self.study.rows:
             key = self.study.run_of(key)
         if key in BY_KEY and not BY_KEY[key].planned:
-            self.show_panel(BY_KEY[key].page or 'Results')
+            if BY_KEY[key].page:
+                self.show_panel(BY_KEY[key].page)
+            else:
+                self.show_result()
 
     def busy(self):
         """A run of the window's or a tool of a page's is going."""
@@ -1783,6 +1814,7 @@ class MainWindow(QMainWindow):
     def _job_state(self, key, text, bad=False, seconds=None):
         self.runtab.job_state(key, text, seconds)
         self.study.set_state(key, text, 'bad' if bad else '')
+        self.steps.refresh()
         if key != 'rf':                                             # kicad2ems's own run says its stages itself
             self.runtab.stage.setText(f"{BY_KEY[key].title}: {text}")
             if text == 'running':
@@ -1820,7 +1852,7 @@ class MainWindow(QMainWindow):
                 self.viewer.set_view('Plan')
                 self.show_panel('Viewer')
             else:                                                   # its report
-                self.show_panel('Results')                          # (an editor's page is its model: not its result)
+                self.show_result()                                  # (an editor's page is its model: not its result)
 
     # ---- the window's shape: remembered between sessions ----
     def _splitters(self):
@@ -1841,21 +1873,35 @@ class MainWindow(QMainWindow):
             if d.isHidden():
                 d.show()
         self.splitDockWidget(self.study_dock, self.settings_dock, Qt.Vertical)
-        for area, group in ((Qt.TopDockWidgetArea, [n for n in self.docks if n not in LOWER]),
-                            (Qt.BottomDockWidgetArea, [n for n in LOWER if n in self.docks])):
-            for name in group:                                      # (only one that was closed is shown: show()
-                d = self.docks[name]                                # on a dock of a window not yet laid out leaves
-                if d.isFloating():                                  # a second tab bar behind, drawn over the page)
-                    d.setFloating(False)
-                self.work.removeDockWidget(d)                       # (Qt 6.12 tabs a dock with another only when
-                if d.isHidden():                                    # it is in no tab group of its own)
-                    d.show()
+        wide = self._wide()                                         # room for the plots beside the board; else they
+        lower = [n for n in (() if wide else BESIDE) + LOWER if n in self.docks]     # are the first tab under it
+        upper = [n for n in self.docks if n not in LOWER + BESIDE]
+        for name in self.docks:                                     # (only one that was closed is shown: show()
+            d = self.docks[name]                                    # on a dock of a window not yet laid out leaves
+            if d.isFloating():                                      # a second tab bar behind, drawn over the page)
+                d.setFloating(False)
+            self.work.removeDockWidget(d)                           # (Qt 6.12 tabs a dock with another only when
+            if d.isHidden():                                        # it is in no tab group of its own)
+                d.show()
+        for area, group in ((Qt.TopDockWidgetArea, upper), (Qt.BottomDockWidgetArea, lower)):
             first = self.docks[group[0]]
             self.work.addDockWidget(area, first)
+            if area == Qt.TopDockWidgetArea and wide:               # the plots: beside the board (before the board
+                for name in BESIDE:                                 # has tabs: Qt splits a lone dock, and tabs
+                    self.work.splitDockWidget(first, self.docks[name], Qt.Horizontal)     # onto a tabbed one)
             for name in group[1:]:
                 self.work.tabifyDockWidget(first, self.docks[name])
         self.docks['Viewer'].raise_()
-        self.docks['Results'].raise_()
+        self.docks[lower[0]].raise_()
+
+    def _wide(self):
+        """Whether the workspace has room for the plots beside the board (1,400 px of it: a 1,920 px screen has, a
+        1,700 px window was pushed wider by the two pages' least widths): the window's width once it is shown,
+        the screen's before."""
+        scr = self.screen().availableGeometry().width() if self.screen() else 0
+        width = self.width() if self.isVisible() else max(scr, 0)
+        left = max(self.setup.minimumWidth() + 40, 420)
+        return width - left >= 1400
 
     def _restore_shape(self):
         """The size, position, docks and splitters of the last session; the first time, the whole screen."""
@@ -1895,6 +1941,77 @@ class MainWindow(QMainWindow):
         if not getattr(self, '_tidied', False):
             self._tidied = True
             QTimer.singleShot(0, self._tidy_tabs)
+            QTimer.singleShot(0, lambda: self._start_follows(opening=True))     # (laid out: the pages step aside)
+
+    def _start_follows(self, opening=False):
+        """The Start page: there, in front, with the workspace to itself (and the Viewer behind it) while no board is
+        chosen and no result is open: the result pages step aside. Out of the way once there is a board (View
+        brings it back), and back when the study is emptied (New)."""
+        has = bool(str(self.setup.values().get('board') or '').strip())
+        if has == self._had_board and not opening:
+            return
+        self._had_board = has
+        if has:
+            self._start_leaves()
+            return
+        self.show_panel('Start')
+        if self.results.out or self.results.analysis:               # a result is shown: its pages stay
+            return
+        if not self.isVisible():                                    # a window not laid out yet has no sizes to
+            return                                                  # keep: once it is shown (showEvent)
+        pages = [n for n in BESIDE + LOWER if n in self.docks and not self.docks[n].isHidden()
+                 and not self.docks[n].isFloating() and n != 'Section']
+        if pages:                                                   # (again after a layout is put back: it shows them)
+            old = self._aside or dict(pages=[], front=[], sizes=None)
+            self._aside = dict(pages=old['pages'] + [n for n in pages if n not in old['pages']],
+                               front=[n for n in pages if self.docks[n].in_front()], sizes=self._work_sizes())
+            for n in pages:
+                self.docks[n].hide()
+
+    def _start_leaves(self, hide=True):
+        """A board was chosen, or a result opened: the Start page goes (hide), and the result pages that stepped
+        aside for it come back where they were."""
+        if hide:
+            self.docks['Start'].hide()
+        aside, self._aside = self._aside, None
+        if not aside:
+            return
+        for n in aside['pages']:
+            self.docks[n].show()
+        for n in aside['front'] or [n for n in aside['pages'] if n not in BESIDE or not self._wide()][:1]:
+            self.docks[n].raise_()
+        if aside['sizes']:
+            self._work_sizes(aside['sizes'])
+        else:                                                       # (a layout just reset: its first sizes)
+            self._first_sizes(work=True)
+
+    def _work_sizes(self, sizes=None):
+        """The workspace's split between the board and the pages under and beside it: as it is, or (sizes) put
+        back."""
+        top, low, plots = self.docks['Viewer'], self.docks[LOWER[0]], self.docks['Results']
+        beside = not plots.isHidden() and not plots.isFloating() and \
+            plots not in self.work.tabifiedDockWidgets(low) and plots not in self.work.tabifiedDockWidgets(top)
+        if sizes is None:
+            under = next((self.docks[n] for n in BESIDE + LOWER if not self.docks[n].isHidden()
+                          and (n not in BESIDE or not beside)), low)
+            return dict(v=(top.height(), under.height(), under.objectName()),
+                        h=(top.width(), plots.width()) if beside else None)
+        v, h = sizes['v'], sizes['h']
+        under = self.docks.get(v[2], low)
+        if v[0] > 0 and v[1] > 0 and not under.isHidden():
+            self.work.resizeDocks([top, under], [v[0], v[1]], Qt.Vertical)
+        if h and beside and h[0] > 0 and h[1] > 0:
+            self.work.resizeDocks([top, plots], [h[0], h[1]], Qt.Horizontal)
+
+    def _section_follows(self):
+        """The Section page: there (behind what is in front) while the folder shown has a line model with
+        cross-sections, gone when it has none."""
+        d = self.docks['Section']
+        if self.viewer.has_sections():
+            if d.isHidden():
+                self.show_panel('Section', front=False)
+        elif not d.isHidden():
+            d.hide()
 
     def _page_visibility(self, opening=False):
         """The pages that come and go: Filter Synthesis closed when the window opens (the toolbar's Filter, or
@@ -1902,6 +2019,8 @@ class MainWindow(QMainWindow):
         if opening:
             for name in ON_DEMAND:
                 self.docks[name].hide()
+            self._start_follows(opening=True)
+            self._section_follows()
         ticked = set(self.study.ticked())
         for name, key in FOLLOWS_TICK.items():
             d = self.docks[name]
@@ -1911,6 +2030,7 @@ class MainWindow(QMainWindow):
                 d.hide()
 
     def _save_shape(self):
+        self._start_leaves(hide=False)                              # (the layout kept: with the result pages in it)
         q = self.qsettings
         q.setValue('window/geometry', self.saveGeometry())
         q.setValue('window/state', self.saveState(STATE_VERSION))
@@ -1928,12 +2048,17 @@ class MainWindow(QMainWindow):
         if floating:                                                # on Windows it aborted in whatever came next
             from PySide6.QtWidgets import QApplication              # (addDockWidget, show, restoreState)
             QApplication.processEvents()
-        if built is None or not (self.restoreState(built[0], STATE_VERSION) and self.work.restoreState(built[1], STATE_VERSION)):
-            self._place_docks()
+        if built is None or built[2] != self._wide() or not (
+                self.restoreState(built[0], STATE_VERSION) and self.work.restoreState(built[1], STATE_VERSION)):
+            self._place_docks()                                     # (or a window of another width than it was built with)
+            self._built_layout = (self.saveState(STATE_VERSION), self.work.saveState(STATE_VERSION), self._wide())
         for d in (self.study_dock, self.settings_dock, *self.docks.values()):
             if d.isHidden():
                 d.show()                                            # a page that was closed: back
+        self._aside = None
         self._page_visibility(opening=True)
+        if self._aside:                                             # (stepped aside for the Start page again: they
+            self._aside.update(sizes=None, front=[])                # come back at their first sizes)
         self._first_sizes()
         QTimer.singleShot(0, self._tidy_tabs)
 
@@ -1948,18 +2073,29 @@ class MainWindow(QMainWindow):
             win.layout().invalidate()
             win.layout().activate()
         h = self.work.height()
-        top, low = self.docks['Viewer'], self.docks['Results']
+        top, low = self.docks['Viewer'], next((self.docks[n] for n in LOWER if not self.docks[n].isHidden()),
+                                              self.docks[LOWER[0]])
         if not top.isHidden() and not low.isHidden() and not top.isFloating() and not low.isFloating():
             self.work.resizeDocks([top, low], [top.height() + 1, max(low.height() - 1, 1)], Qt.Vertical)
 
-    def _first_sizes(self):
+    def _first_sizes(self, work=False):
+        """The docks' sizes in a new window (work: only the workspace's, the board against the pages under and
+        beside it)."""
         w, h = max(self.width(), 900), max(self.height(), 600)
         left = max(self.setup.minimumWidth() + 40, self.setup.inspector.minimumWidth() + 40, 420)
-        self.resizeDocks([self.study_dock, self.settings_dock], [left, left], Qt.Horizontal)
-        self.resizeDocks([self.study_dock, self.settings_dock], [int(0.42 * h), int(0.58 * h)], Qt.Vertical)
-        self.work.resizeDocks([self.docks['Viewer'], self.docks['Results']], [int(0.58 * h), int(0.42 * h)], Qt.Vertical)
-        self.viewer.split.setSizes([880, 380])
-        self.results.splot.split.setSizes([220, 1000])
+        if not work:
+            self.resizeDocks([self.study_dock, self.settings_dock], [left, left], Qt.Horizontal)
+            self.resizeDocks([self.study_dock, self.settings_dock], [int(0.42 * h), int(0.58 * h)], Qt.Vertical)
+        under = next((self.docks[n] for n in (() if self._wide() else BESIDE) + LOWER if not self.docks[n].isHidden()),
+                     self.docks[LOWER[0]])
+        self.work.resizeDocks([self.docks['Viewer'], under], [int(0.60 * h), int(0.40 * h)], Qt.Vertical)
+        plots, ww = self.docks['Results'], max(w - left, 600)
+        if not plots.isHidden() and not plots.isFloating() and plots not in self.work.tabifiedDockWidgets(self.docks[LOWER[0]]) \
+                and plots not in self.work.tabifiedDockWidgets(self.docks['Viewer']):      # beside the board
+            self.work.resizeDocks([self.docks['Viewer'], plots], [int(0.52 * ww), int(0.48 * ww)], Qt.Horizontal)
+        if not work:
+            self.viewer.split.setSizes([880, 380])
+            self.results.splot.split.setSizes([220, 1000])
 
     def _toolbar(self):
         tb = QToolBar('Main')
@@ -2008,6 +2144,11 @@ class MainWindow(QMainWindow):
         acts = tb.actions()
         tb.insertWidget(acts[acts.index(self.acts['Results']) - 1], self.est_btn)     # before Results' separator
         self.addToolBar(Qt.TopToolBarArea, tb)
+        from .steps import StepsBar
+        self.steps = StepsBar(self)                         # the study's steps: under the toolbar (it moves to the
+        self.steps.go.connect(self.go_to_step)              # bottom, and hides: View > Steps)
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        self.addToolBar(Qt.TopToolBarArea, self.steps)
 
     def show_panel(self, name, front=True):
         """Open a page (it may have been closed) and, front: bring it to the front of its tab group. A floated page
@@ -2018,14 +2159,23 @@ class MainWindow(QMainWindow):
         closed = d.isHidden()
         before = [x for x in self.docks.values() if x is not d and x.in_front()]
         d.show()
-        home = self.docks['Results' if name in LOWER else 'Viewer']
-        if closed and not d.isFloating() and d is not home and d not in self.work.tabifiedDockWidgets(home):
+        home = self.docks[LOWER[0] if name in LOWER + BESIDE else 'Viewer']
+        if closed and not d.isFloating() and name not in BESIDE and d is not home \
+                and d not in self.work.tabifiedDockWidgets(home):
             self.work.tabifyDockWidget(home, d)                     # a page that starts closed: tabbed with its own
         if front:
             d.raise_()
         else:                                                       # only there: what was in front stays
             for x in before:
                 x.raise_()
+
+    def show_result(self, front=True):
+        """The pages of the result shown: its plots there, and what an analysis found, its Report (or, with no
+        report, its plots) in front."""
+        r = self.results
+        self.show_panel('Results', front=not (r.analysis and r.analysis_report) and front)
+        if r.analysis and r.analysis_report:
+            self.show_panel(r.mode if r.mode in ('Report', 'Tables') else 'Report', front=front)
 
     def hide_panel(self, name):
         self.docks[name].hide()
@@ -2091,6 +2241,7 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda on, d=d: on and d.isFloating() and d.setFloating(False))    # back, docked
             vm.addAction(a)
             self.fold_acts[name] = a
+        vm.addAction(self.steps.toggleViewAction())
         vm.addSeparator()
         for name in PANELS:
             if name not in self.docks:
@@ -2200,6 +2351,7 @@ class MainWindow(QMainWindow):
         r = [path] + [p for p in self.recent() if p != path]
         self.qsettings.setValue('recent', r[:MAX_RECENT])
         self._fill_recent()
+        self.start.refresh_recent()
 
     def _fill_recent(self):
         self.recent_menu.clear()
@@ -2260,6 +2412,7 @@ class MainWindow(QMainWindow):
             self.system.stop()
             self.meters.stop()
             self.end_pick()
+            self.start.stop_pictures()
             for t in list(_READING):                                # a board still being read: let it end
                 t.wait(15000)
             self.solvers_dialog.close()
@@ -2290,12 +2443,13 @@ class MainWindow(QMainWindow):
         i = self.runs_box.findData(out_dir)
         if i >= 0:
             self.runs_box.setCurrentIndex(i)
-        if front and (files or ant):
-            self.show_panel('Results')
-        elif front and seen:
+        self.steps.refresh()
+        if files or ant or shown or seen:                           # something to show: the pages that stepped aside
+            self._start_leaves(hide=False)                          # for the Start page are back
+        if front and (files or ant or shown):                       # its plots, or what an analysis found
+            self.show_result()
+        if front and seen and not (files or ant):                   # and the board with its maps
             self.show_panel('Viewer')
-        elif front and shown:
-            self.show_panel('Results')
         if not quiet and not (files or seen or ant or shown):
             QMessageBox.information(self, 'Results', f"No results in {out_dir}")
 
@@ -2517,6 +2671,7 @@ class MainWindow(QMainWindow):
             return
         self.drawn, self._layout_bad = layout, layout is None       # the board as drawn; None: not one to read
         self.viewer.show_layout(layout)
+        self.steps.refresh()
         if self._picking:                                           # a pick was waiting for it
             self._begin_pick()
 
@@ -2790,7 +2945,10 @@ class MainWindow(QMainWindow):
         elif self.current.preview:
             self.show_panel('Viewer' if seen else 'Run')
         else:
-            self.show_panel('Results' if (has_s or ant) else ('Viewer' if seen else 'Run'))
+            if has_s or ant:
+                self.show_result()
+            else:
+                self.show_panel('Viewer' if seen else 'Run')
         self._job_done('rf', code)                                  # in a study run: the next analysis
 
 

@@ -144,9 +144,14 @@ In an order where each step leaves a working window:
 4. The fixed layout: the board in the middle, the drawer, the activity bar; docking removed. *Built, then taken back on the user's word (2026-11-12): the settings are a dock on the left under the questions, and every panel is a dock again (it moves, tabs, floats, closes), with the board over the Results and Run pages as a new window's arrangement. The layout sections above describe what was tried, not the window as it is.* *It had been done with these
    differences from the drawing above: the toolbar is the one it was (no header with the five steps); the drawer's
    tabs are the Results page and the Run page whole, not Plots, Report, Tables and Log; the status bar is the
-   activity bar; Filter Synthesis is already a window of its own.*
+   activity bar; Filter Synthesis is already a window of its own.* *With docks (2026-11-13, the user's choice
+   among three mock-ups): Plots, Report, Tables and Log are docks of their own (Plots beside the board where the
+   workspace has 1,400 px, else the first tab under it), Section is one too (under the board, so the plan it
+   is picked on stays in view; the Viewer's buttons are Plan, 2D, 3D, Images), and the five steps are a bar
+   under the toolbar, not in place of it: a toolbar of its own that drags to the bottom and hides.*
 5. "Still needed", and the Run button's wording. *Done: `rf_needs` and an analysis's `missing` (kicad2ems API 2.9).*
-6. The start page and the examples gallery.
+6. The start page and the examples gallery. *Done (2026-11-13): `startpage.py`, a dock tabbed with the Viewer
+   that has the workspace to itself while no board is chosen (the result pages step aside and come back).*
 7. Picking on the board. *Done for nets and parts (an option's `pick`, kicad2ems API 2.11; the plan shows the
    board as drawn before any run). Not yet: a pad, a layer, and the pick in the 3D view.*
 8. The Tools menu; the Circuit page's file buttons go.

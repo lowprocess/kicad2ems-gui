@@ -216,7 +216,7 @@ class AnalysisPanel(QWidget):
             b.clicked.connect(slot)
             row.addWidget(b)
         if self.win is not None and hasattr(self.win, 'start_pick') and any(self.pick_kind(k) for k in self.run_keys):
-            b = QPushButton('pick')                                 # the selected cell, picked on the board
+            b = QPushButton('Pick')                                 # the selected cell, picked on the board
             b.setCheckable(True)
             b.setToolTip("Pick the selected cell on the board (a net, or a part: by its column): click in the "
                          "Viewer's plan; this button again ends it")
@@ -248,7 +248,7 @@ class AnalysisPanel(QWidget):
         lay.setSpacing(4)
         lay.addWidget(QLabel(label))
         b = QToolButton()
-        b.setText('pick')
+        b.setText('Pick')
         b.setCheckable(True)
         many = o['pick'].endswith('s')
         b.setToolTip(f"Pick {'them' if many else 'it'} on the board: click "

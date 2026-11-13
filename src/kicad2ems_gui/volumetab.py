@@ -329,7 +329,7 @@ class VolumeTab(QWidget):
         self.play_btn = QPushButton('Play')
         self.play_btn.setCheckable(True)
         self.play_btn.toggled.connect(self._play)
-        self.fps = QSpinBox()                                       # as the Cut view's
+        self.fps = QSpinBox()                                       # as the 2D view's
         self.fps.setRange(1, 60)
         self.fps.setValue(12)
         self.fps.setToolTip('frames per second of Play and of saved animations')
@@ -526,7 +526,7 @@ class VolumeTab(QWidget):
         self.frame.setCurrentIndex(0 if self.src.domain == 'FD' else max(0, len(self.src) - 1))
         self.frame.blockSignals(False)
         self.envelope.setEnabled(self.src.domain == 'FD')
-        n, fd = len(self.src), self.src.domain == 'FD'             # as the Cut view: a long dump about 120 frames
+        n, fd = len(self.src), self.src.domain == 'FD'             # as the 2D view: a long dump about 120 frames
         self.every.setEnabled(not fd)
         if fd:
             self.every.setValue(1)

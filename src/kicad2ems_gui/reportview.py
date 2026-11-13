@@ -159,7 +159,12 @@ class ReportView(QWidget):
         """The report shown (None: none); the table chosen stays when the new report has one of its title."""
         self.report = report
         self._tables = tables(report)
-        self.page.setHtml(to_html(report, width=max(400, self.page.viewport().width() - 40)))
+        if report is None:                                          # nothing to read yet: say where it comes from
+            self.page.setHtml("<p style='color:gray'>No report yet. An analysis's result (a rail's drop, a circuit, the "
+                              "temperature, crosstalk) is written up here when it has run; the S-parameter run's "
+                              "report opens from the toolbar (Report).</p>")
+        else:
+            self.page.setHtml(to_html(report, width=max(400, self.page.viewport().width() - 40)))
         keep = self.which.currentText()
         self.which.blockSignals(True)
         self.which.clear()

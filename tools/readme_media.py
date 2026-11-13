@@ -5,7 +5,7 @@ field dumps), then takes the window's pages and renders the 3D field views.
 
     python tools/readme_media.py                 # runs, then every picture
     python tools/readme_media.py --skip-runs     # only the pictures, from the last runs
-    python tools/readme_media.py --only hairpin filter
+    python tools/readme_media.py --only hairpin filter         # (cases: hairpin, stub, patch, filter, start)
 
 Writes kicad2ems's docs/img/readme/ (the README) and docs/img/gui/ (docs/gui.md), in its checkout (KICAD2EMS_SRC,
 default ../kicad2ems; the runs go to its build/readme/). Needs PySide6, pyqtgraph and dfsynth; the 3D views also
@@ -56,8 +56,10 @@ def gif_resized(src, dst, width=720, every=1):
 
 
 def gui_media(only):
+    os.environ['XDG_CONFIG_HOME'] = os.path.join(RUNS, 'xdg')       # a window of its own: not your saved layout
+    shutil.rmtree(os.environ['XDG_CONFIG_HOME'], ignore_errors=True)
     from kicad2ems_gui import application
-    from kicad2ems_gui.app import MainWindow
+    from kicad2ems_gui.app import MainWindow, LOWER, BESIDE
     app = application()
 
     def pump(n=20):
@@ -65,13 +67,19 @@ def gui_media(only):
             app.processEvents()
             time.sleep(0.03)
 
+    def sized(w, size):
+        """On the screen at that size (a first window opens over the whole screen: not here)."""
+        w.show()
+        pump(5)
+        w.showNormal()
+        w.resize(*size)
+        pump()
+
     def window(case, size=(1600, 950)):
         """The window with the case's config in the settings and its run in the pages (no preview of its own)."""
         w = MainWindow(os.path.join(REPO, 'examples', CASES[case][0] + '.toml'))
         pump()                                                      # not on the screen yet: no automatic preview
-        w.resize(*size)
-        w.show()
-        pump()
+        sized(w, size)
         w.reset_layout()
         w.open_results(os.path.join(RUNS, case), quiet=True)
         if os.environ.get('QT_QPA_PLATFORM') == 'offscreen':        # no 3D there: the board from above
@@ -79,21 +87,24 @@ def gui_media(only):
         pump(40)
         return w
 
-    def shot(w, path, page=None, view=None):
+    def shot(w, path, page=None, view=None, share=None):
         """The window with `page` in front (and the Viewer's `view`), saved to path (None: only shown). A page
-        under the board gets most of the workspace's height, the board the rest; the board's own pictures the
-        other way round."""
+        under the board gets most of the workspace's height (share of it: 0.7), the board the rest; the board's
+        own pictures the other way round."""
         if page:
             w.show_panel(page)
             from PySide6.QtCore import Qt
             h = w.work.height()
-            lower = page in ('Results', 'Run')
-            w.work.resizeDocks([w.docks['Viewer'], w.docks['Results']],
-                               [int(0.3 * h), int(0.7 * h)] if lower else [int(0.78 * h), int(0.22 * h)], Qt.Vertical)
+            lower = page in LOWER + BESIDE
+            share = share or (0.7 if lower else 0.22)
+            w.work.resizeDocks([w.docks['Viewer'], w.docks[page if lower else LOWER[0]]],
+                               [int((1 - share) * h), int(share * h)], Qt.Vertical)
         if view:
             w.viewer.set_view(view)
         pump(30)
         if path:
+            w.statusBar().clearMessage()                            # ("opened /home/...": not in a picture)
+            pump(2)
             w.grab().save(path)
             print(f"  {os.path.relpath(path, REPO)}")
 
@@ -116,7 +127,12 @@ def gui_media(only):
                     next((e for e in els if e.get('section')), None))
         if pick is not None:
             w.viewer.select(pick['id'])
-            shot(w, os.path.join(GUI, 'section.png'), 'Viewer', 'Section')
+            w.viewer.plan.plot.autoRange()
+            shot(w, None, 'Section', 'Plan', share=0.55)            # the section's page, under the plan it is
+            t = time.time()                                         # picked on: solved once it is in view
+            while w.viewer.section.busy() and time.time() - t < 60:
+                pump(2)
+            shot(w, os.path.join(GUI, 'section.png'))
         close(w)
     if not only or 'patch' in only:
         w = window('patch')
@@ -158,6 +174,14 @@ def gui_media(only):
         for f in glob.glob(os.path.join(RUNS, 'stub', '*mom25d*_J_F_Cu_fd_2.4GHz.gif')):
             gif_resized(f, os.path.join(IMG, 'stub_current.gif'), width=720)
             print("  docs/img/readme/stub_current.gif")
+    if not only or 'start' in only:
+        w = MainWindow()                                            # no board: the Start page, its examples as tiles
+        sized(w, (1600, 950))
+        t, th = time.time(), w.start._thread                        # (the tiles' pictures: drawn in a thread)
+        while th is not None and th.isRunning() and time.time() - t < 300:
+            pump(5)
+        shot(w, os.path.join(GUI, 'start.png'))
+        close(w)
     if not only or 'filter' in only:
         from kicad2ems_gui import filtertab as ft
         from dfsynth.cli import main as dfsynth
@@ -166,8 +190,7 @@ def gui_media(only):
         args = dict(type='bandpass', topology='hairpin', f0='2.4G', bw='240M', substrate='RO4003C-0.813')
         dfsynth([a for k, v in args.items() for a in (f'--{k}', v)] + ['-o', base])
         w = MainWindow()
-        w.resize(1500, 900)
-        w.show()
+        sized(w, (1500, 900))
         w.filter.set_values(dict(args, out=base))
         w.filter.show_result(ft.load_design(base))
         shot(w, os.path.join(GUI, 'filter.png'), 'Filter')
@@ -190,7 +213,7 @@ def copies(only):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument('--skip-runs', action='store_true', help="render from the runs already in build/readme/")
-    ap.add_argument('--only', nargs='*', choices=list(CASES) + ['filter'], help="these cases only")
+    ap.add_argument('--only', nargs='*', choices=list(CASES) + ['filter', 'start'], help="these cases only")
     a = ap.parse_args()
     for d in (IMG, GUI, RUNS):
         os.makedirs(d, exist_ok=True)

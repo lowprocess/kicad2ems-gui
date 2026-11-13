@@ -96,7 +96,7 @@ def test_study_dock(window):
     assert not mqs.find_btn.isHidden()                               # it fills the form: it stays
     assert st.panels['circuit'] is w.pages['circuit'].panel and st.panels['circuit'].isAncestorOf(w.pages['circuit'].params)
     assert pdn.board.placeholderText() == "the study's board"
-    assert list(w.places) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']   # no page per analysis: the
+    assert list(w.places) == ['Viewer', 'Start', 'Results', 'Report', 'Tables', 'Run', 'Section', 'Filter', 'Circuit']   # no page per analysis: the
     tree.rows['dc'].setCheckState(0, Qt.Checked)                                 # circuit's editor alone
     assert tree.asked() == dict(sparams=[], dc=[]) and tree.ticked() == ['rf', 'pdn'] and '2 asked' in st.study_section.head.text()
     assert tree.asked_of('pdn') == ('dc',) and tree.asked_of('rf') == ('sparams',)
@@ -240,7 +240,7 @@ def test_an_analysis_page_in_front_selects_its_settings(window):
     assert w.study.current() == 'circuit'
     w.show_analysis('pdn')                                          # one without a page of its own: its settings,
     app.processEvents()                                             # and where its results are
-    assert w.study.current() == 'pdn' and w.places['Results'].in_front()
+    assert w.study.current() == 'pdn' and not w.places['Results'].isHidden()
     w.show_analysis('circuit')
     app.processEvents()
     assert w.study.current() == 'circuit' and w.places['Circuit'].in_front()
@@ -370,8 +370,8 @@ def test_an_analysis_runs_from_the_window(window, tmp_path):
     assert sorted(l.split(',')[0] for l in labels) == ['Power integrity: 3V3', 'Thermal: losses']
     assert w.runs_box.currentData() == th.out and os.path.basename(th.out).startswith('b_thermal_losses_')
     r = w.results
-    assert r.kind() == 'thermal' and r.mode == 'Report' and w.places['Results'].in_front()
-    assert r.info.text() == 'Thermal: hottest copper 75.0 °C' and th.status.text() == 'done: ' + r.info.text()
+    assert r.kind() == 'thermal' and r.mode == 'Report' and w.places['Report'].in_front()      # what it found: in front
+    assert r.info.text().startswith('Thermal: hottest copper 75.0 °C') and th.status.text() == 'done: Thermal: hottest copper 75.0 °C'
     cuts = w.viewer.cuts                                            # its map: a temperature, shown as one
     assert [s.label for s in cuts.srcs] == ['thermal board: T F.Cu (static)'] and cuts.src.unit == '°C'
     assert not cuts.log.isChecked() and cuts.lim == pytest.approx((40.0, 75.0), abs=0.6)    # its own range: not from 0

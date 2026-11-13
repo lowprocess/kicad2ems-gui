@@ -115,7 +115,7 @@ def test_results_of_lists_every_analysis_and_compares_runs(window, tmp_path):
     assert 'U3' in r.reportview.page.toPlainText() and r.info.text() == 'Near field, U3 on VIN: 3 harmonics'
     w.open_results(str(tmp_path), quiet=True)                       # nothing of an analysis: S-parameters again
     assert r.kind() == 'rf' and r.views.currentWidget() is r.splot and r.modes() == []
-    assert all(b.isHidden() for b in r.mode_btns.values())
+    assert r.reportview.report is None and 'No report yet' in r.reportview.page.toPlainText()     # its pages: empty
 
 
 def test_a_result_as_its_plots_its_report_or_its_tables(window, tmp_path):
@@ -133,14 +133,16 @@ def test_a_result_as_its_plots_its_report_or_its_tables(window, tmp_path):
     w.refresh_runs()
     w._pick_run(th)                                                 # no curves: its report in front
     assert r.kind() == 'thermal' and r.modes() == ['Report', 'Tables'] and r.mode == 'Report'
-    assert r.views.currentWidget() is r.reportview and r.reportview.mode() == 'Report'
-    assert not r.mode_btns['Plots'].isEnabled() and r.mode_btns['Report'].isChecked() and not r.cmp_btn.isEnabled()
-    assert r.info.text() == 'Thermal: hottest copper 73.0 °C' and 'L1' in r.reportview.page.toPlainText()
-    r.mode_btns['Tables'].click()
-    assert r.mode == 'Tables' and r.reportview.mode() == 'Tables' and r.reportview.table()[0] == 'Parts'
-    assert r.reportview.grid.rowCount() == 2 and r.reportview.grid.item(0, 2).text() == '73.0'
-    w._pick_run(pd)                                                 # the view kept, when the next result has it
-    assert r.kind() == 'pdn' and r.mode == 'Tables' and r.reportview.table()[0] == 'Loads at DC'
+    # the report and its tables are pages of their own (docks), which the plots' page fills
+    assert w.docks['Report'].widget() is r.reportview and w.docks['Tables'].widget() is r.tablesview
+    assert r.reportview.mode() == 'Report' and r.tablesview.mode() == 'Tables' and not r.cmp_btn.isEnabled()
+    assert r.info.text() == 'Thermal: hottest copper 73.0 °C  ·  no curves in this result: its Report page has it'
+    assert 'L1' in r.reportview.page.toPlainText()
+    r.set_mode('Tables')
+    assert r.mode == 'Tables' and r.tablesview.table()[0] == 'Parts' and not w.docks['Tables'].isHidden()
+    assert r.tablesview.grid.rowCount() == 2 and r.tablesview.grid.item(0, 2).text() == '73.0'
+    w._pick_run(pd)                                                 # the page kept in mind, when the next result has it
+    assert r.kind() == 'pdn' and r.mode == 'Tables' and r.tablesview.table()[0] == 'Loads at DC'
     assert r.notes_btn.isHidden() and 'a note' in r.reportview.page.toPlainText()        # its notes: in its report
     r.set_mode('Plots')
     assert r.views.currentWidget() is r.curveplot and r.cmp_btn.isEnabled()
@@ -150,7 +152,7 @@ def test_a_result_as_its_plots_its_report_or_its_tables(window, tmp_path):
     r.set_box.setCurrentIndex(3)
     assert r.curveplot.main.title == 'full: currents' and r.curves is r.curve_sets[3]
     r.set_mode('Report')
-    assert r.set_box.isHidden() and 'Stand-in circuit' in r.reportview.page.toPlainText()
+    assert 'Stand-in circuit' in r.reportview.page.toPlainText() and r.tablesview.has_tables()
     w._pick_run(th)                                                 # no plots there: its report
     assert r.mode == 'Report' and r.set_box.isHidden()
 
@@ -170,7 +172,7 @@ def test_pages_that_come_and_go(window):
     w.study.set_ticked(['rf', 'circuit'])                           # the circuit's editor: tabbed beside the board
     app.processEvents()
     assert not w.docks['Circuit'].isHidden() and w.docks['Circuit'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
-    assert w.places['Viewer'].in_front()
+    assert w.places['Start'].in_front()                             # (no board yet: what was in front stays)
     w.study.set_ticked(['rf'])
     assert w.docks['Circuit'].isHidden()
 

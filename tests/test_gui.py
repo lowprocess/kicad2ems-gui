@@ -68,7 +68,7 @@ def test_window_tabs(tmp_path):
     assert v['dump'] == ['E@F.Cu@2,6', 'H@volume'] and v['mode'] == 'antenna'
     w.setup.extra = dict(air=3.0)
     assert w.setup.values()['air'] == 3.0
-    assert list(w.places) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit']   # no page per analysis: an editor's
+    assert list(w.places) == ['Viewer', 'Start', 'Results', 'Report', 'Tables', 'Run', 'Section', 'Filter', 'Circuit']   # no page per analysis: an editor's
     assert w.viewer.view() in ('3D', 'Plan')                         # 3D when OpenGL can be had
     w.viewer.set_view('Plan')
     assert w.viewer.view() == 'Plan' and w.viewer.buttons['Plan'].isChecked()
@@ -81,7 +81,7 @@ def test_window_tabs(tmp_path):
     assert w.solvers_dialog.isVisible() and w.system.isVisibleTo(w.solvers_dialog)
     w.fields.load(str(tmp_path))                                    # an empty folder: no dumps, no error
     assert w.fields.src is None and not w.results.load_antenna(str(tmp_path))
-    assert not w.viewer.load(str(tmp_path)) and not w.viewer.buttons['Cut'].isEnabled()
+    assert not w.viewer.load(str(tmp_path)) and not w.viewer.buttons['2D'].isEnabled()
     w.setup.dirty = False
     w.close()
 
@@ -362,8 +362,8 @@ def test_line_model_drawing(wilkinson_preview):
 
 
 def test_section_view(wilkinson_preview):
-    """The Section view: a section picked in the list solved when the view is shown, its Z0 where it comes from, the
-    field drawn with the copper; a section with no cross-section says so; a new folder clears it."""
+    """The Section page: a section picked in the list solved when the page is in view, its Z0 where it comes from,
+    the field drawn with the copper; a section with no cross-section says so; a new folder clears it."""
     pytest.importorskip('PySide6')
     pytest.importorskip('pyqtgraph')
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -372,12 +372,13 @@ def test_section_view(wilkinson_preview):
     app = application()
     v = Viewer()
     v.load(wilkinson_preview)
-    assert v.buttons['Section'].isEnabled()
+    assert 'Section' not in v.buttons and v.has_sections()          # a page of its own, not a view of the board
+    assert 'No section picked' in v.section.info.text()
     v.set_view('Plan')
     arm = next(e for e in v.lines['elements'] if e['kind'] == 'trace' and e['z0'] and e['z0'] > 60 and e['length'])
     v.select(arm['id'])
-    assert v.section.e is None                                      # not solved until the view is shown
-    v.set_view('Section')
+    assert v.section.e is None                                      # not solved until its page is in view
+    v.set_section_shown(True)
     assert v.section.e is arm and not v.side.isHidden()
 
     def settle():
@@ -410,6 +411,51 @@ def test_section_view(wilkinson_preview):
     assert v.section.e is None and v.section.v is None
 
 
+def test_section_page(wilkinson_preview, tmp_path, monkeypatch):
+    """The window's Section page: gone while nothing shown has sections, there (behind what is in front) once a
+    folder has; the section picked in the Viewer is solved when the page is brought to the front."""
+    pytest.importorskip('PySide6')
+    pytest.importorskip('pyqtgraph')
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    from kicad2ems_gui import application
+    from kicad2ems_gui.app import MainWindow, LOWER
+    app = application()
+    w = MainWindow()
+    w.show()
+    app.processEvents()
+    d = w.docks['Section']
+    assert 'Section' in LOWER and d.widget() is w.viewer.section and d.isHidden()
+    assert list(w.viewer.buttons) == ['Plan', '2D', '3D', 'Images']
+    w.open_results(wilkinson_preview, quiet=True)
+    app.processEvents()
+    assert not d.isHidden() and not d.in_front()                    # there, under the board, not in front
+    assert d in w.work.tabifiedDockWidgets(w.docks[LOWER[0]])
+    arm = next(e for e in w.viewer.lines['elements'] if e['kind'] == 'trace' and e.get('section') and e['length'])
+    w.viewer.select(arm['id'])
+    assert w.viewer.section.e is None                               # not solved behind another page
+    w.show_panel('Section')
+    app.processEvents()
+    assert d.in_front() and w.viewer.section.e is arm
+    for _ in range(3000):
+        app.processEvents()
+        if not w.viewer.section.busy():
+            break
+        time.sleep(0.005)
+    assert w.viewer.section.v is not None and 'Z0' in w.viewer.section.info.text()
+    w.show_panel('Run')
+    app.processEvents()
+    other = next(e for e in w.viewer.lines['elements'] if e.get('section') and e is not arm)
+    w.viewer.select(other['id'])
+    assert w.viewer.section.e is arm                                # behind the log: the next one waits
+    w.open_results(str(tmp_path), quiet=True)                       # a folder with no line model: the page goes
+    app.processEvents()
+    assert d.isHidden()
+    w.setup.dirty = False
+    w.close()
+
+
+
 def test_viewer_sections_and_views(wilkinson_preview):
     """The viewer on a preview: the plan and the section list, one selection in every view; the views a folder
     has nothing for disabled."""
@@ -421,7 +467,7 @@ def test_viewer_sections_and_views(wilkinson_preview):
     app = application()
     v = Viewer()
     assert v.load(wilkinson_preview)
-    assert v.buttons['Plan'].isEnabled() and v.buttons['Images'].isEnabled() and not v.buttons['Cut'].isEnabled()
+    assert v.buttons['Plan'].isEnabled() and v.buttons['Images'].isEnabled() and not v.buttons['2D'].isEnabled()
     assert v.plan.current_layer() == 'F.Cu' and v.plan.layer.count() == 2      # top first
     n = len([e for e in v.lines['elements'] if e['kind'] != 'coupling'])
     rows = sum(v.tree.topLevelItem(k).childCount() for k in range(v.tree.topLevelItemCount()))
@@ -919,10 +965,23 @@ def test_the_window_is_docks(monkeypatch, tmp_path):
     assert w.dockWidgetArea(w.study_dock) == w.dockWidgetArea(w.settings_dock) == Qt.LeftDockWidgetArea
     assert w.study_dock.geometry().bottom() < w.settings_dock.geometry().top()      # the settings: under the list
     assert w.setup.isAncestorOf(w.study) and w.setup.inspector.isAncestorOf(w.setup.rf_box)
-    assert list(w.docks) == ['Viewer', 'Run', 'Results', 'Filter', 'Circuit'] and w.places is w.docks
-    assert w.docks['Viewer'].geometry().bottom() < w.docks['Results'].geometry().top()
-    assert w.docks['Run'] in w.work.tabifiedDockWidgets(w.docks['Results'])
-    assert w.places['Viewer'].in_front() and w.places['Results'].in_front() and not w.places['Run'].in_front()
+    assert list(w.docks) == ['Viewer', 'Start', 'Results', 'Report', 'Tables', 'Run', 'Section', 'Filter', 'Circuit'] and w.places is w.docks
+    # a result's pages: its plots, its report, its tables, and the runs' log (the tabs read Plots and Log). On a
+    # screen this narrow the plots are the first tab under the board; with 1,400 px of workspace, beside it
+    assert [w.docks[n].windowTitle() for n in ('Results', 'Report', 'Tables', 'Run')] == ['Plots', 'Report', 'Tables', 'Log']
+    # no board yet: the Start page in front of the Viewer, with the workspace to itself (the result pages step
+    # aside for it, and come back with a board, or a result)
+    pages = ('Results', 'Report', 'Tables', 'Run')
+    assert w.places['Start'].in_front() and not w.places['Viewer'].in_front()
+    assert all(w.docks[n].isHidden() for n in pages) and w._aside['pages'] == list(pages)
+    assert w.docks['Start'].height() > 0.8 * w.work.height()
+    w._start_leaves()                                               # (what a board chosen does)
+    app.processEvents()
+    assert not any(w.docks[n].isHidden() for n in pages) and w.docks['Start'].isHidden() and w._aside is None
+    assert not w._wide() and w.docks['Viewer'].geometry().bottom() < w.docks['Results'].geometry().top()
+    assert all(w.docks[n] in w.work.tabifiedDockWidgets(w.docks['Results']) for n in ('Report', 'Tables', 'Run'))
+    assert 0.3 < w.docks['Results'].height() / w.docks['Viewer'].height() < 1.2      # at their first sizes
+    assert w.places['Results'].in_front() and not w.places['Run'].in_front()        # the plots in front, under it
     w.show_panel('Run')
     app.processEvents()
     assert w.places['Run'].in_front() and not w.places['Results'].in_front()
@@ -949,6 +1008,9 @@ def test_the_window_is_docks(monkeypatch, tmp_path):
     w.show()
     app.processEvents()
     assert w.dockWidgetArea(w.settings_dock) == Qt.RightDockWidgetArea
+    assert w.docks['Results'].isHidden() and w.places['Start'].in_front()       # no board: aside again
+    w._start_leaves()
+    app.processEvents()
     assert w.docks['Results'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
     assert not w.study_dock.isHidden() and w.places['Filter'].isHidden()    # the study: always there on opening
     w.settings_dock.setFloating(True)
@@ -956,6 +1018,9 @@ def test_the_window_is_docks(monkeypatch, tmp_path):
     w.reset_layout()
     app.processEvents()
     assert not w.settings_dock.isFloating() and w.dockWidgetArea(w.settings_dock) == Qt.LeftDockWidgetArea
+    assert w.places['Start'].in_front() and w.docks['Run'].isHidden()           # (no board: the Start page again)
+    w._start_leaves()
+    app.processEvents()
     assert not w.docks['Run'].isHidden() and w.docks['Results'] not in w.work.tabifiedDockWidgets(w.docks['Viewer'])
     assert w.docks['Viewer'].geometry().bottom() < w.docks['Results'].geometry().top()
     w.setup.dirty = False

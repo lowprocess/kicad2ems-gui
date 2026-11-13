@@ -85,7 +85,7 @@ class SectionView(QWidget):
                                     width=14)
         self.cbar.setImageItem(self.img, insert_in=self.plot.getPlotItem())
         lay.addWidget(self.plot, 1)
-        self.info = QLabel('Pick a section in the list, or on the plan')
+        self.info = QLabel(self._none())
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.info)
@@ -96,6 +96,10 @@ class SectionView(QWidget):
         self.plot.getViewBox().sigRangeChangedManually.connect(lambda *_: self._later.start())
 
     # ---- the section ----
+    def _none(self):
+        return ("No section picked: pick one of the line model's in the Viewer (its list beside the Plan and 3D "
+                "views, or a click on it in the plan)") if self.model_line else 'No section'
+
     def show_section(self, e):
         """Section e (a drawing element, or None): its views in the list, the first of them solved."""
         self.e, self.v = e, None
@@ -107,7 +111,7 @@ class SectionView(QWidget):
         self.mode.blockSignals(False)
         self._clear()
         if not ms:
-            self.info.setText('Pick a section in the list, or on the plan' if e is None else
+            self.info.setText(self._none() if e is None else
                               f"{e.get('label') or e.get('kind')}: no cross-section to solve (a via, a part, or no "
                               "reference plane)")
             return
