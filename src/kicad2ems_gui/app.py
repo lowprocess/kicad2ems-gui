@@ -1550,6 +1550,9 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():
             getattr(page, 'panel', page).changed.connect(self.needs_soon)
         self.update_needed()
+        # the layout as built, for Reset layout to put back (Qt's own restoreState: docking a floating dock
+        # again by hand, removeDockWidget and addDockWidget, made Qt abort on Windows)
+        self._built_layout = (self.saveState(STATE_VERSION), self.work.saveState(STATE_VERSION))
         self._restore_shape()
         self.update_title()
         self._study_ready = True
@@ -1916,8 +1919,14 @@ class MainWindow(QMainWindow):
             q.setValue(f"splitter/{name}", sp.saveState())
 
     def reset_layout(self):
-        """The docks where a new window has them, at their first sizes."""
-        self._place_docks()
+        """The docks where a new window has them, at their first sizes: the layout the window was built with, put
+        back as a saved one is."""
+        built = getattr(self, '_built_layout', None)
+        if built is None or not (self.restoreState(built[0], STATE_VERSION) and self.work.restoreState(built[1], STATE_VERSION)):
+            self._place_docks()
+        for d in (self.study_dock, self.settings_dock, *self.docks.values()):
+            if d.isHidden():
+                d.show()                                            # a page that was closed: back
         self._page_visibility(opening=True)
         self._first_sizes()
         QTimer.singleShot(0, self._tidy_tabs)
