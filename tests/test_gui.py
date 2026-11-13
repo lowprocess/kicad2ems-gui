@@ -1013,7 +1013,10 @@ def test_the_window_is_docks(monkeypatch, tmp_path):
     app.processEvents()
     assert w.docks['Results'] in w.work.tabifiedDockWidgets(w.docks['Viewer'])
     assert not w.study_dock.isHidden() and w.places['Filter'].isHidden()    # the study: always there on opening
-    w.settings_dock.setFloating(True)
+    # (Qt's offscreen plugin on Windows aborts when a floated dock is docked again, whichever call does it; the
+    # native one does not: kicad2ems's windows workflow runs this test on it as well, and there it floats)
+    if not (sys.platform == 'win32' and app.platformName() == 'offscreen'):
+        w.settings_dock.setFloating(True)
     w.docks['Run'].hide()
     w.reset_layout()
     app.processEvents()
