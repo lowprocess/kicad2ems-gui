@@ -39,10 +39,6 @@ def pytest_unconfigure(config):
     if 'PySide6.QtWidgets' in sys.modules and not os.environ.get('K2E_GUI_TEST_TEARDOWN'):
         sys.stdout.flush()
         sys.stderr.flush()
-        if sys.platform == 'win32':
-            # os._exit is ExitProcess there, which still runs every DLL's detach (Qt's static destructors: an
-            # access violation in it on CI); TerminateProcess runs none
-            import ctypes
-            k32 = ctypes.windll.kernel32
-            k32.TerminateProcess(k32.GetCurrentProcess(), _status[0])
+        # (on Windows the process still ends in an access violation, os._exit or TerminateProcess: Qt's DLLs torn
+        # down; kicad2ems's windows workflow reads pytest's junit report there instead of the exit code)
         os._exit(_status[0])
