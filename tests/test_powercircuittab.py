@@ -59,7 +59,7 @@ def test_the_bridge_s_operating_points_are_the_model_s(tab):
 def test_a_general_model_s_parameters_and_sweep(tab):
     """A general model (the page opens on pcbqs.circuit's boost converter): its tool's options, and in Model its
     parameters and its sweep, which are the model's."""
-    assert tab.general and tab.shown()==['copper','fields','set','jobs','parameters','sweep']
+    assert tab.general and tab.shown()==['copper','fields','set','engine','jobs','parameters','sweep']
     assert not tab.panel.sections['Model'].isHidden() and tab.panel.sections['Operating points'].isHidden()
     assert tab.panel.forms['Board'].isRowVisible(tab.copper) and not tab.panel.forms['Board'].isRowVisible(tab.panel.w['field_harmonics'])
     c=tab.values()
