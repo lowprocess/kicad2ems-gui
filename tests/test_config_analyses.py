@@ -6,6 +6,7 @@ import pytest
 
 from kicad2ems_gui import runner
 from kicad2ems.api.frontend import read_analyses, build_settings
+from waiting import wait_until
 
 
 def test_the_tables_are_written_and_replaced(tmp_path):
@@ -154,10 +155,7 @@ def test_several_rails_are_a_table_and_a_run_each(tmp_path, monkeypatch):
         t.item(1, 0).setText('+3V3')
         pdn.add_run(dict(rail='+1V8', volts=1.8, load=['U4=0.2']))
         w.run_study(only='dc')
-        t0 = time.time()
-        while w.busy() and time.time() - t0 < 120:
-            app.processEvents()
-            time.sleep(0.02)
+        wait_until(lambda: not (w.busy()), 120)
         for _ in range(10):
             app.processEvents()
         assert w.study.state('pdn').startswith('done'), pdn.log.toPlainText()[-800:]

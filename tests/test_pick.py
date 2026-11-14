@@ -6,6 +6,7 @@ import time
 import pytest
 
 from k2e_fixtures import ROOT
+from waiting import wait_until
 
 BUS = os.path.join(ROOT, 'examples', 'rf_bus.kicad_pcb')           # three traces D0, D1, D2 over a plane
 
@@ -44,10 +45,7 @@ def window(tmp_path, monkeypatch):
     w.setup.set_values(dict(board=BUS, out=str(tmp_path / 'out')))
     w.show()
     w.update_needed()
-    t0 = time.time()
-    while w.drawn is None and time.time() - t0 < 30:                # the layout: read in a thread
-        app.processEvents()
-        time.sleep(0.01)
+    wait_until(lambda: not (w.drawn is None), 30)                # the layout: read in a thread
     app.processEvents()
     yield w, app
     w.end_pick()

@@ -8,6 +8,7 @@ import pytest
 
 import fake_analyses as FA
 from kicad2ems_gui import analysispanel as AP
+from waiting import wait_until
 
 
 @pytest.fixture
@@ -19,10 +20,7 @@ def app():
 
 
 def wait(app, panel, seconds=60):
-    t0 = time.time()
-    while panel.proc is not None and time.time() - t0 < seconds:
-        app.processEvents()
-        time.sleep(0.02)
+    wait_until(lambda: not (panel.proc is not None), seconds)
     for _ in range(5):
         app.processEvents()
     assert panel.proc is None, panel.log.toPlainText()
@@ -147,10 +145,7 @@ def test_stop_lets_the_tool_stop_what_it_started(app, tmp_path):
     p.outdir.setText(str(tmp_path / 'out'))
     p.set_values(dict(rail='SLOW'))
     p.start()
-    t0 = time.time()
-    while 'pdn: solving' not in p.log.toPlainText() and time.time() - t0 < 30:
-        app.processEvents()
-        time.sleep(0.02)
+    wait_until(lambda: not ('pdn: solving' not in p.log.toPlainText()), 30)
     p._queue = [dict(rail='+3V3')]                                  # as a table's next row
     p.stop()
     wait(app, p)

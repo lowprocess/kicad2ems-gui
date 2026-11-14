@@ -4,17 +4,15 @@ import os
 import time
 
 import pytest
+from waiting import wait_until
 
 pytest.importorskip('PySide6')
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 
 def settle(app, dlg, seconds=30):
-    end = time.time() + seconds
     app.processEvents()
-    while dlg.busy() and time.time() < end:
-        app.processEvents()
-        time.sleep(0.01)
+    wait_until(lambda: not dlg.busy(), seconds)
     app.processEvents()
     assert not dlg.busy()
 

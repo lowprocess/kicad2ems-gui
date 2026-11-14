@@ -3,6 +3,7 @@ import json, math, os, sys, time, pytest
 import numpy as np
 from kicad2ems_gui.runner import write_toml, settings_values, FIELDS
 from kicad2ems.config import build_settings
+from waiting import wait_until
 
 
 def test_settings_round_trip(tmp_path):
@@ -382,11 +383,7 @@ def test_section_view(wilkinson_preview):
     assert v.section.e is arm and not v.side.isHidden()
 
     def settle():
-        for _ in range(3000):
-            app.processEvents()
-            if not v.section.busy():
-                break
-            time.sleep(0.005)
+        wait_until(lambda: not v.section.busy(), 15)
         app.processEvents()
     settle()
     text = v.section.info.text()
@@ -437,11 +434,7 @@ def test_section_page(wilkinson_preview, tmp_path, monkeypatch):
     w.show_panel('Section')
     app.processEvents()
     assert d.in_front() and w.viewer.section.e is arm
-    for _ in range(3000):
-        app.processEvents()
-        if not w.viewer.section.busy():
-            break
-        time.sleep(0.005)
+    wait_until(lambda: not w.viewer.section.busy(), 15)
     assert w.viewer.section.v is not None and 'Z0' in w.viewer.section.info.text()
     w.show_panel('Run')
     app.processEvents()

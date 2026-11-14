@@ -4,6 +4,7 @@ import os
 import pytest
 
 from kicad2ems_gui import study
+from waiting import wait_until
 
 
 def test_order_and_needs():
@@ -322,10 +323,7 @@ def test_run_starts_the_ticked_analyses_in_turn(window, monkeypatch):
 
 def run_to_the_end(w, app, seconds=120):
     import time
-    t0 = time.time()
-    while w.busy() and time.time() - t0 < seconds:
-        app.processEvents()
-        time.sleep(0.02)
+    wait_until(lambda: not (w.busy()), seconds)
     for _ in range(10):
         app.processEvents()
     assert not w.busy()
@@ -632,6 +630,32 @@ def test_the_window_s_own_run_starts_and_ends(window, tmp_path, monkeypatch):
     w.preview()
     assert not w.busy() and 'ZeroDivisionError' in w.study.state('rf')
     assert 'ZeroDivisionError' in w.runtab.log.toPlainText()        # its traceback in the log
+
+
+def test_stop_asks_the_run_then_ends_its_process(window, tmp_path, monkeypatch):
+    """Stop, pressed once, asks kicad2ems's own run to stop (stop_runs: it ends after its current step) and says so;
+    pressed again it ends the process at once, and the window is idle after (R-C8: the two-press Stop was untested)."""
+    import sys
+    from kicad2ems import runs
+    w, app, _ = window
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    script = tmp_path / 'slow_run.py'                               # a run that never ends of itself
+    script.write_text("import json, sys, time\nev = sys.argv[sys.argv.index('--events') + 1]\n"
+                      "open(ev, 'a').write(json.dumps(dict(kind='log', text='slow run here')) + '\\n')\n"
+                      "time.sleep(600)\n")
+    monkeypatch.setattr(runs.Run, 'argv', lambda self: [sys.executable, str(script), self.toml, '--events', self.events])
+    asked = []
+    import kicad2ems_gui.app as gui_app
+    monkeypatch.setattr(gui_app, 'stop_runs', lambda out: asked.append(out))
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.study.set_ticked(['rf'])
+    w.preview()
+    assert w.busy() and wait_until(lambda: 'slow run here' in w.runtab.log.toPlainText(), 20)
+    w.stop()
+    assert asked == [w.current.out] and w.busy() and 'press Stop again' in w.runtab.log.toPlainText()
+    w.stop()
+    assert wait_until(lambda: not w.busy(), 20) and 'ending the process' in w.runtab.log.toPlainText()
 
 
 def test_a_half_typed_number_is_said_not_frozen(window):

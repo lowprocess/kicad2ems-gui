@@ -5,6 +5,7 @@ import os
 import time
 
 import pytest
+from waiting import wait_until
 
 A = pytest.importorskip('pcbqs.analyses', reason='pcbqs is not installed')
 
@@ -66,10 +67,7 @@ def test_a_circuit_example_runs_to_its_temperatures(window, tmp_path):
     assert w.places['Circuit'].in_front() and not w.busy()          # its editor in front; no preview of
     w.study.set_ticked(['circuit', 'thermal'])                                   # a board without ports
     w.run()
-    t0 = time.time()
-    while w.busy() and time.time() - t0 < 180:
-        app.processEvents()
-        time.sleep(0.02)
+    wait_until(lambda: not (w.busy()), 180)
     for _ in range(10):
         app.processEvents()
     if not w.study.state('circuit').startswith('done'):
@@ -115,10 +113,7 @@ def _regulator(folder):
 
 
 def _wait(w, app, seconds=240):
-    t0 = time.time()
-    while w.busy() and time.time() - t0 < seconds:
-        app.processEvents()
-        time.sleep(0.02)
+    wait_until(lambda: not (w.busy()), seconds)
     for _ in range(10):
         app.processEvents()
 
