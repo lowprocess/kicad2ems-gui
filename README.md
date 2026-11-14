@@ -100,8 +100,8 @@ analysis's.
 
     kicad2ems-gui [config.toml]                         # or: python -m kicad2ems_gui
 
-It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 261112.post13 or later (its API 2.11). The
-analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
+It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 0.3.0 or later (its API 2.11). The
+analyses need pcbqs 0.3.0 or later (`kicad2ems[qs]`).
 
 ## Inside
 

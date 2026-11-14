@@ -14,9 +14,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
-authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
+authors = [{ name = "Claude" }, { name = "lowprocess" }]
 dependencies = [
-    "kicad2ems>=261112.post13",    # the board model, settings, solvers, the study, runs, examples (kicad2ems.api.frontend 2.11)
+    "kicad2ems>=0.3.0",            # the board model, settings, solvers, the study, runs, examples (kicad2ems.api.frontend 2.11)
     "PySide6-Essentials>=6.5",
     "pyqtgraph>=0.13",
     "h5py>=3",                     # frequency-domain field dumps, far fields
