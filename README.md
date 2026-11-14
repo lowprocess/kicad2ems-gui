@@ -10,7 +10,7 @@ analyses are installed beside S-parameters (pcbqs's power integrity, near field,
 The settings form is made from kicad2ems's option tables and its solver registry, so an installed solver package
 (openEMS, mom25d, gfdtd or any other plugin) gets its tick box and its settings with no change here. The analyses
 come the same way, from kicad2ems's analysis registry (`kicad2ems.api.frontend.analyses`): the window knows none
-of them by name. Each run is a process of its own (`kicad2ems.runs`, or the analysis's command), so the window
+of them by name, but for the Circuit page's model editor, which imports pcbqs's model and schematic code. Each run is a process of its own (`kicad2ems.runs`, or the analysis's command), so the window
 needs nothing of a solver's and a solver's crash never takes the window with it. Closing the window stops a run that
 is going (it asks first); what the run had written stays in its folder. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/docs/gui.md) covers using it.
 
@@ -73,9 +73,9 @@ their boards drawn), which has the workspace until a board is chosen. The **step
 hides (View > Steps).
 
 **Results of** (the toolbar) lists every result of the board, each run in a folder of its own under the output
-folder: the preview, the S-parameter runs, and each analysis's runs. Choosing one fills the pages. Results >
-**Compare with** lays other runs of the same kind over the plots, and View > **A second Viewer** opens another
-run's maps in a window of its own.
+folder: the preview, the S-parameter runs, and each analysis's runs. Choosing one fills the pages. **Compare
+with** (on the Plots page) lays other runs of the same kind, or another folder, over the plots, and View > **A
+second Viewer** opens another run's maps in a window of its own.
 
 A config holds the study: beside kicad2ems's settings, the analyses it runs and their settings under
 `[analysis]` (`run = ["circuit", "thermal"]`, `[analysis.circuit] model = "buck.json"`), read when it is opened
@@ -100,7 +100,7 @@ analysis's.
 
     kicad2ems-gui [config.toml]                         # or: python -m kicad2ems_gui
 
-It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 261112.post9 or later (its API 2.9). The
+It needs PySide6, pyqtgraph and PyOpenGL (installed with it), and kicad2ems 261112.post13 or later (its API 2.11). The
 analyses need pcbqs 261112 or later (`kicad2ems[qs]`).
 
 ## Inside
@@ -144,12 +144,10 @@ the host of any plugin; `tests/test_real_analyses.py` runs pcbqs's own through i
 
 GPL-3.0-or-later, as kicad2ems.
 
-Near field includes **Preview mesh** (no fill/solve), a layer-selectable copper
-and component view, and interactive field overlays with opacity controls. The
-Viewer supports the same meshes and approximate component bodies in 3D. Cyan
-marks simulated copper, grey the layout context and gold selected components.
-The **Use board and rail in Power Integrity** action transfers the board/net
-context while leaving DC source, voltage and loads for review.
+The near field's preview (the toolbar's **Preview**) meshes without filling or solving; the Viewer shows its copper
+and components by layer, and its field overlays with opacity controls, in 3D too. Cyan marks simulated copper, grey
+the layout context and gold selected components. Its result offers **Copy the input rail to Power integrity**: the
+board and the net, the DC source, voltage and loads left for review.
 
 The **Circuit** analysis runs circuits through `python -m pcbqs.circuit`: any
 circuit of parts, nodes and drives, by ngspice, with the board's copper between the parts' pads when asked and the
@@ -160,7 +158,7 @@ validation. ngspice must be installed separately for its engine.
 
 **Parallel circuit cases** runs independent operating points concurrently
 (default four, capped by available CPUs). Extraction/field transfers are prepared
-once and shared; stopping a sweep also stops its active ngspice children. Each
+once and shared; Stop asks the tool to end (SIGTERM), which stops its ngspice children with it. Each
 case records runtime and per-trial solver statistics for profiling.
 
 The Circuit page now includes a **Schematic** editor beside **Model JSON**.
