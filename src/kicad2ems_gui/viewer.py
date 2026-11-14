@@ -182,6 +182,22 @@ class Viewer(QWidget):
         self.sections.emit(self.has_sections())
         return any(has.values())
 
+    def clear(self):
+        """No run's results: the board as drawn (if any) in the plan, the other views off (another board chosen:
+        the last one's run had stayed in the pages)."""
+        self.out, self.lines = None, None
+        self.images.show_images([])
+        self.detail.setText(' ')
+        self._picked = None
+        self.section.show_section(None)
+        plan = self.plan.set_board(self.drawn, None, {})
+        self._has = {'3D': False, 'Plan': plan, '2D': False, 'Images': False}
+        for n, b in self.buttons.items():
+            b.setEnabled(self._has[n])
+        if plan:
+            self.set_view('Plan')
+        self.sections.emit(False)
+
     def has_sections(self):
         """Whether the folder shown has a line model with cross-sections to solve (the Section page's)."""
         return any(e.get('section') for e in (self.lines or {}).get('elements', []))

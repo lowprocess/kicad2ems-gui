@@ -590,7 +590,8 @@ class SetupTab(QWidget):
     def values(self):
         """The settings of the form (the solver tick boxes as `solvers`, see runner.solvers_from_form)."""
         out = dict(self.extra)                                       # config settings without a field here
-        for key, (w, kind) in self.edits.items():
+        self.bad = {}                                                # fields that are not what they say: left out,
+        for key, (w, kind) in self.edits.items():                    # marked, and listed as still needed
             if kind == 'bool':
                 out[key] = w.isChecked()
                 continue
@@ -599,12 +600,20 @@ class SetupTab(QWidget):
                 out[key] = '' if t == '(none)' else t
                 continue
             t = w.text().strip()
+            if hasattr(w, 'setStyleSheet') and key in getattr(self, '_marked', set()):
+                w.setStyleSheet('')
+                self._marked.discard(key)
             if not t:
                 continue
-            if kind == 'float':
-                out[key] = float(t)
-            elif kind == 'int':
-                out[key] = int(float(t))
+            if kind in ('float', 'int'):
+                try:
+                    x = float(t)
+                except ValueError:                                   # (a half-typed number had raised from a timer:
+                    self.bad[key] = t                                # the list and Run froze, saying nothing)
+                    w.setStyleSheet('border: 1px solid #c0392b')
+                    self.__dict__.setdefault('_marked', set()).add(key)
+                    continue
+                out[key] = x if kind == 'float' else int(x)
             elif kind == 'list':
                 out[key] = [x.strip() for x in t.replace(';', ',').split(',') if x.strip()] \
                     if key not in SEMICOLON_LISTS else [x.strip() for x in t.split(';') if x.strip()]
@@ -1650,10 +1659,13 @@ class MainWindow(QMainWindow):
         for run in runs:
             if run == 'rf':
                 from kicad2ems.api.frontend import rf_needs
+                vals = self.setup.values()
+                got = [dict(text=f"{k.replace('_', ' ')}: not a number ({v!r})", key=k)
+                       for k, v in getattr(self.setup, 'bad', {}).items()]
                 try:
-                    got = rf_needs(self.setup.values())
-                except Exception:                                   # noqa: BLE001 (a field half typed)
-                    got = []
+                    got += rf_needs(vals)
+                except Exception:                                   # noqa: BLE001 (what rf_needs cannot read)
+                    pass
                 if not any(w.isChecked() for w in self.setup.solver_boxes.values()):
                     got.append(dict(text='no solver chosen: pick one on the S-parameters row', key=None))
             elif run in self.pages:
@@ -2672,8 +2684,18 @@ class MainWindow(QMainWindow):
     # ---- the board as drawn, before anything is run; a setting picked on it ----
     def want_layout(self):
         """The chosen board's layout (kicad2ems.layout) into the Viewer's plan wherever no run's board is shown
-        there: read in a thread (a second or a few), once a board file. True: there, or being read."""
+        there: read in a thread (a second or a few), once a board file. True: there, or being read. Another board
+        (New, or one chosen in the settings): Results of lists its runs, and a run of the last board leaves the
+        pages (they had kept it under the new study)."""
         board = self.setup.values().get('board')
+        now = os.path.abspath(board) if board else None
+        if now != getattr(self, '_runs_board', now):
+            shown = getattr(self.viewer, 'out', None)
+            self.refresh_runs()
+            if shown and shown not in [s['folder'] for s in self.sources()]:
+                self.viewer.clear()
+                self.results.show([])
+        self._runs_board = now
         if not board or not str(board).lower().endswith('.kicad_pcb') or not os.path.isfile(board):
             if self._layout_stamp is not None:                      # the board taken away: its drawing too
                 self._layout_stamp, self.drawn = None, None
@@ -2843,6 +2865,9 @@ class MainWindow(QMainWindow):
         if self.proc is not None:
             return no('Busy', 'A run is going: stop it first')
         vals = self.setup.values()
+        if getattr(self.setup, 'bad', None):
+            k, v = next(iter(self.setup.bad.items()))
+            return no('Setup', f"{k.replace('_', ' ')}: {v!r} is not a number")
         if not vals.get('board'):
             return no('Setup', 'Choose a board first')
         if not preview and vals.get('solvers') == []:

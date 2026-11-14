@@ -129,3 +129,19 @@ def test_a_proposal_with_no_model_sets_the_one_on_the_page(tab,tmp_path):
     tab.load_settings(dict(model=str(mine)))
     tab.load_settings(dict(set='C1.value=2.2e-05'),keep_model=True)
     assert tab.values()['name']=='Mine' and tab.model_path==str(mine) and tab.panel.values()['set']=='C1.value=2.2e-05'
+
+
+def test_a_json_edit_is_a_change_and_an_undo_step(tab):
+    """A keystroke in Model JSON marks the study changed (it had not: no save prompt), and once the schematic follows
+    it the model before is an undo step (the schematic's history had been wiped by each JSON edit)."""
+    edits = []
+    tab.panel.changed.connect(lambda: edits.append(1))
+    c = json.loads(tab.editor.toPlainText())
+    c.setdefault('parameters', {})['extra_param'] = 1.0
+    tab.editor.setPlainText(json.dumps(c, indent=2))
+    assert edits
+    before = len(tab.schematic.undo_stack)
+    tab.refresh_schematic()
+    assert len(tab.schematic.undo_stack) == before + 1 and tab.schematic.config['parameters']['extra_param'] == 1.0
+    tab.schematic.undo()
+    assert 'extra_param' not in tab.schematic.config.get('parameters', {})

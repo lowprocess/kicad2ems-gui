@@ -726,10 +726,15 @@ class SchematicEditor(QWidget):
         from pcbqs.circuit.deck import build
         for point in M.cases(config)[:1]:build(M.resolve(config,point))
 
-    def set_model(self,config,reset_history=True):
+    def set_model(self,config,reset_history=True,undoable=False):
+        """Show `config`: a model loaded (reset_history: the undo steps of another model go), or the same model
+        edited elsewhere (undoable: the model before it becomes an undo step, as an edit here is)."""
         self.check(config);records(config)
+        before=copy.deepcopy(getattr(self,'config',None))
         self.config=copy.deepcopy(config)
         if reset_history:self.undo_stack.clear();self.redo_stack.clear()
+        elif undoable and before is not None and before!=self.config:
+            self.undo_stack.append(before);self.undo_stack=self.undo_stack[-50:];self.redo_stack.clear()
         self.rebuild()
 
     def rebuild(self):

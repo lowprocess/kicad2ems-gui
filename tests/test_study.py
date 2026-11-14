@@ -610,3 +610,36 @@ def test_the_window_s_own_run_starts_and_ends(window, tmp_path, monkeypatch):
     w.preview()
     assert not w.busy() and 'ZeroDivisionError' in w.study.state('rf')
     assert 'ZeroDivisionError' in w.runtab.log.toPlainText()        # its traceback in the log
+
+
+def test_a_half_typed_number_is_said_not_frozen(window):
+    """A field that is not a number (fmin = "1e"): left out of the values, marked, listed as still needed, and Run
+    says so (values() had raised from a timer: the list and the Run button froze, saying nothing)."""
+    w, app, _ = window
+    w.setup.edits['fmin'][0].setText('1e')
+    vals = w.setup.values()
+    assert 'fmin' not in vals and w.setup.bad == {'fmin': '1e'}
+    needs = w.needs(['rf'])['rf']
+    assert needs[0]['key'] == 'fmin' and 'not a number' in needs[0]['text']
+    w.setup.edits['fmin'][0].setText('1.5')
+    assert w.setup.values()['fmin'] == 1.5 and not w.setup.bad
+
+
+def test_another_board_lists_its_own_runs(window, tmp_path):
+    """Results of follows the board: after another board is chosen it lists that board's runs, and a run of the last
+    one leaves the pages (they had kept it, shown under the new study)."""
+    from kicad2ems_gui import runfolders
+    import fake_analyses as FA
+    w, app, _ = window
+    a, b = tmp_path / 'a.kicad_pcb', tmp_path / 'b.kicad_pcb'
+    a.write_text('')
+    b.write_text('')
+    w.setup.set_values(dict(board=str(a), out=str(tmp_path / 'out')))
+    w.want_layout()
+    run = FA.write('pdn', runfolders.tool_dir(str(tmp_path / 'out'), str(a), 'pdn', '3V3'))
+    w.refresh_runs()
+    assert run in [w.runs_box.itemData(i) for i in range(w.runs_box.count())]
+    w.viewer.out = run
+    w.setup.set_values(dict(board=str(b), out=str(tmp_path / 'out')))
+    w.want_layout()
+    assert run not in [w.runs_box.itemData(i) for i in range(w.runs_box.count())] and w.viewer.out is None

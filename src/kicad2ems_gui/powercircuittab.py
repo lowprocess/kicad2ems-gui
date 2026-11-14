@@ -107,7 +107,7 @@ class PowerCircuitTab(QWidget):
         self.params.itemChanged.connect(lambda *_:self._model_edited())
         self.sweep.textEdited.connect(lambda *_:self.panel._edited());self.sweep.editingFinished.connect(self.refresh_schematic)
         self.schematic.modelChanged.connect(self.schematic_changed)      # (the schematic has its own note line)
-        self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
+        self.editor.textChanged.connect(self._json_edited)
         self.model_path=None                                        # the file the model came from (a config's, a loaded one)
         self.refused=None                                           # a config's model file that would not load: kept
                                                                     # as the config's, never written over (save_settings)
@@ -235,9 +235,16 @@ class PowerCircuitTab(QWidget):
         self.refused=None
         self.refresh_timer.stop();self.set_model(c,diagram=False);self.panel._edited()
 
+    def _json_edited(self):
+        """A keystroke in Model JSON: the study is changed (it had not been: no save prompt), the schematic follows
+        once the typing stops."""
+        if self._syncing:return
+        self.panel._edited();self.refresh_timer.start()
+
     def refresh_schematic(self,*_):
         if self._syncing:return
-        try:self.schematic.set_model(self.values())
+        # the same model, edited as JSON: an undo step, not a new model (its history had been wiped at each one)
+        try:self.schematic.set_model(self.values(),reset_history=False,undoable=True)
         except (ValueError,KeyError,TypeError,ImportError) as exc:self.status.setText('Model needs attention: '+str(exc))
 
     def values(self):
