@@ -151,8 +151,7 @@ The **Use board and rail in Power Integrity** action transfers the board/net
 context while leaving DC source, voltage and loads for review.
 
 The **Circuit** analysis runs circuits through `python -m pcbqs.circuit`: any
-circuit of parts, nodes and drives, by ngspice or the piecewise-linear steady
-state, with the board's copper between the parts' pads when asked and the
+circuit of parts, nodes and drives, by ngspice, with the board's copper between the parts' pads when asked and the
 periodic copper fields inferred from it, which open in the Viewer from a point's
 folder. Among its examples is the wpthb full bridge with a coupled receiver
 (pcbqs's `data/wpthb_bridge.json`). See pcbqs `docs/circuit.md` for scope and

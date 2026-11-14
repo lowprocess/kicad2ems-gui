@@ -286,7 +286,7 @@ class PowerCircuitTab(QWidget):
     # ---- a study's config: [analysis.circuit] ----
     def load_settings(self,tab,keep_model=False):
         """A config's [analysis.circuit] table (its paths already whole): the model it names, the options it sets
-        (the copper and fields ticks, the engine), a board and a folder of its own. An empty one: the page as it
+        (the copper and fields ticks), a board and a folder of its own. An empty one: the page as it
         opens; keep_model (a proposal that names no model, only settings for it): the model on the page stays.
         A model that will not load (not a circuit model): the page starts from its template, and the config keeps
         naming that file, which nothing writes over until another model is loaded, started or edited."""

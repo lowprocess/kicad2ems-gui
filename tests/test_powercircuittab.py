@@ -31,7 +31,7 @@ def test_the_page_is_the_model_s_editor(tab):
 def test_a_general_model_s_parameters_and_sweep(tab):
     """A model (the page opens on pcbqs.circuit's boost converter): its tool's options, and in Model its parameters
     and its sweep, which are the model's. The full-bridge tool's model (format 1) is no longer one."""
-    assert tab.shown()==['copper','fields','set','engine','jobs','parameters','sweep']
+    assert tab.shown()==['copper','fields','set','jobs','parameters','sweep']
     assert not tab.panel.sections['Model'].isHidden() and 'Operating points' not in tab.panel.sections
     c=tab.values()
     assert c['format']==2
