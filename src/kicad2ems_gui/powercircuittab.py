@@ -1,7 +1,5 @@
-"""The Circuit page: a circuit model as a schematic to edit, and as JSON. Two kinds, told apart by the model's
-"format":
-    2   pcbqs.circuit: any circuit of parts, nodes and drives
-    1   pcbqs.power_circuit: the phase-shifted full bridge on a board's terminals, with its copper and fields
+"""The Circuit page: a circuit model (pcbqs.circuit's, format 2: any circuit of parts, nodes and drives) as a
+schematic to edit, and as JSON.
 
 A model comes from a file: a study's config names it ([analysis.circuit] model = "buck.json", a path beside the
 config), and the circuits to start from are examples like any other, under File > Examples > Circuits. Saving the
@@ -9,30 +7,17 @@ study writes the model back beside its config.
 
 The page is the model's editor only. Its settings are a panel made from the circuit plugin's options, as every
 analysis's are (analysispanel.AnalysisPanel: the tools' own tables, `--describe`), in the Study dock when the page
-is the window's; the options of the other kind of model are hidden. Under them, a section Model has the values the
-model itself holds: a general model's parameters and sweep. The full bridge's operating points and switch model
-are options of its tool that the model holds too: their fields show the model's values, and what is typed there
-goes into the model. A run is the plugin's command on the model as edited (written into the run's folder); what
+is the window's. Under them, a section Model has the values the model itself holds: its parameters and its sweep.
+A run is the plugin's command on the model as edited (written into the run's folder); what
 it leaves is shown where every result is: its report, tables and waveforms on the Results page, its fields in the
 Viewer, its log on the Run page."""
-import json,os,subprocess,sys
+import json,os
 from pathlib import Path
 from PySide6.QtCore import QTimer,Qt
 from .schematicview import SchematicEditor
 from .analysispanel import AnalysisPanel,config_values
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QPushButton,QComboBox,QPlainTextEdit,
                                QTabWidget,QFileDialog,QLabel,QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView)
-
-# the bridge tool's options that its model holds too: {option: (the model's key, option value -> model value)}
-BOUND=dict(frequencies=('frequencies_Hz',lambda t:[float(x) for x in t.split(',') if x.strip()]),
-           powers=('powers_W',lambda t:[float(x) for x in t.split(',') if x.strip()]),
-           coupling=('coupling',float),primary_l=('primary.L_H',lambda t:float(t)*1e-6),
-           secondary_l=('secondary.L_H',lambda t:float(t)*1e-6),             # (a.b: the model's c['a']['b'])
-           receiver_c=('secondary_C_F',lambda t:float(t)*1e-9),load=('load_ohm',float))
-OPTIONAL=('receiver_c','load')                                      # left empty: the model has none (tuned, matched)
-SWITCH_NOTE=("ngspice may not settle the behavioural 'switch' model on a hard-switched bridge: vdmos is the one the "
-             "templates use")
-
 
 def _is_number(text):
     try:float(text);return True
@@ -59,17 +44,15 @@ class _Run:
     def tag(self,values):return self._page.run_tag()
 
     def _ready(self,values,board):
-        """(the model as edited, whether it is a general one, its board), or ValueError: what a run still needs."""
+        """(the model as edited, its board), or ValueError: what a run still needs."""
         page=self._page
         try:c=page.values()
         except (ValueError,KeyError) as e:raise ValueError(f'The model needs attention: {e}') from None
-        general=c.get('format')==2
         on=lambda k:values.get(k) is True or str(values.get(k)).strip().lower() in ('1','true','yes','on')
-        if general:board=page.board.text().strip() or (c.get('board') or {}).get('file','') or board
+        board=page.board.text().strip() or (c.get('board') or {}).get('file','') or board
         if (on('copper') or on('fields')) and not (board and Path(board).is_file()):
-            raise ValueError("Choose the model's board: Import KiCad… a .kicad_pcb, or name one under Files" if general
-                             else 'Choose a PCB for the copper: name one under Files, or the study\'s board')
-        return c,general,board
+            raise ValueError("Choose the model's board: Import KiCad… a .kicad_pcb, or name one under Files")
+        return c,board
 
     def missing(self,values,board,results=None):
         """What a run of the model as edited still needs (kicad2ems 2.9); nothing is written."""
@@ -78,18 +61,16 @@ class _Run:
         return []
 
     def command(self,values,board,out,preview=False,results=None):
-        c,general,board=self._ready(values,board)
+        c,board=self._ready(values,board)
         os.makedirs(out,exist_ok=True)
         model=os.path.join(out,'model-input.json');Path(model).write_text(json.dumps(c,indent=2))
-        kind='general' if general else 'bridge'
-        mine={o['key'] for o in self.options() if o.get('only','') in ('',kind)}
-        vals={k:v for k,v in values.items() if k in mine and k not in BOUND and k!='switch_type'}   # the model has those
-        return self._p.command(dict(vals,model=model),board,out,preview,results)
+        mine={o['key'] for o in self.options()}
+        return self._p.command(dict({k:v for k,v in values.items() if k in mine},model=model),board,out,preview,results)
 
 
 class PowerCircuitTab(QWidget):
     def __init__(self,win=None,plugin=None):
-        super().__init__();self.win=win;self._syncing=False;self.general=False;self.asked=None
+        super().__init__();self.win=win;self._syncing=False;self.asked=None
         root=QVBoxLayout(self)
         self.matching_note=QLabel();self.matching_note.setWordWrap(True);root.addWidget(self.matching_note)
         row=QHBoxLayout();root.addLayout(row);self.top_row=row
@@ -111,9 +92,7 @@ class PowerCircuitTab(QWidget):
         if self.copper is not None and self.fields is not None:     # the fields are of the copper's currents
             self.fields.toggled.connect(lambda on:self.copper.setChecked(True) if on else None)
             self.copper.toggled.connect(lambda on:self.fields.setChecked(False) if not on else None)
-        self.frequencies,self.powers,self.coupling=w.get('frequencies'),w.get('powers'),w.get('coupling')
-        self.receiver_C,self.load_R,self.model=w.get('receiver_c'),w.get('load'),w.get('switch_type')
-        # the general model's own values: its parameters, and what it sweeps
+        # the model's own values: its parameters, and what it sweeps
         self.params=QTableWidget(0,2);self.params.setHorizontalHeaderLabels(['Parameter','Value']);self.params.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.params.verticalHeader().hide();self.params.setMaximumHeight(170);self.params.setToolTip("The model's parameters: its values may be expressions of them (vout/iout). A number, SI notation (22u) or an expression of the others")
         self.sweep=QLineEdit();self.sweep.setPlaceholderText('e.g.  parameters.vin: 9, 12, 15;  R1.resistance_ohm: 24, 48')
@@ -124,14 +103,9 @@ class PowerCircuitTab(QWidget):
             self.panel.add_section('Model',holder,form)
         form.insertRow(0,'Parameters',self.params);form.insertRow(1,'Sweep',self.sweep);self.model_form=form
         self.panel.sections['Model'].set_expanded(True)
-        if 'Operating points' in self.panel.sections:self.panel.sections['Operating points'].set_expanded(True)
         self.refresh_timer=QTimer(self);self.refresh_timer.setSingleShot(True);self.refresh_timer.setInterval(250);self.refresh_timer.timeout.connect(self.refresh_schematic)
         self.params.itemChanged.connect(lambda *_:self._model_edited())
         self.sweep.textEdited.connect(lambda *_:self.panel._edited());self.sweep.editingFinished.connect(self.refresh_schematic)
-        for key in BOUND:                                           # what is typed there is the model's
-            if w.get(key) is not None:w[key].editingFinished.connect(self.refresh_schematic)
-        if self.model is not None:
-            self.model.currentIndexChanged.connect(lambda *_:(self.refresh_schematic(),self._switch_note()))
         self.schematic.modelChanged.connect(self.schematic_changed)      # (the schematic has its own note line)
         self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
         self.model_path=None                                        # the file the model came from (a config's, a loaded one)
@@ -142,7 +116,7 @@ class PowerCircuitTab(QWidget):
             self._scroll=QScrollArea();self._scroll.setWidgetResizable(True);self._scroll.setWidget(self.panel);self.split.addWidget(self._scroll)
         try:
             self.set_model(self.template('simple'))                  # a small circuit to open on, not a board's
-        except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False)
+        except (OSError,ValueError,ImportError,KeyError,TypeError) as e:self.status.setText("Install/update pcbqs with python -m pip install 'kicad2ems[qs]': "+str(e));self.run_btn.setEnabled(False)
 
     # ---- the run: the panel's (the plugin's command, its log and status) ----
     proc=property(lambda self:self.panel.proc)
@@ -201,54 +175,20 @@ class PowerCircuitTab(QWidget):
 
     @classmethod
     def template(cls,name):
-        """A model to start from: one of pcbqs.circuit's examples ('simple' is its boost converter), or the
-        full-bridge tool's (wpthb; a pcbqs without named templates gives its only one)."""
+        """A model to start from: one of pcbqs.circuit's examples ('simple' is its boost converter)."""
         names=cls.templates()
         if name=='simple' and 'boost' in names:name='boost'
-        if name in names:
-            from pcbqs.circuit import model
-            return model.template(name)
-        run=lambda *a:subprocess.run([sys.executable,'-m','pcbqs.power_circuit','--template',*a],capture_output=True,text=True,timeout=30)
-        p=run(name)
-        if p.returncode and 'argument --template' not in p.stderr and 'unrecognized' not in p.stderr:p.check_returncode()
-        if p.returncode:p=run()                                     # older pcbqs: --template takes no name
-        p.check_returncode()
-        return json.loads(p.stdout)
+        if name not in names:raise ValueError(f'no circuit template {name!r} (pcbqs.circuit has {", ".join(names) or "none"})')
+        from pcbqs.circuit import model
+        return model.template(name)
 
     def new_model(self,name):
         try:self.set_model(self.template(name));self.model_path=None;self.status.setText(f'Started from the {name} template.')
-        except (OSError,ValueError,subprocess.SubprocessError) as e:self.status.setText('Template unavailable: '+str(e))
-
-    # ---- the settings by the model's kind ----
-    def matching_text(self,c):
-        cap=f'fixed {c["secondary_C_F"]*1e9:g} nF' if c.get('secondary_C_F') is not None else 'tuned per frequency'
-        load=f'fixed {c["load_ohm"]:g} Ω' if c.get('load_ohm') is not None else 'efficiency matched per frequency'
-        return f'Primary C: {c["primary_C_F"]*1e9:g} nF. Receiver C: {cap}; load: {load}. Phase targets load power.'
-
-    def show_kind(self,general):
-        """The settings of the model's kind: the options of its tool (the other tool's hidden), and for a general
-        model its parameters and its sweep."""
-        self.general=general;kind='general' if general else 'bridge'
-        seen={}
-        for o in self.panel.options:
-            form,wid=self.panel.forms.get(o.get('group') or 'Settings'),self.panel.w[o['key']]
-            on=o.get('only','') in ('',kind)
-            if form is not None:form.setRowVisible(wid,on)
-            seen[o.get('group') or 'Settings']=seen.get(o.get('group') or 'Settings',False) or on
-        for wid in (self.params,self.sweep):self.model_form.setRowVisible(wid,general)
-        seen['Model']=seen.get('Model',False) or general
-        for g,sec in self.panel.sections.items():
-            if g in seen:sec.setVisible(seen[g])
+        except (OSError,ValueError,ImportError) as e:self.status.setText('Template unavailable: '+str(e))
 
     def shown(self):
-        """The settings the model's kind shows: the options' keys, and 'parameters' and 'sweep' for a general one."""
-        kind='general' if self.general else 'bridge'
-        return [o['key'] for o in self.panel.options if o.get('only','') in ('',kind)]+(['parameters','sweep'] if self.general else [])
-
-    def _switch_note(self):
-        """The behavioural switch: ngspice may not settle it (said where the run's state is)."""
-        if self.model is not None and not self.general and self.model.currentText()=='switch':self.status.setText(SWITCH_NOTE)
-        elif self.status.text()==SWITCH_NOTE:self.status.setText('')
+        """The settings the page shows: the options' keys, and the model's parameters and sweep."""
+        return [o['key'] for o in self.panel.options]+['parameters','sweep']
 
     def _model_edited(self):
         if not self._syncing:
@@ -269,12 +209,14 @@ class PowerCircuitTab(QWidget):
         return out
 
     # ---- the model ----
-    def set_general(self,c,diagram=True):
-        """A model of the general kind (format 2) into the page."""
+    def set_model(self,c,diagram=True):
+        """A model into the page; a ValueError for one that is not a circuit model (format 2)."""
+        if c.get('format')!=2:
+            raise ValueError("not a circuit model (format 2): the full-bridge tool's (format 1) is no longer; pcbqs's "
+                             "data/wpthb_bridge.json is that bridge as a circuit model")
         self._syncing=True
         try:
             if diagram:self.schematic.set_model(c)
-            self.show_kind(True)
             self.params.setRowCount(0)
             for name,value in c.get('parameters',{}).items():
                 row=self.params.rowCount();self.params.insertRow(row);key=QTableWidgetItem(name);key.setFlags(key.flags()&~Qt.ItemIsEditable)
@@ -283,27 +225,6 @@ class PowerCircuitTab(QWidget):
             targets=';  '.join(f"{t['adjust']} is adjusted until {t['measure']} = {t['value']}" for t in c.get('targets',[]))
             self.matching_note.setText((c.get('description') or '')+('  —  '+targets if targets else ''))
             self.editor.setPlainText(json.dumps(c,indent=2))
-        finally:self._syncing=False
-        if diagram:QTimer.singleShot(0,self.schematic.fit)
-
-    def set_model(self,c,diagram=True):
-        if c.get('format')==2:return self.set_general(c,diagram)
-        self._syncing=True
-        try:
-            if diagram:self.schematic.set_model(c)
-            self.show_kind(False)
-            self.matching_note.setText(self.matching_text(c)+f'  —  {c["voltage_V"]:g} V')
-            self.editor.setPlainText(json.dumps(c,indent=2))
-            text=lambda v:','.join(f'{x:g}' for x in v) if isinstance(v,list) else f'{v:g}'
-            shown=dict(frequencies=text(c['frequencies_Hz']),powers=text(c['powers_W']),coupling=text(c['coupling']),
-                       primary_l=text(c['primary']['L_H']*1e6),secondary_l=text(c['secondary']['L_H']*1e6),
-                       receiver_c=text(c['secondary_C_F']*1e9) if c.get('secondary_C_F') is not None else '',
-                       load=text(c['load_ohm']) if c.get('load_ohm') is not None else '')
-            self.panel.set_values({k:v for k,v in shown.items() if k in self.panel.w})
-            if self.model is not None:                              # the model's own switch model: the one shown
-                i=max(self.model.findText(c.get('switch_model',{}).get('type','')),0)
-                self.model.blockSignals(True);self.model.setCurrentIndex(i);self.model.blockSignals(False)
-            self._switch_note()
         finally:self._syncing=False
         if diagram:QTimer.singleShot(0,self.schematic.fit)
 
@@ -316,31 +237,15 @@ class PowerCircuitTab(QWidget):
         except (ValueError,KeyError,TypeError,ImportError) as exc:self.status.setText('Model needs attention: '+str(exc))
 
     def values(self):
-        """The model as edited: the JSON, with the settings that are the model's own put into it (a general model's
-        parameters and sweep; the bridge's operating points and switch model, as typed in its options' fields)."""
+        """The model as edited: the JSON, with its parameters and sweep as typed in their fields."""
         c=json.loads(self.editor.toPlainText())
-        if c.get('format')==2:
-            for row in range(self.params.rowCount()):
-                name,text=self.params.item(row,0).text(),self.params.item(row,1).text().strip()
-                if name in c.get('parameters',{}) and text:c['parameters'][name]=float(text) if _is_number(text) else text
-            sweep=self.sweep_of(self.sweep.text())
-            if sweep:c['sweep']=sweep
-            else:c.pop('sweep',None)
-            return c
-        for key,(name,convert) in BOUND.items():
-            wid=self.panel.w.get(key)
-            if wid is None:continue
-            text=wid.text().strip()
-            if text:
-                *path,last=name.split('.')
-                d=c
-                for p in path:d=d.setdefault(p,{})
-                d[last]=convert(text)
-            elif key in OPTIONAL:c.pop(name,None)
-        if self.model is not None and self.model.currentIndex()>0:  # the first: the model's own, left as it is
-            c.setdefault('switch_model',{})['type']=self.model.currentText()
+        for row in range(self.params.rowCount()):
+            name,text=self.params.item(row,0).text(),self.params.item(row,1).text().strip()
+            if name in c.get('parameters',{}) and text:c['parameters'][name]=float(text) if _is_number(text) else text
+        sweep=self.sweep_of(self.sweep.text())
+        if sweep:c['sweep']=sweep
+        else:c.pop('sweep',None)
         return c
-
     def load_model(self,path=None):
         """A model from a file (asked for when none is named): its libraries and its board, named beside it, found
         from where it is. True when it loaded."""
@@ -349,15 +254,13 @@ class PowerCircuitTab(QWidget):
         try:
             here=Path(p).resolve().parent
             c=json.loads(Path(p).read_text())
-            for part in c.get('parts',[]) if c.get('format')==2 else []:
+            for part in c.get('parts',[]):
                 if part.get('model',{}).get('library'):part['model']['library']=str((here/part['model']['library']).resolve())
-            for model in [c.get('switch_model',{}),*[s.get('model',{}) for s in c.get('switches',[])]]:
-                if model.get('library'):model['library']=str((here/model['library']).resolve())
             board=(c.get('board') or {}).get('file')
             if board and not Path(board).is_absolute():c['board']['file']=str((here/board).resolve())
             self.set_model(c);self.model_path=str(Path(p).resolve())
             return True
-        except (OSError,ValueError,KeyError) as e:self.status.setText(str(e));return False
+        except (OSError,ValueError,KeyError) as e:self.status.setText(f'{Path(p).name}: {e}');return False
 
     def write_model(self,path,c=None):
         """The model as a file: its board named relative to it when it is beside it (a study's folder moves whole)."""
@@ -379,7 +282,7 @@ class PowerCircuitTab(QWidget):
     # ---- a study's config: [analysis.circuit] ----
     def load_settings(self,tab):
         """A config's [analysis.circuit] table (its paths already whole): the model it names, the options it sets
-        (the copper and fields ticks, the overrides), a board and a folder of its own. An empty one: the page as it
+        (the copper and fields ticks, the engine), a board and a folder of its own. An empty one: the page as it
         opens."""
         tab=dict(tab)
         self.panel.reset();self.panel.set_own(tab.pop('board',None),tab.pop('out',None))
@@ -390,12 +293,12 @@ class PowerCircuitTab(QWidget):
             if self.load_model(str(model)):self.status.setText(f"Model: {Path(str(model)).name}")
         elif self.model_path is not None:
             try:self.set_model(self.template('simple'))
-            except (OSError,ValueError,ImportError,KeyError,TypeError,subprocess.SubprocessError):pass
+            except (OSError,ValueError,ImportError,KeyError,TypeError):pass
             self.model_path=None
         else:                                                       # the model stays: its values back in their fields
             try:self.set_model(json.loads(self.editor.toPlainText()),diagram=False)
             except (ValueError,KeyError):pass
-        self.panel.set_values({k:v for k,v in tab.items() if k not in BOUND and k!='switch_type'})   # the model has those
+        self.panel.set_values(tab)
 
     def save_settings(self,config):
         """What the config at `config` holds of the circuit, {key: value} (paths relative to it), the model written
@@ -411,8 +314,6 @@ class PowerCircuitTab(QWidget):
         except (ValueError,KeyError,OSError) as e:self.status.setText(f'The model was not saved: {e}')
         rel=lambda p:os.path.relpath(os.path.abspath(p),base).replace(os.sep,'/')
         if self.model_path:tab['model']=rel(self.model_path)
-        kind='general' if self.general else 'bridge'
-        mine={o['key'] for o in self.panel.options if o.get('only','') in ('',kind)}
-        tab.update({k:v for k,v in config_values(self.panel,str(base)).items()
-                    if k in ('board','out') or (k in mine and k not in BOUND and k!='switch_type')})
+        mine={o['key'] for o in self.panel.options}
+        tab.update({k:v for k,v in config_values(self.panel,str(base)).items() if k in ('board','out') or k in mine})
         return tab

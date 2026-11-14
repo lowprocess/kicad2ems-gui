@@ -87,10 +87,8 @@ with its board, its model on the Circuit page and the circuit ticked.
 Filter Synthesis opens from the toolbar's Filter, in a window of its own. The **Circuit** page, the
 one analysis with an editor of its own, is a tab beside the board while Circuit is asked. It is the model's editor only (its
 schematic, its JSON): the model is a file the config names, saved back beside the config with the study. The
-circuit's settings are a panel in the Settings dock like any analysis's, made from the plugin's options (the two
-tools' own tables, the options of the other kind of model hidden), with a *Model* section for a general model's
-parameters and sweep; the full bridge's operating points show the model's values, and what is typed there goes
-into the model. Its results are on the Plots, Report and Tables pages and its log on the Log page, as every
+circuit's settings are a panel in the Settings dock like any analysis's, made from the plugin's options
+(`pcbqs.circuit --describe`), with a *Model* section for the model's parameters and sweep. Its results are on the Plots, Report and Tables pages and its log on the Log page, as every
 analysis's.
 
 ## Install
@@ -152,18 +150,13 @@ marks simulated copper, grey the layout context and gold selected components.
 The **Use board and rail in Power Integrity** action transfers the board/net
 context while leaving DC source, voltage and loads for review.
 
-The **Circuit** analysis runs ngspice circuits through `python -m pcbqs.circuit`
-(any circuit of parts, nodes and drives) or `python -m pcbqs.power_circuit` (the
-full bridge with a coupled receiver), by the model's kind. The bridge's model has
-switch/NMOS/VDMOS/vendor-subcircuit choices, capacitor ESR/ESL, inductor DCR,
-an input filter and the receiver; its settings give the frequency and load-power
-sweeps, k, and overrides for a group of parts at once (the tank, each rail's
-capacitors, the filter), and a run can include the board's copper and infer the
-periodic copper fields, which open in the Viewer from a point's folder. The
-supplied parasitics and receiver are assumptions; see pcbqs
-`docs/power-circuit.md` for scope and validation, including the distinction
-between electrical startup and periodic field inference. ngspice must be
-installed separately.
+The **Circuit** analysis runs circuits through `python -m pcbqs.circuit`: any
+circuit of parts, nodes and drives, by ngspice or the piecewise-linear steady
+state, with the board's copper between the parts' pads when asked and the
+periodic copper fields inferred from it, which open in the Viewer from a point's
+folder. Among its examples is the wpthb full bridge with a coupled receiver
+(pcbqs's `data/wpthb_bridge.json`). See pcbqs `docs/circuit.md` for scope and
+validation. ngspice must be installed separately for its engine.
 
 **Parallel circuit cases** runs independent operating points concurrently
 (default four, capped by available CPUs). Extraction/field transfers are prepared

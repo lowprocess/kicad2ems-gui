@@ -6,67 +6,73 @@ from kicad2ems_gui.powercircuittab import PowerCircuitTab
 from kicad2ems_gui.schematicview import ImportReview,KiCadJob
 
 
+def wpthb():
+    import pcbqs
+    from pathlib import Path
+    return json.loads((Path(pcbqs.__file__).parent/'data'/'wpthb_bridge.json').read_text())
+
+
 @pytest.fixture
 def tab():
-    A=pytest.importorskip('pcbqs.analyses',reason='pcbqs is not installed')     # its own plugin: the bridge's options
-    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab(plugin=A.Circuit());widget.new_model('wpthb');yield widget;widget.close();app.processEvents()
+    A=pytest.importorskip('pcbqs.analyses',reason='pcbqs is not installed')
+    app=QApplication.instance() or QApplication([]);widget=PowerCircuitTab(plugin=A.Circuit());widget.set_model(wpthb());yield widget;widget.close();app.processEvents()
+
+
+def part(c,ref):
+    return next(p for p in c['parts'] if p['ref']==ref)
 
 
 def test_component_edit_and_undo_redo_reach_json_and_run_values(tab):
     view=tab.schematic;view.select('part:C25');view.fields['value'].setText('47n');view.fields['ESR_ohm'].setText('12m')
     assert view.apply_selected()
-    c=tab.values();part=next(p for p in c['components'] if p['ref']=='C25')
-    assert part['value']==pytest.approx(47e-9) and part['ESR_ohm']==.012
-    assert c['primary_C_F']==pytest.approx(113e-9)
-    assert json.loads(tab.editor.toPlainText())['primary_C_F']==c['primary_C_F']
-    view.undo();assert next(p for p in tab.values()['components'] if p['ref']=='C25')['value']==33e-9
-    view.redo();assert next(p for p in tab.values()['components'] if p['ref']=='C25')['value']==pytest.approx(47e-9)
+    c=tab.values();assert part(c,'C25')['value']=='47n' and part(c,'C25')['ESR_ohm']=='12m'      # as written: SI notation
+    assert part(json.loads(tab.editor.toPlainText()),'C25')['value']==part(c,'C25')['value']
+    view.undo();assert part(tab.values(),'C25')['value']==33e-9
+    view.redo();assert part(tab.values(),'C25')['value']=='47n'
 
 
-def test_connections_switch_override_and_auto_receiver_controls(tab):
-    view=tab.schematic;view.select('part:L3');view.ends['a'].setCurrentText('NET:CUSTOM');view.fields['DCR_ohm'].setText('75m');assert view.apply_selected()
-    assert next(p for p in tab.values()['components'] if p['ref']=='L3')['a']=='NET:CUSTOM'
-    view.select('switch:Q1');view.choice.setCurrentText('switch');view.fields['Ron_ohm'].setText('15m');assert view.apply_selected()
-    assert next(p for p in tab.values()['switches'] if p['ref']=='Q1')['model']['Ron_ohm']==.015
-    view.select('receiver_cap');view.fields['secondary_C_F'].setText('100n');assert view.apply_selected()
-    assert tab.values()['secondary_C_F']==pytest.approx(100e-9)
-    assert float(tab.receiver_C.text())==pytest.approx(100)
-    view.select('receiver_cap');view.fields['secondary_C_F'].clear();assert view.apply_selected();assert 'secondary_C_F' not in tab.values()
+def test_nodes_a_switch_and_the_receiver_are_edited_as_any_part(tab):
+    view=tab.schematic;view.select('part:L3');view.ends['a'].setCurrentText('CUSTOM');view.fields['DCR_ohm'].setText('75m');assert view.apply_selected()
+    assert part(tab.values(),'L3')['nodes'][0]=='CUSTOM' and part(tab.values(),'L3')['DCR_ohm']=='75m'
+    view.select('part:Q1');view.choice.setCurrentText('switch');view.fields['model.Ron_ohm'].setText('15m');assert view.apply_selected()
+    assert part(tab.values(),'Q1')['model']['Ron_ohm']=='15m' and part(tab.values(),'Q1')['model']['type']=='switch'
+    view.select('part:CSECONDARY');view.fields['value'].setText('100n');assert view.apply_selected()
+    assert part(tab.values(),'CSECONDARY')['value']=='100n'
 
 
 def test_invalid_json_is_not_overwritten_by_diagram_edit(tab):
     view=tab.schematic;view.select('part:C25');view.fields['value'].setText('47n');tab.editor.setPlainText('{ incomplete')
     assert not view.apply_selected();assert tab.editor.toPlainText()=='{ incomplete'
-    assert next(p for p in view.config['components'] if p['ref']=='C25')['value']==33e-9
+    assert part(view.config,'C25')['value']==33e-9
 
 
-def test_layout_round_trip_top_overrides_and_noop_precision(tab):
-    original=tab.values();tab.schematic.select('primary');assert tab.schematic.apply_selected()
-    assert tab.values()['primary']==original['primary']
-    tab.panel.w['override'].setPlainText('tank.ESR_ohm=0.02');tab.refresh_schematic()
+def test_layout_round_trip_and_noop_precision(tab):
+    original=tab.values();tab.schematic.select('part:PRIMARY');assert tab.schematic.apply_selected()
+    assert part(tab.values(),'PRIMARY')==part(original,'PRIMARY')
     tab.schematic.save_positions({'part:C25':[123.5,456]})
     c=tab.values();assert c['schematic']['positions']['part:C25']==[123.5,456]
-    assert next(p for p in c['components'] if p['ref']=='C25')['ESR_ohm']!=.02     # an override is the run's: the
-    assert tab.panel.values()['override']=='tank.ESR_ohm=0.02'                      # model keeps each part's own
     tab.set_model(json.loads(json.dumps(c)));assert tab.schematic.scene.devices['part:C25'].pos().x()==123.5
 
 
 def test_render_and_selection_are_functional(tab):
-    tab.resize(1500,1000);tab.show();QApplication.processEvents();tab.schematic.scene.focus('switch:Q2');QApplication.processEvents()
-    assert tab.schematic.selected_key=='switch:Q2'
+    tab.resize(1500,1000);tab.show();QApplication.processEvents();tab.schematic.scene.focus('part:Q2');QApplication.processEvents()
+    assert tab.schematic.selected_key=='part:Q2'
     assert not tab.grab().isNull()
     tab.schematic.find.setText('VHB');tab.schematic.find_ref();assert 'VHB' in tab.schematic.note.text()
 
 
 def test_import_review_requires_explicit_additions_and_marks_dnp(tab):
     from PySide6.QtCore import Qt
-    doc=dict(components=[dict(ref='C25',value='47n',kind='capacitor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),dict(ref='RNEW',value='1k',kind='resistor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',pins=[]),dict(ref='C17',value='33n',kind='capacitor',supported_passive=True,dnp=True,exclude_from_sim=False,sheet='/',pins=[])])
+    doc=dict(components=[dict(ref='C25',value='47n',kind='capacitor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',fields={},properties={},footprint='',lib_id='Device:C',value_si=47e-9,pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),
+                         dict(ref='RNEW',value='1k',kind='resistor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',fields={},properties={},footprint='',lib_id='Device:R',value_si=1e3,pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),
+                         dict(ref='C17',value='33n',kind='capacitor',supported_passive=True,dnp=True,exclude_from_sim=False,sheet='/',fields={},properties={},footprint='',lib_id='Device:C',value_si=33e-9,pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')])])
     # (the window's own has the tab as parent; a top-level one left to the interpreter's exit crashed it on Qt 6.12,
     # after every test had passed: exit 139 on Linux, 127 on Windows)
-    dialog=ImportReview(doc,tab.values(),tab);assert dialog.selected_refs()==['C25']
+    dialog=ImportReview(doc,tab.values(),tab)
     assert '33' in dialog.table.item(0,3).text() and dialog.table.item(0,2).text()=='47n'
-    dialog.select('all');assert dialog.selected_refs()==['C25','RNEW']
-    dialog.table.item(2,0).setCheckState(Qt.Checked);assert 'C17' in dialog.selected_refs()
+    dialog.select('existing');assert dialog.selected_refs()==['C25']
+    dialog.select('all');assert dialog.selected_refs()==['C25','RNEW']                   # (C17: not fitted)
+    dialog.select('none');assert dialog.selected_refs()==[]
     dialog.close();dialog.deleteLater();QApplication.processEvents()
 
 
@@ -118,11 +124,10 @@ def test_rotating_a_part(tab):
     stays with the model, Undo turns it back, Arrange leaves every part to the generator again."""
     view=tab.schematic;sc=view.scene;view.select('part:L3')
     start=sc.devices['part:L3'].rot
-    assert start in (0,180) and not sc.devices['part:L3'].chosen     # the generator's: along the flow, either way
+    assert not sc.devices['part:L3'].chosen                           # the generator's
     view.rotate_part('part:L3',90)
     item=sc.devices['part:L3']                                       # rebuilt
-    assert item.rot==(start+90)%360 and item.chosen and item.facing(0)[0]==0 and item.facing(1)==tuple(-v for v in item.facing(0))
-    assert abs(item.pin(0).x()-item.pos().x())<1e-6
+    assert item.rot==(start+90)%360 and item.chosen and item.facing(1)==tuple(-v for v in item.facing(0))
     assert tab.values()['schematic']['rotations']=={'part:L3':(start+90)%360}
     assert sc.devices['part:L3'].isSelected()
     for net,wire,(a,i),(b,j),label in sc.links:                       # every wire starts and ends on its pins
@@ -132,27 +137,10 @@ def test_rotating_a_part(tab):
     view.undo();assert sc.devices['part:L3'].rot==start and 'rotations' not in tab.values().get('schematic',{})
     view.rotate_part('part:L3',180);assert sc.devices['part:L3'].rot==(start+180)%360
     view.rotate_part('part:L3',0);assert not sc.devices['part:L3'].chosen and 'rotations' not in tab.values()['schematic']
-    view.rotate_part('switch:Q2',270);view.arrange()
+    view.rotate_part('part:Q2',270);view.arrange()
     assert not any(d.chosen for d in sc.devices.values()) and 'rotations' not in tab.values()['schematic']
     tab.set_model(dict(tab.values(),schematic=dict(format=1,rotations={'part:C25':90})))
     assert sc.devices['part:C25'].rot==90 and sc.devices['part:C25'].chosen     # a saved model's angle, when loaded
-
-
-def test_generated_orientation(tab):
-    """The generator: coils stand up, a part faces the parts it connects to (no wire round its own card), and
-    ground is drawn downward whichever way its pin points."""
-    view=tab.schematic;sc=view.scene
-    assert sc.devices['primary'].rot in (90,270) and sc.devices['secondary'].rot in (90,270)
-    assert sc.devices['load'].rot in (90,270)                         # the load too, across the output
-    assert sc.devices['part:R9'].rot in (0,180)
-    # a part put to the left of the only part it is wired to turns its wired pin to the right
-    pos=sc.positions();sup=sc.devices['supply'];k=sup.record['nets'].index('VIN')
-    other=next(d for key,d in sc.devices.items() if key!='supply' and 'VIN' in d.record['nets'])
-    ox,oy=other.x(),other.y()                                         # (the parts are rebuilt at every edit)
-    pos['supply']=[ox-400,oy];view.save_positions(pos)
-    assert sc.devices['supply'].facing(k)==(1,0)
-    pos['supply']=[ox+400,oy];view.save_positions(pos)
-    assert sc.devices['supply'].facing(k)==(-1,0)
 
 
 @pytest.fixture

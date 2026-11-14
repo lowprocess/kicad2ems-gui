@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QSpli
 
 
 def _api():
-    # GUI remains usable without the optional circuit package.
+    # GUI remains usable without the optional circuit package: KiCad's netlists, read (pcbqs.schematic)
     from pcbqs import schematic
     return schematic
 
@@ -116,22 +116,19 @@ class ImportReview(QDialog):
         self.table=QTableWidget(len(document['components']),8);self.table.setHorizontalHeaderLabels(['Apply','Reference','KiCad value','Simulation value','Model','Pins → nets','Sheet','Import status']);self.table.setEditTriggers(QTableWidget.NoEditTriggers);self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents);self.table.horizontalHeader().setSectionResizeMode(5,QHeaderView.Stretch)
         self.eligible=[]
-        self.general=config.get('format')==2
-        if self.general:note.setText('Choose the parts to take over: resistors, capacitors, inductors, diodes and MOSFETs, each between the two nets its pins are on.\n'
+        note.setText('Choose the parts to take over: resistors, capacitors, inductors, diodes and MOSFETs, each between the two nets its pins are on.\n'
                                      'Which connector is the source and which the load, and what drives the switches, KiCad does not say: add those in the schematic afterwards.')
         for row,c in enumerate(document['components']):
-            if self.general:status,eligible,default=_kicad().status(c,config)
-            else:status,default=_api().import_status(c,config);eligible=c['supported_passive'] or (c['kind']=='mosfet' and any(s['ref']==c['ref'] for s in config.get('switches',[])))
+            status,eligible,default=_kicad().status(c,config)
             self.eligible.append(eligible)
             check=QTableWidgetItem();check.setFlags(Qt.ItemIsUserCheckable|Qt.ItemIsEnabled if eligible else Qt.NoItemFlags);check.setCheckState(Qt.Checked if default else Qt.Unchecked);self.table.setItem(row,0,check)
-            existing=next((p for p in config['parts' if self.general else 'components'] if p['ref']==c['ref']),None)
+            existing=next((p for p in config['parts'] if p['ref']==c['ref']),None)
             present=(_quantity(existing['value'],dict(resistor='Ω',capacitor='F',inductor='H')[existing['type']]) if existing and existing['type'] in ('resistor','capacitor','inductor') else existing['type'] if existing else '—')
             values=[c['ref'],c['value'],present,c['kind'],', '.join(f"{p['number']} ({p['name']}) → {p['net'] or 'unconnected'}" for p in c['pins']),c['sheet'],status]
             for col,value in enumerate(values,1):
                 item=QTableWidgetItem(value);item.setToolTip(value);self.table.setItem(row,col,item)
         layout.addWidget(self.table,1)
-        self.connections=QCheckBox('Also update existing terminal connections from KiCad pins (review against the PCB before copper extraction)');layout.addWidget(self.connections)
-        if self.general:self.connections.setText("Also move the model's existing parts to the nets KiCad has them on");self.connections.setChecked(True)
+        self.connections=QCheckBox("Also move the model's existing parts to the nets KiCad has them on");self.connections.setChecked(True);layout.addWidget(self.connections)
         self.details=QPlainTextEdit();self.details.setReadOnly(True);self.details.setMaximumHeight(115);layout.addWidget(self.details)
         self.table.itemSelectionChanged.connect(self.show_details)
         buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);buttons.accepted.connect(self.accept);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
@@ -141,8 +138,8 @@ class ImportReview(QDialog):
 
     def select(self,mode):
         for i,c in enumerate(self.document['components']):
-            if mode=='existing':on=(self.eligible[i] and any(p['ref']==c['ref'] for p in self.config['parts'])) if self.general else _api().import_status(c,self.config)[1]
-            elif mode=='all':on=self.eligible[i] and (self.general or c['supported_passive']) and not c['dnp'] and not c['exclude_from_sim']
+            if mode=='existing':on=self.eligible[i] and any(p['ref']==c['ref'] for p in self.config['parts'])
+            elif mode=='all':on=self.eligible[i] and not c['dnp'] and not c['exclude_from_sim']
             else:on=False
             self.table.item(i,0).setCheckState(Qt.Checked if on else Qt.Unchecked)
 
@@ -695,25 +692,8 @@ def records2(config):
 
 
 def records(config):
-    if config.get('format')==2:return records2(config)
-    api=_api();out=[]
-    bank_nets={api.terminal_net(config,config['bridge_terminals'][0]),api.terminal_net(config,config['primary_terminals'][0])}
-    def add(key,ref,kind,label,ends,group,details='',enabled=True):
-        out.append(dict(id=key,ref=ref,kind=kind,label=label,endpoints=ends,nets=[api.terminal_net(config,t) for t in ends],group=group,details=details,enabled=enabled))
-    for p in config.get('components',[]):
-        kind=p.get('type','resistor');unit=dict(resistor='Ω',capacitor='F',inductor='H').get(kind,'');nets=[api.terminal_net(config,p[k]) for k in ['a','b']]
-        group='tank' if set(nets)==bank_nets else 'dc' if set(nets)=={'GND','VHB'} else 'input' if set(nets)&{'VIN','VBUS'} or p['ref'].startswith('CA') else 'other'   # by the nets it joins
-        paras=' · '.join(f"{k.split('_')[0]} {_quantity(p[k],'H' if k.endswith('_H') else 'Ω')}" for k in ['ESR_ohm','ESL_H','DCR_ohm'] if p.get(k))
-        add('part:'+p['ref'],p['ref'],kind,_quantity(p.get('value',''),unit),[p['a'],p['b']],group,paras,p.get('enabled',True))
-    for p in config.get('switches',[]):
-        kind=p.get('model',{}).get('type',config.get('switch_model',{}).get('type','switch'));add('switch:'+p['ref'],p['ref'],'switch',kind,[p['a'],p['b']],'bridge'+p.get('leg','A'),p.get('leg','A')+(' high-side' if p.get('high') else ' low-side'))
-    add('supply','SUPPLY','supply',_number(config.get('voltage_V',0))+' V',['NET:VIN','0'],'input','Source R/L included')
-    add('primary','PRIMARY','coil',_quantity(config['primary']['L_H'],'H'),config['primary_terminals'],'primary',f"k={config['coupling']:g}; winding + SRF loss")
-    add('secondary','SECONDARY','coil',_quantity(config['secondary']['L_H'],'H'),['SEC:A','SEC:B'],'receiver','Coupled receiver coil')
-    add('receiver_cap','CSECONDARY','capacitor',_quantity(config['secondary_C_F'],'F') if 'secondary_C_F' in config else 'Auto tuned',['SEC:B','SEC:LOAD'],'receiver','Receiver compensation')
-    add('load','LOAD','resistor',_quantity(config['load_ohm'],'Ω') if 'load_ohm' in config else 'Auto matched',['SEC:LOAD','SEC:A'],'receiver','AC-equivalent receiver load')
-    return out
-
+    """The scene's records of a model (format 2): records2's."""
+    return records2(config)
 
 class SchematicEditor(QWidget):
     modelChanged=Signal(dict)
@@ -741,15 +721,10 @@ class SchematicEditor(QWidget):
 
     @staticmethod
     def check(config,before=None):
-        """Raise what is wrong with a model: the general one (format 2) by pcbqs.circuit's own checks, down to the
-        deck it would run; the board-terminal one by pcbqs.schematic's."""
-        if config.get('format')==2:
-            M=_model();M.validate(config)
-            from pcbqs.circuit.deck import build
-            for point in M.cases(config)[:1]:build(M.resolve(config,point))
-            return
-        if before is not None:_api().sync_primary_bank(before,config)
-        _api().validate_edit(config)
+        """Raise what is wrong with a model, by pcbqs.circuit's own checks, down to the deck it would run."""
+        M=_model();M.validate(config)
+        from pcbqs.circuit.deck import build
+        for point in M.cases(config)[:1]:build(M.resolve(config,point))
 
     def set_model(self,config,reset_history=True):
         self.check(config);records(config)
@@ -824,48 +799,15 @@ class SchematicEditor(QWidget):
         else:self.message('No matching component or net')
 
     def _part(self,c,key):
-        if c.get('format')==2:return next(p for p in c['parts'] if p['ref']==key[5:])
-        if key.startswith('part:'):return next(p for p in c['components'] if p['ref']==key[5:])
-        if key.startswith('switch:'):return next(p for p in c['switches'] if p['ref']==key[7:])
-        return c.get(key)
+        return next(p for p in c['parts'] if p['ref']==key[5:])
 
     def select(self,key):
         self.selected_key=key;body=QWidget();form=QFormLayout(body);self.fields={};self.field_originals={};self.choice=None;self.enabled=None;self.ends={};self.virtual_extra={}
         if not key:
-            info=QLabel('Select a part in the schematic, or search its reference.\n\nEvery part is in the model: its type, its two nodes and its values. A switch follows one of the model\'s drives.'
-                        if self.config.get('format')==2 else
-                        'Select a component in the schematic, or search its reference.\n\nConnections use PCB terminal names or NET:name. The bridge/WPT workflow supplies gate drive and receiver matching.');info.setWordWrap(True);form.addRow(info);self.inspector.setWidget(body);return
+            info=QLabel('Select a part in the schematic, or search its reference.\n\nEvery part is in the model: its type, its two nodes and its values. A switch follows one of the model\'s drives.');info.setWordWrap(True);form.addRow(info);self.inspector.setWidget(body);return
         record=next((r for r in records(self.config) if r['id']==key),None)
         if record is None:self.inspector.setWidget(body);return
-        if self.config.get('format')==2:return self.select_part(key,record,body,form)
-        form.addRow(QLabel('<b>'+record['ref']+'</b>'))
-        if key.startswith('part:'):
-            part=self._part(self.config,key);self.choice=QComboBox();self.choice.addItems(_api().PASSIVES);self.choice.setCurrentText(part['type']);form.addRow('Component type',self.choice)
-            self.enabled=QCheckBox('Include in simulation');self.enabled.setChecked(part.get('enabled',True));form.addRow(self.enabled)
-            specs=[('value','Value (Ω / F / H)'),('ESR_ohm','ESR (Ω)'),('ESL_H','ESL (H)'),('DCR_ohm','DCR (Ω)'),('leakage_ohm','Leakage (Ω)'),('bias_factor','Capacitance bias factor')];target=part;inherited={}
-        elif key.startswith('switch:'):
-            part=self._part(self.config,key);target=part.get('model',{});inherited=self.config.get('switch_model',{});self.choice=QComboBox();self.choice.addItems(['inherit','ideal','switch','mosfet','vdmos','subcircuit']);self.choice.setCurrentText(target.get('type','inherit'));form.addRow('Switch model',self.choice)
-            self.leg=QComboBox();self.leg.addItems(['A','B']);self.leg.setCurrentText(part.get('leg','A'));form.addRow('Gate phase leg',self.leg);self.high=QCheckBox('High-side gate timing');self.high.setChecked(part.get('high',False));form.addRow(self.high)
-            specs=[(k,label) for k,label in [('Ron_ohm','On resistance (Ω)'),('Roff_ohm','Off resistance (Ω)'),('Vth_V','Threshold (V)'),('Kp_A_V2','Kp (A/V²)'),('rise_s','Rise time (s)'),('fall_s','Fall time (s)'),('dead_time_s','Dead time (s)'),('gate_V','Gate drive (V)'),('gate_R_ohm','Gate resistance (Ω)'),('Cds_F','Cds (F)'),('Cgd_F','Cgd (F)'),('Cgs_F','Cgs (F)'),('diode_TT_s','Diode TT (s)'),('package_L_H','Drain package L (H)'),('source_L_H','Source package L (H)')]]
-            for k in ['library','subcircuit']:
-                w=QLineEdit(str(target.get(k,'')));self.virtual_extra[k]=w;form.addRow(k,w)
-        elif key in ('primary','secondary'):
-            target=self.config[key];inherited={};specs=[('L_H','Inductance (H)'),('R_ohm','Winding DCR (Ω)'),('SRF_Hz','Self resonance (Hz)'),('Cp_F','Self capacitance (F)'),('Rac_ref_ohm','AC loss reference (Ω)'),('loss_reference_Hz','Loss reference (Hz)'),('core_R_ohm','Core resistance (Ω)')]
-            self.choice=QComboBox();self.choice.addItems(['parallel_core','dc_only','series_ac']);self.choice.setCurrentText(target.get('loss_model','series_ac'));form.addRow('Coil loss model',self.choice)
-            if key=='primary':specs.append(('primary_C_F','Primary C reference (F)'));target=dict(target,primary_C_F=self.config['primary_C_F'])
-        elif key=='supply':
-            target=dict(self.config.get('supply',{}),voltage_V=self.config['voltage_V']);inherited={};specs=[('voltage_V','Bridge supply (V)'),('R_ohm','Source resistance (Ω)'),('L_H','Source inductance (H)'),('ramp_s','Startup ramp (s)')]
-        else:
-            field='secondary_C_F' if key=='receiver_cap' else 'load_ohm';target=self.config;inherited={};specs=[(field,'Value (F)' if key=='receiver_cap' else 'Load (Ω)')];form.addRow(QLabel('Blank keeps per-frequency automatic tuning/matching.'))
-        for name,label in specs:
-            text=_entry(target[name]) if name in target else '';w=QLineEdit(text);self.field_originals[name]=(text,target.get(name));w.setPlaceholderText('Inherited: '+_entry(inherited[name]) if name in inherited else 'Optional / default');self.fields[name]=w;form.addRow(label,w)
-        if key.startswith(('part:','switch:')) or key=='primary':
-            options=sorted(set(self.config.get('terminals',{}))|{'NET:'+n for r in records(self.config) for n in r['nets'] if not n.startswith('SEC:')}|{'0'},key=_natural)
-            ends=record['endpoints']
-            for index,pin in enumerate(['a','b']):
-                w=QComboBox();w.setEditable(True);w.addItems(options);w.setCurrentText(ends[index]);self.ends[pin]=w;form.addRow('Connection '+pin.upper(),w)
-        note=QLabel('Numbers accept SI notation (33n, 24u, 110m). Blank optional fields remove overrides. Primary bank edits update its reference when it was synchronized.');note.setWordWrap(True);form.addRow(note)
-        apply=QPushButton('Apply component changes');apply.clicked.connect(self.apply_selected);form.addRow(apply);self.inspector.setWidget(body)
+        return self.select_part(key,record,body,form)
 
     def select_part(self,key,record,body,form):
         """The inspector for a part of the general model: its type's fields (PART_FIELDS), each a number, engineering
@@ -911,34 +853,7 @@ class SchematicEditor(QWidget):
         return self.commit(edit)
 
     def apply_selected(self):
-        key=self.selected_key
-        if self.config.get('format')==2:return self.apply_part()
-        try:
-            values={name:self.field_originals[name][1] if w.text()==self.field_originals[name][0] else _api().engineering_value(w.text()) if w.text().strip() else None for name,w in self.fields.items()};ends={p:w.currentText().strip() for p,w in self.ends.items()};choice=self.choice.currentText() if self.choice else None;enabled=self.enabled.isChecked() if self.enabled else None;extras={k:w.text().strip() for k,w in self.virtual_extra.items()};leg=self.leg.currentText() if key.startswith('switch:') else None;high=self.high.isChecked() if key.startswith('switch:') else None
-            if any(v is not None and v<0 for v in values.values()):raise ValueError('Component parameters must be nonnegative')
-        except ValueError as exc:self.message(str(exc));return False
-        def edit(c):
-            if key.startswith('part:'):
-                target=self._part(c,key);target.update(type=choice);target.update(ends)
-                if not enabled or 'enabled' in target:target['enabled']=enabled
-                if values.get('value') is None:raise ValueError('A component value is required')
-            elif key.startswith('switch:'):
-                part=self._part(c,key);part.update(ends,leg=leg,high=high);target=part.setdefault('model',{})
-                if choice=='inherit':target.pop('type',None)
-                else:target['type']=choice
-                for name,value in extras.items():
-                    if value:target[name]=value
-                    else:target.pop(name,None)
-            elif key in ('primary','secondary'):
-                target=c[key];target['loss_model']=choice
-                if any(values.get(k) in (None,0) for k in ['L_H','R_ohm']):raise ValueError('Coil inductance and DCR must be positive')
-                if key=='primary':c['primary_terminals']=[ends['a'],ends['b']];c['primary_C_F']=values.pop('primary_C_F')
-            elif key=='supply':target=c.setdefault('supply',{});c['voltage_V']=values.pop('voltage_V')
-            else:target=c
-            for name,value in values.items():
-                if value is None:target.pop(name,None)
-                else:target[name]=value
-        return self.commit(edit)
+        return self.apply_part()
 
     def add_part(self):
         """A new part of the general model, of any type, between two nodes."""
@@ -973,41 +888,28 @@ class SchematicEditor(QWidget):
         if self.commit(change,'Added '+ref):self.scene.focus(self.selected_key)
 
     def add_passive(self):
-        if self.config.get('format')==2:return self.add_part()
-        dialog=QDialog(self);dialog.setWindowTitle('Add simulation passive');form=QFormLayout(dialog);ref=QLineEdit('RNEW');kind=QComboBox();kind.addItems(_api().PASSIVES);value=QLineEdit('1k');a=QLineEdit('NET:VHB');b=QLineEdit('0')
-        for label,w in [('Reference',ref),('Type',kind),('Value (SI)',value),('Connection A',a),('Connection B',b)]:form.addRow(label,w)
-        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);form.addRow(buttons);buttons.accepted.connect(dialog.accept);buttons.rejected.connect(dialog.reject)
-        if dialog.exec()!=QDialog.Accepted:return
-        try:part=dict(ref=ref.text().strip(),type=kind.currentText(),value=_api().engineering_value(value.text()),a=a.text().strip(),b=b.text().strip())
-        except ValueError as exc:self.message(str(exc));return
-        self.selected_key='part:'+part['ref'];self.commit(lambda c:c['components'].append(part),'Added '+part['ref']);self.scene.focus(self.selected_key)
+        return self.add_part()
 
     def remove_part(self):
         key=self.selected_key
-        if self.config.get('format')==2:
-            if not key:self.message('Select a part to remove');return
-            ref=key[5:]
-            def change(c):                                          # with whatever was about it alone
-                c['parts']=[p for p in c['parts'] if p['ref']!=ref]
-                if 'couplings' in c:c['couplings']=[k for k in c['couplings'] if ref not in k.get('inductors',[])]
-                if 'probes' in c:c['probes']={n:pr for n,pr in c['probes'].items() if pr.get('current')!=ref}
-                for section in ('positions','rotations'):c.get('schematic',{}).get(section,{}).pop(key,None)
-                c.get('board',{}).get('parts',{}).pop(ref,None)
-            self.commit(change,'Removed '+ref);return
-        if not key.startswith('part:'):self.message('Only explicit passive components can be removed here; bridge/coil roles are edited through their properties.');return
-        self.commit(lambda c:c.update(components=[p for p in c['components'] if 'part:'+p['ref']!=key]),'Removed simulation component')
+        if not key:self.message('Select a part to remove');return
+        ref=key[5:]
+        def change(c):                                              # with whatever was about it alone
+            c['parts']=[p for p in c['parts'] if p['ref']!=ref]
+            if 'couplings' in c:c['couplings']=[k for k in c['couplings'] if ref not in k.get('inductors',[])]
+            if 'probes' in c:c['probes']={n:pr for n,pr in c['probes'].items() if pr.get('current')!=ref}
+            for section in ('positions','rotations'):c.get('schematic',{}).get(section,{}).pop(key,None)
+            c.get('board',{}).get('parts',{}).pop(ref,None)
+        self.commit(change,'Removed '+ref)
 
     def import_file(self):
-        general=self.config.get('format')==2
-        path,_=QFileDialog.getOpenFileName(self,'Import KiCad information','','KiCad board, schematic or XML netlist (*.kicad_pcb *.kicad_sch *.xml);;All files (*)' if general else
-                                           'KiCad schematic / XML netlist (*.kicad_sch *.xml);;All files (*)')
+        path,_=QFileDialog.getOpenFileName(self,'Import KiCad information','','KiCad board, schematic or XML netlist (*.kicad_pcb *.kicad_sch *.xml);;All files (*)')
         if path:self.import_path(path)
 
     def import_path(self,path,view_only=False):
         try:self.base_model()
         except (ValueError,KeyError) as exc:self.message('Fix the model JSON before importing: '+str(exc));return
         if str(path).lower().endswith('.kicad_pcb'):                 # a board: its footprints and their pads' nets, read here
-            if self.config.get('format')!=2:self.message('A board is imported into a general model (New: one of the examples); this one takes a schematic or a netlist.');return
             try:document=_kicad().read(path)
             except (ValueError,RuntimeError,OSError,ImportError) as exc:self.message('Could not read the board: '+str(exc));return
             return self.import_ready(document,{},view_only)
@@ -1026,7 +928,7 @@ class SchematicEditor(QWidget):
         if review is None:return
         refs,connections=review
         def change(c):
-            imported=(_kicad().apply if c.get('format')==2 else _api().apply_import)(c,document,refs,connections);c.clear();c.update(imported)
+            imported=_kicad().apply(c,document,refs,connections);c.clear();c.update(imported)
         if self.commit(change,f'Imported {len(refs)} selected components; source has {len(document["components"])} components'):
             self.set_sheets(sheets)
 
