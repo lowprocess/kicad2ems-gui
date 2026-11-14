@@ -425,6 +425,33 @@ def test_two_engines_of_one_question_run_and_are_compared(window, tmp_path):
     w.close()
 
 
+def test_the_runs_are_read_once_for_a_settings_change(window, tmp_path, monkeypatch):
+    """What each analysis still needs asks the latest results, once per analysis and row: the run folders are read
+    once while they are unchanged (each ask had read them all), again once a run is added or the list refreshed."""
+    import time
+    from kicad2ems_gui import runfolders
+    import fake_analyses as FA
+    w, app, _ = window
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    out = tmp_path / 'out'
+    w.setup.set_values(dict(board=str(board), out=str(out)))
+    first = FA.write('circuit', runfolders.tool_dir(str(out), str(board), 'circuit', 'buck'))
+    w.update_needed()                                               # (the board chosen: its runs listed)
+    reads, tool_runs = [], runfolders.tool_runs
+    monkeypatch.setattr(runfolders, 'tool_runs', lambda *a: reads.append(1) or tool_runs(*a))
+    w.refresh_runs()
+    assert w.latest_results() == dict(circuit=first) == w.latest_results()
+    w.update_needed()
+    assert len(reads) == 1
+    time.sleep(0.05)                                                # (a folder's time: the clock's coarse tick)
+    t = __import__('datetime').datetime.now() + __import__('datetime').timedelta(minutes=1)
+    second = FA.write('circuit', runfolders.tool_dir(str(out), str(board), 'circuit', 'buck', now=t))
+    assert w.latest_results() == dict(circuit=second) and len(reads) == 2
+    w.refresh_runs()
+    assert len(reads) == 3
+
+
 def test_one_analysis_starts_from_another_s_result(window, tmp_path):
     """What a plugin is given of the others' results (the temperature, a circuit's losses): the one shown, else
     the newest; and what a result proposes for another analysis (a converter's input rail), with what it could not

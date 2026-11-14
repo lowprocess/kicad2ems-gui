@@ -2787,10 +2787,14 @@ class MainWindow(QMainWindow):
         if self.isVisible() and board and os.path.exists(board) and not self.busy() and RF in self.study.ticked():
             self.start(True)                                        # kicad2ems's own: the board
 
+    SOURCES_S = 1.0         # s: how long the runs read from disk stand while their folders are unchanged
+
     def sources(self):
         """This board's results, as the Results of box lists them: [{folder, kind, label}], kind 'preview', 'rf'
-        (a run of kicad2ems's own), 'pdn' or 'mqs'; each kind's newest first."""
-        from .runfolders import runs, preview_dir, tool_runs
+        (a run of kicad2ems's own), 'pdn' or 'mqs'; each kind's newest first. Read again once the output folder or
+        the board's own changes, SOURCES_S on, or after refresh_runs: a settings change had read every run folder
+        once per analysis asked and per row of its table (20 ms each at 200 runs)."""
+        import time
         try:
             vals = self.setup.values()
         except ValueError:                                          # a field half typed
@@ -2799,6 +2803,22 @@ class MainWindow(QMainWindow):
         if not board:
             return []
         base = self.out_dir(vals)
+
+        def stamp(d):
+            try:
+                return os.stat(d).st_mtime_ns
+            except OSError:
+                return None
+        key = (os.path.abspath(base), os.path.abspath(board), stamp(base), stamp(os.path.dirname(os.path.abspath(board))))
+        memo = getattr(self, '_sources_memo', None)
+        if memo and memo[0] == key and time.monotonic() - memo[1] < self.SOURCES_S:
+            return [dict(s) for s in memo[2]]
+        out = self._read_sources(base, board)
+        self._sources_memo = (key, time.monotonic(), out)
+        return [dict(s) for s in out]
+
+    def _read_sources(self, base, board):
+        from .runfolders import runs, preview_dir, tool_runs
         out = []
         pv = preview_dir(base, board)
         if os.path.isdir(pv):
@@ -2810,6 +2830,7 @@ class MainWindow(QMainWindow):
     def refresh_runs(self, select=None):
         """The Results of choice: this board's preview and runs, then its Power integrity and Near field results,
         each kind's newest first; select: the folder to show as chosen. Returns the runs [(folder, label)]."""
+        self._sources_memo = None                                   # (a run just finished: read them again)
         srcs = self.sources()
         keep = select or self.runs_box.currentData()
         self.runs_box.blockSignals(True)
