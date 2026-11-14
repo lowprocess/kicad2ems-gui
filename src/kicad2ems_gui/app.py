@@ -2409,8 +2409,21 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{name}{'*' if self.setup.dirty else ''} - kicad2ems")
 
     def closeEvent(self, ev):
+        if self.proc is not None and self.current is not None:      # kicad2ems's own run: it ends with the window
+            kind = 'preview' if self.current.preview else 'run'
+            if QMessageBox.question(self, 'A run is going', f"kicad2ems's {kind} is going: closing the window stops "
+                                    f"it (its folder keeps what it has written). Stop it and close?") \
+                    != QMessageBox.Yes:
+                ev.ignore()
+                return
         if self.setup.maybe_save():
             self._save_shape()
+            if self.proc is not None:                               # asked above: stopped, as its second Stop does
+                self.proc.kill()
+                self.proc.waitForFinished(3000)
+            self.viewer.section.wait_jobs()                         # the Section page's and the calculator's solves
+            if getattr(self, 'impedance', None) is not None:
+                self.impedance.wait_jobs()
             for page in self.pages.values():                         # a tool still running: stopped with the window
                 if page.proc is not None:
                     page.stop()

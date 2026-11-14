@@ -544,6 +544,7 @@ class AnalysisPanel(QWidget):
             return
         runs = self.runs()
         self._queue = runs[1:] if self.table and not preview else []
+        self._stopped = False
         self._count, self._failed = len(self._queue) + 1, 0
         self.log.clear()                                            # one log for the rows' runs together
         while not self._start_one(runs[0], preview):                # (one that cannot start: said, the next tried)
@@ -595,9 +596,26 @@ class AnalysisPanel(QWidget):
         k = self._count - len(self._queue)
         return f"{self.a.several} {k} of {self._count} ({self._label(self._vals)}): {text}"
 
+    STOP_GRACE_MS = 5000            # how long a tool has to stop what it started before it is killed
+
     def stop(self):
-        if self.proc is not None:
-            self.proc.kill()
+        """The tool asked to end (SIGTERM: it stops what it started, pcbqs's ngspice runs, kicad2ems-fem's Elmer and
+        Palace, and exits), killed if it has not after STOP_GRACE_MS; a table's next rows are not run. (It was killed
+        at once, so what it had started ran on, and a table's next row started.)"""
+        self._queue = []
+        if self.proc is None:
+            return
+        self._stopped = True
+        proc = self.proc
+        proc.terminate()
+
+        def kill():
+            try:
+                if proc.state() != proc.ProcessState.NotRunning:
+                    proc.kill()
+            except RuntimeError:                                    # (ended and deleted meanwhile)
+                pass
+        QTimer.singleShot(self.STOP_GRACE_MS, kill)
 
     def _read(self):
         return bytes(self.proc.readAllStandardOutput()).decode(errors='replace') if self.proc is not None else ''
@@ -623,8 +641,11 @@ class AnalysisPanel(QWidget):
             lines = [l for l in self.log.toPlainText().splitlines() if l.strip()]
             errs = [l for l in lines if 'error' in l.lower() or l.startswith(('RuntimeError', 'ValueError'))]
             last = (errs or lines or [''])[-1].strip()
-            self.status.setText(self._progress(f"the run failed (exit {code})" + (f": {last[:200]}" if last else '')
-                                               + ' (the whole log: the Run page)'))
+            if getattr(self, '_stopped', False):
+                self.status.setText(self._progress('stopped'))
+            else:
+                self.status.setText(self._progress(f"the run failed (exit {code})" + (f": {last[:200]}" if last else '')
+                                                   + ' (the whole log: the Run page)'))
             self.status.setToolTip('\n'.join((errs or lines)[-8:]))
             self._failed = self._failed or (code or 1)
         else:

@@ -134,3 +134,27 @@ def test_an_option_proposed_without_a_value_must_be_set(app, tmp_path):
     p.start()
     wait(app, p)
     assert p.status.text().startswith('done')
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='SIGTERM')
+def test_stop_lets_the_tool_stop_what_it_started(app, tmp_path):
+    """Stop asks the tool to end (SIGTERM: pcbqs stops its ngspice runs, kicad2ems-fem its Elmer and Palace), and a
+    table's next rows are not run. It was killed at once, so what it had started ran on, and the next row began."""
+    p = AP.AnalysisPanel(FA.PowerIntegrity())
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    p.board.setText(str(board))
+    p.outdir.setText(str(tmp_path / 'out'))
+    p.set_values(dict(rail='SLOW'))
+    p.start()
+    t0 = time.time()
+    while 'pdn: solving' not in p.log.toPlainText() and time.time() - t0 < 30:
+        app.processEvents()
+        time.sleep(0.02)
+    p._queue = [dict(rail='+3V3')]                                  # as a table's next row
+    p.stop()
+    wait(app, p)
+    assert p._queue == [] and 'stopped what it started' in p.log.toPlainText() and p.status.text() == 'stopped'
+    child = int((tmp_path / 'child.pid').read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)

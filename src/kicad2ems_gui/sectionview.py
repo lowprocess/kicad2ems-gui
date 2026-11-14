@@ -133,6 +133,11 @@ class SectionView(QWidget):
     def busy(self):
         return bool(self._jobs)
 
+    def wait_jobs(self, ms=15000):
+        """Let the solves going end (a QThread destroyed while it runs aborts the program: the window's close)."""
+        for job in list(self._jobs):
+            job.wait(ms)
+
     def _solved(self, want, v):
         if want != self._want:                          # another section was picked meanwhile
             return

@@ -11,7 +11,8 @@ The settings form is made from kicad2ems's option tables and its solver registry
 (openEMS, mom25d, gfdtd or any other plugin) gets its tick box and its settings with no change here. The analyses
 come the same way, from kicad2ems's analysis registry (`kicad2ems.api.frontend.analyses`): the window knows none
 of them by name. Each run is a process of its own (`kicad2ems.runs`, or the analysis's command), so the window
-needs nothing of a solver's and closing it never loses a run. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/docs/gui.md) covers using it.
+needs nothing of a solver's and a solver's crash never takes the window with it. Closing the window stops a run that
+is going (it asks first); what the run had written stays in its folder. kicad2ems's [GUI page](https://github.com/lowprocess/kicad2ems/blob/main/docs/gui.md) covers using it.
 
 ## The window
 

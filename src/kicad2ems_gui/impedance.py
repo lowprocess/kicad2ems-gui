@@ -263,6 +263,13 @@ class ImpedanceCalculator(QDialog):
     def busy(self):
         return bool(self._jobs) or self._later.isActive() or self.view.busy()
 
+    def wait_jobs(self, ms=15000):
+        """Let the solves going end (the window's close: a QThread destroyed while it runs aborts the program)."""
+        self._later.stop()
+        for job in list(self._jobs):
+            job.wait(ms)
+        self.view.wait_jobs(ms)
+
     def _show_error(self, text):
         self.result, self.error, self.solved = None, text, None
         self.out.setText(f"<span style='color:#b00020'>{text}</span>")

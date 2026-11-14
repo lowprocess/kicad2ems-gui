@@ -16,6 +16,19 @@ if kind == 'find':
 fake_analyses.install()
 out, v = sys.argv[2], json.loads(sys.argv[3])
 print(f"{kind}: reading the board", flush=True)
+if v.get('rail') == 'SLOW':                                         # as a tool that starts a solver: SIGTERM stops
+    import signal, subprocess, time                                 # its child, then the tool
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    open(os.path.join(os.path.dirname(out) or '.', 'child.pid'), 'w').write(str(child.pid))
+
+    def on_term(*_):
+        child.terminate()
+        child.wait()
+        print(f"{kind}: stopped what it started", flush=True)
+        sys.exit(143)
+    signal.signal(signal.SIGTERM, on_term)
+    print(f"{kind}: solving", flush=True)
+    time.sleep(60)
 if v.get('rail') == 'FAIL':
     print(f"{kind}: error: the rail has no copper", file=sys.stderr, flush=True)
     sys.exit(3)
