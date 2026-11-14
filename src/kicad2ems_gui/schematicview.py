@@ -592,7 +592,7 @@ PART_FIELDS={                                       # the general model's parts:
     'capacitor':[('value','Value (F)'),('ESR_ohm','ESR (Ω)'),('ESL_H','ESL (H)'),('leakage_ohm','Leakage (Ω)'),('bias_factor','Capacitance bias factor')],
     'inductor':[('value','Value (H)'),('DCR_ohm','DCR (Ω)'),('SRF_Hz','Self resonance (Hz)'),('Cp_F','Self capacitance (F)'),('core_R_ohm','Core loss resistance (Ω)')],
     'diode':[('model.Vf_V','Forward drop (V)'),('model.If_A','… at current (A)'),('model.R_ohm','Series resistance (Ω)'),('model.Cj_F','Junction capacitance (F)'),('model.TT_s','Transit time (s)')],
-    'switch':[('model.Ron_ohm','On resistance (Ω)'),('model.Cds_F','Output capacitance Cds (F)'),('model.dead_time_s','Dead time (s)'),('model.rise_s','Gate rise (s)'),('model.fall_s','Gate fall (s)'),
+    'switch':[('model.Ron_ohm','On resistance (Ω)'),('model.Cds_F','Output capacitance Cds (F)'),('model.Cgs_F','Gate capacitance Cgs (F)'),('model.Cgd_F','Miller capacitance Cgd (F)'),('model.dead_time_s','Dead time (s)'),('model.rise_s','Gate rise (s)'),('model.fall_s','Gate fall (s)'),
               ('model.gate_V','Gate voltage (V)'),('model.diode_TT_s','Body diode transit time (s)'),('model.Vth_V','Threshold (V)')],
     'source':[('dc_V','DC voltage (V)'),('dc_A','DC current (A)'),('wave.amplitude_V','Sine amplitude (V)'),('wave.high_V','Pulse high (V)'),('wave.frequency_Hz','Wave frequency (Hz)'),
               ('R_ohm','Series resistance (Ω)'),('L_H','Series inductance (H)')],
@@ -884,7 +884,7 @@ class SchematicEditor(QWidget):
         def change(c):
             if kind=='switch':
                 if not c.get('drives'):c['drives']={'pwm':dict(frequency_Hz=100e3,duty=0.5)}
-                part.update(drive=next(iter(c['drives'])),model=dict(type='switch',Ron_ohm=number,Cds_F='300p'))
+                part.update(drive=next(iter(c['drives'])),model=dict(type='vdmos',Ron_ohm=number))
             c['parts'].append(part)
         self.selected_key='part:'+ref
         if self.commit(change,'Added '+ref):self.scene.focus(self.selected_key)

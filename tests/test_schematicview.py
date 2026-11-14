@@ -206,7 +206,7 @@ def test_general_model_parts_are_edited_added_and_removed(qapp):
     assert ed.drive.currentText()=='pwm' and ed.fields['model.Ron_ohm'].text()=='30m'
     ed.fields['model.Cds_F'].setText('300p');ed.invert.setChecked(True);assert ed.apply_part()
     q1=next(p for p in ed.config['parts'] if p['ref']=='Q1')
-    assert q1['model']['Cds_F']=='300p' and q1['invert'] is True and q1['model']['type']=='switch'
+    assert q1['model']['Cds_F']=='300p' and q1['invert'] is True and q1['model']['type']=='vdmos'
     ed.select('part:R1');ed.fields['resistance_ohm'].setText('vout/(2*iout)');assert ed.apply_part()
     assert ed.scene.devices['part:R1'].record['label']=='1.25 Ω'    # the number behind the expression
     ed.fields['resistance_ohm'].setText('vout/ix');assert not ed.apply_part() and "unknown name 'ix'" in ed.note.text()
