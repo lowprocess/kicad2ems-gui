@@ -2635,9 +2635,11 @@ class MainWindow(QMainWindow):
             if own:
                 panel.set_own(own, None)
             panel.set_values(values)
-        elif hasattr(target, 'load_settings'):
-            target.load_settings(dict(values, **({'board': own} if own else {})))
-            target.model_path = None
+        elif hasattr(target, 'load_settings'):                      # (no model named: its settings for the model
+            named = bool(values.get('model'))                       # on the page, which stays, with its file)
+            target.load_settings(dict(values, **({'board': own} if own else {})), keep_model=not named)
+            if named:
+                target.model_path = None
             panel = target.settings_panel()
         else:
             return

@@ -703,7 +703,7 @@ class SchematicEditor(QWidget):
         super().__init__(parent);self.config={};self.undo_stack=[];self.redo_stack=[];self.selected_key='';self.model_provider=None;self.job=None;self.fields={};self._sheets={};self._rendered_source=None;self._loading=False
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);bar=QHBoxLayout();root.addLayout(bar)
         self.mode=QComboBox();self.mode.addItems(['Simulation schematic','KiCad source sheets','KiCad component data']);bar.addWidget(self.mode)
-        for text,slot in [('Import KiCad…',self.import_file),('Add part…',self.add_passive),('Remove',self.remove_part),('Rotate',lambda:self.rotate_part(self.selected_key,90)),('Undo',self.undo),('Redo',self.redo),('Arrange',self.arrange),('Fit',self.fit)]:
+        for text,slot in [('Import KiCad…',self.import_file),('Add part…',self.add_part),('Remove',self.remove_part),('Rotate',lambda:self.rotate_part(self.selected_key,90)),('Undo',self.undo),('Redo',self.redo),('Arrange',self.arrange),('Fit',self.fit)]:
             button=QPushButton(text);button.clicked.connect(slot);bar.addWidget(button)
             if text=='Rotate':button.setToolTip('Turn the selected part 90° clockwise (R; Shift+R anticlockwise; right-click for more)')
         self.find=QLineEdit();self.find.setPlaceholderText('Find ref / net');self.find.returnPressed.connect(self.find_ref);bar.addWidget(self.find,1)
@@ -829,7 +829,7 @@ class SchematicEditor(QWidget):
         for index,pin in enumerate(['a','b']):
             w=QComboBox();w.setEditable(True);w.addItems(options);w.setCurrentText(part['nodes'][index]);self.ends[pin]=w;form.addRow(names[index],w)
         note=QLabel('A value is a number, SI notation (33n, 24u, 110m) or an expression of the model\'s parameters (vout/iout). Blank removes an optional field.');note.setWordWrap(True);form.addRow(note)
-        apply=QPushButton('Apply component changes');apply.clicked.connect(self.apply_selected);form.addRow(apply);self.inspector.setWidget(body)
+        apply=QPushButton('Apply component changes');apply.clicked.connect(self.apply_part);form.addRow(apply);self.inspector.setWidget(body)
 
     def apply_part(self):
         key=self.selected_key
@@ -851,9 +851,6 @@ class SchematicEditor(QWidget):
                 part.setdefault('model',{})['type']=kind
             for name,value in values.items():_plant(part,name,value)
         return self.commit(edit)
-
-    def apply_selected(self):
-        return self.apply_part()
 
     def add_part(self):
         """A new part of the general model, of any type, between two nodes."""
@@ -886,9 +883,6 @@ class SchematicEditor(QWidget):
             c['parts'].append(part)
         self.selected_key='part:'+ref
         if self.commit(change,'Added '+ref):self.scene.focus(self.selected_key)
-
-    def add_passive(self):
-        return self.add_part()
 
     def remove_part(self):
         key=self.selected_key

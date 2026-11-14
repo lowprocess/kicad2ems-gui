@@ -99,3 +99,33 @@ def test_a_study_s_config_holds_the_circuit(tab,tmp_path):
     assert tab.open_run(str(run)) and tab.out==str(run) and not tab.open_run(str(tmp_path))
     old=tmp_path/'bridge-run';old.mkdir();(old/'power-circuit.json').write_text(json.dumps(dict(format=1,complete=True,cases=[])))
     assert not tab.open_run(str(old)) and tab.out==str(run)         # the old full-bridge tool's run: not a result now
+
+
+def test_a_study_whose_model_will_not_load_keeps_it(tab,tmp_path):
+    """A config that names the old full-bridge tool's model (format 1, under the window's own <config>_circuit.json):
+    refused, the page starts from its template, and saving the study leaves that file as it was and the config naming
+    it. Opened after another study, nothing of that one's is written into it. Started anew, the study's model goes
+    in a file of its own, the old one kept."""
+    other=tmp_path/'a_circuit.json';tab.write_model(str(other),tab.values());tab.load_settings(dict(model=str(other)))
+    assert tab.model_path==str(other)
+    old=tmp_path/'s_circuit.json';old.write_text(json.dumps(dict(format=1,components=[dict(ref='Q1')])));before=old.read_text()
+    kept=other.read_text()
+    tab.load_settings(dict(model=str(old)))
+    assert tab.model_path is None and tab.refused==str(old) and 'left as it is' in tab.status.text()
+    assert tab.values()['name'].startswith('Boost converter')
+    assert tab.save_settings(str(tmp_path/'s.toml'))['model']=='s_circuit.json'
+    assert old.read_text()==before and other.read_text()==kept
+    tab.new_model('boost')                                          # started anew: its own file, the old one kept
+    class Study:
+        def ticked(self):return ['circuit']
+    tab.win=type('Win',(),dict(study=Study()))()                   # (the window's study asks for the circuit)
+    assert tab.save_settings(str(tmp_path/'s.toml'))['model']=='s_circuit-2.json' and old.read_text()==before
+    tab.win=None
+
+
+def test_a_proposal_with_no_model_sets_the_one_on_the_page(tab,tmp_path):
+    """kicad2ems-fem's coils (Set lines, no model): the page's model stays, with its file, and takes the settings."""
+    mine=tmp_path/'m.json';m=tab.values();m['name']='Mine';mine.write_text(json.dumps(m))
+    tab.load_settings(dict(model=str(mine)))
+    tab.load_settings(dict(set='C1.value=2.2e-05'),keep_model=True)
+    assert tab.values()['name']=='Mine' and tab.model_path==str(mine) and tab.panel.values()['set']=='C1.value=2.2e-05'

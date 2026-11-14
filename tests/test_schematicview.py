@@ -24,7 +24,7 @@ def part(c,ref):
 
 def test_component_edit_and_undo_redo_reach_json_and_run_values(tab):
     view=tab.schematic;view.select('part:C25');view.fields['value'].setText('47n');view.fields['ESR_ohm'].setText('12m')
-    assert view.apply_selected()
+    assert view.apply_part()
     c=tab.values();assert part(c,'C25')['value']=='47n' and part(c,'C25')['ESR_ohm']=='12m'      # as written: SI notation
     assert part(json.loads(tab.editor.toPlainText()),'C25')['value']==part(c,'C25')['value']
     view.undo();assert part(tab.values(),'C25')['value']==33e-9
@@ -32,22 +32,22 @@ def test_component_edit_and_undo_redo_reach_json_and_run_values(tab):
 
 
 def test_nodes_a_switch_and_the_receiver_are_edited_as_any_part(tab):
-    view=tab.schematic;view.select('part:L3');view.ends['a'].setCurrentText('CUSTOM');view.fields['DCR_ohm'].setText('75m');assert view.apply_selected()
+    view=tab.schematic;view.select('part:L3');view.ends['a'].setCurrentText('CUSTOM');view.fields['DCR_ohm'].setText('75m');assert view.apply_part()
     assert part(tab.values(),'L3')['nodes'][0]=='CUSTOM' and part(tab.values(),'L3')['DCR_ohm']=='75m'
-    view.select('part:Q1');view.choice.setCurrentText('switch');view.fields['model.Ron_ohm'].setText('15m');assert view.apply_selected()
+    view.select('part:Q1');view.choice.setCurrentText('switch');view.fields['model.Ron_ohm'].setText('15m');assert view.apply_part()
     assert part(tab.values(),'Q1')['model']['Ron_ohm']=='15m' and part(tab.values(),'Q1')['model']['type']=='switch'
-    view.select('part:CSECONDARY');view.fields['value'].setText('100n');assert view.apply_selected()
+    view.select('part:CSECONDARY');view.fields['value'].setText('100n');assert view.apply_part()
     assert part(tab.values(),'CSECONDARY')['value']=='100n'
 
 
 def test_invalid_json_is_not_overwritten_by_diagram_edit(tab):
     view=tab.schematic;view.select('part:C25');view.fields['value'].setText('47n');tab.editor.setPlainText('{ incomplete')
-    assert not view.apply_selected();assert tab.editor.toPlainText()=='{ incomplete'
+    assert not view.apply_part();assert tab.editor.toPlainText()=='{ incomplete'
     assert part(view.config,'C25')['value']==33e-9
 
 
 def test_layout_round_trip_and_noop_precision(tab):
-    original=tab.values();tab.schematic.select('part:PRIMARY');assert tab.schematic.apply_selected()
+    original=tab.values();tab.schematic.select('part:PRIMARY');assert tab.schematic.apply_part()
     assert part(tab.values(),'PRIMARY')==part(original,'PRIMARY')
     tab.schematic.save_positions({'part:C25':[123.5,456]})
     c=tab.values();assert c['schematic']['positions']['part:C25']==[123.5,456]
@@ -61,7 +61,7 @@ def test_render_and_selection_are_functional(tab):
     tab.schematic.find.setText('VHB');tab.schematic.find_ref();assert 'VHB' in tab.schematic.note.text()
 
 
-def test_import_review_requires_explicit_additions_and_marks_dnp(tab):
+def test_import_review_ticks_what_it_takes_over_and_not_the_unfitted(tab):
     from PySide6.QtCore import Qt
     doc=dict(components=[dict(ref='C25',value='47n',kind='capacitor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',fields={},properties={},footprint='',lib_id='Device:C',value_si=47e-9,pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),
                          dict(ref='RNEW',value='1k',kind='resistor',supported_passive=True,dnp=False,exclude_from_sim=False,sheet='/',fields={},properties={},footprint='',lib_id='Device:R',value_si=1e3,pins=[dict(number='1',name='',net='VHB'),dict(number='2',name='',net='GND')]),
@@ -69,6 +69,8 @@ def test_import_review_requires_explicit_additions_and_marks_dnp(tab):
     # (the window's own has the tab as parent; a top-level one left to the interpreter's exit crashed it on Qt 6.12,
     # after every test had passed: exit 139 on Linux, 127 on Windows)
     dialog=ImportReview(doc,tab.values(),tab)
+    assert dialog.selected_refs()==['C25','RNEW']                   # (pcbqs.circuit.kicad.status: a new part ticked,
+                                                                    # one not fitted not)
     assert '33' in dialog.table.item(0,3).text() and dialog.table.item(0,2).text()=='47n'
     dialog.select('existing');assert dialog.selected_refs()==['C25']
     dialog.select('all');assert dialog.selected_refs()==['C25','RNEW']                   # (C17: not fitted)
@@ -196,18 +198,18 @@ def test_general_model_parts_are_edited_added_and_removed(qapp):
     ed.select('part:L1')
     assert set(ed.fields)=={'value','DCR_ohm','SRF_Hz','Cp_F','core_R_ohm'} and ed.fields['value'].text()=='22u'
     ed.fields['value'].setText('33u');ed.fields['DCR_ohm'].setText('');ed.ends['b'].setCurrentText('sw')
-    assert not ed.apply_selected() and "both nodes are 'sw'" in ed.note.text()      # said, and not applied
-    ed.ends['b'].setCurrentText('out');assert ed.apply_selected()
+    assert not ed.apply_part() and "both nodes are 'sw'" in ed.note.text()      # said, and not applied
+    ed.ends['b'].setCurrentText('out');assert ed.apply_part()
     l1=next(p for p in ed.config['parts'] if p['ref']=='L1')
     assert l1['value']=='33u' and 'DCR_ohm' not in l1
     ed.select('part:Q1')
     assert ed.drive.currentText()=='pwm' and ed.fields['model.Ron_ohm'].text()=='30m'
-    ed.fields['model.Cds_F'].setText('300p');ed.invert.setChecked(True);assert ed.apply_selected()
+    ed.fields['model.Cds_F'].setText('300p');ed.invert.setChecked(True);assert ed.apply_part()
     q1=next(p for p in ed.config['parts'] if p['ref']=='Q1')
     assert q1['model']['Cds_F']=='300p' and q1['invert'] is True and q1['model']['type']=='switch'
-    ed.select('part:R1');ed.fields['resistance_ohm'].setText('vout/(2*iout)');assert ed.apply_selected()
+    ed.select('part:R1');ed.fields['resistance_ohm'].setText('vout/(2*iout)');assert ed.apply_part()
     assert ed.scene.devices['part:R1'].record['label']=='1.25 Ω'    # the number behind the expression
-    ed.fields['resistance_ohm'].setText('vout/ix');assert not ed.apply_selected() and "unknown name 'ix'" in ed.note.text()
+    ed.fields['resistance_ohm'].setText('vout/ix');assert not ed.apply_part() and "unknown name 'ix'" in ed.note.text()
     n=len(ed.config['parts'])
     ed.insert_part('capacitor','C9','100n','out','0');ed.insert_part('switch','Q9','0.01','sw','0')
     assert len(ed.config['parts'])==n+2 and next(p for p in ed.config['parts'] if p['ref']=='Q9')['drive']=='pwm'

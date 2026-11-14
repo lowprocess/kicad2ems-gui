@@ -109,6 +109,8 @@ class PowerCircuitTab(QWidget):
         self.schematic.modelChanged.connect(self.schematic_changed)      # (the schematic has its own note line)
         self.editor.textChanged.connect(lambda:self.refresh_timer.start() if not self._syncing else None)
         self.model_path=None                                        # the file the model came from (a config's, a loaded one)
+        self.refused=None                                           # a config's model file that would not load: kept
+                                                                    # as the config's, never written over (save_settings)
         if win is not None:                                         # the circuits to start from: the window's examples
             self.examples_btn=QPushButton('Examples');self.examples_btn.setToolTip('The circuits to start from: File > Examples > Circuits')
             self.examples_btn.clicked.connect(self.show_examples);self.top_row.insertWidget(0,self.examples_btn)
@@ -183,7 +185,7 @@ class PowerCircuitTab(QWidget):
         return model.template(name)
 
     def new_model(self,name):
-        try:self.set_model(self.template(name));self.model_path=None;self.status.setText(f'Started from the {name} template.')
+        try:self.set_model(self.template(name));self.model_path=None;self.refused=None;self.status.setText(f'Started from the {name} template.')
         except (OSError,ValueError,ImportError) as e:self.status.setText('Template unavailable: '+str(e))
 
     def shown(self):
@@ -192,6 +194,7 @@ class PowerCircuitTab(QWidget):
 
     def _model_edited(self):
         if not self._syncing:
+            self.refused=None                                       # (edited: the page's model is the study's now)
             self.refresh_timer.start();self.panel._edited()
 
     @staticmethod
@@ -229,6 +232,7 @@ class PowerCircuitTab(QWidget):
         if diagram:QTimer.singleShot(0,self.schematic.fit)
 
     def schematic_changed(self,c):
+        self.refused=None
         self.refresh_timer.stop();self.set_model(c,diagram=False);self.panel._edited()
 
     def refresh_schematic(self,*_):
@@ -258,7 +262,7 @@ class PowerCircuitTab(QWidget):
                 if part.get('model',{}).get('library'):part['model']['library']=str((here/part['model']['library']).resolve())
             board=(c.get('board') or {}).get('file')
             if board and not Path(board).is_absolute():c['board']['file']=str((here/board).resolve())
-            self.set_model(c);self.model_path=str(Path(p).resolve())
+            self.set_model(c);self.model_path=str(Path(p).resolve());self.refused=None
             return True
         except (OSError,ValueError,KeyError) as e:self.status.setText(f'{Path(p).name}: {e}');return False
 
@@ -280,10 +284,12 @@ class PowerCircuitTab(QWidget):
         if p:self.board.setText(p)
 
     # ---- a study's config: [analysis.circuit] ----
-    def load_settings(self,tab):
+    def load_settings(self,tab,keep_model=False):
         """A config's [analysis.circuit] table (its paths already whole): the model it names, the options it sets
         (the copper and fields ticks, the engine), a board and a folder of its own. An empty one: the page as it
-        opens."""
+        opens; keep_model (a proposal that names no model, only settings for it): the model on the page stays.
+        A model that will not load (not a circuit model): the page starts from its template, and the config keeps
+        naming that file, which nothing writes over until another model is loaded, started or edited."""
         tab=dict(tab)
         self.panel.reset();self.panel.set_own(tab.pop('board',None),tab.pop('out',None))
         model=tab.pop('model',None)
@@ -291,6 +297,14 @@ class PowerCircuitTab(QWidget):
         if on('fields'):tab['copper']=True
         if model:
             if self.load_model(str(model)):self.status.setText(f"Model: {Path(str(model)).name}")
+            else:
+                said=self.status.text()
+                try:self.set_model(self.template('simple'))
+                except (OSError,ValueError,ImportError,KeyError,TypeError):pass
+                self.model_path,self.refused=None,str(Path(str(model)).resolve())
+                self.status.setText(said+'  The study still names it, and it is left as it is: load or start a model to replace it.')
+        elif keep_model:
+            pass
         elif self.model_path is not None:
             try:self.set_model(self.template('simple'))
             except (OSError,ValueError,ImportError,KeyError,TypeError):pass
@@ -305,15 +319,20 @@ class PowerCircuitTab(QWidget):
         as a file: the one it came from, else <config>_circuit.json beside the config. {}: the page was never
         given a model and the analysis is not asked, so the study has no circuit."""
         ticked=self.win is not None and hasattr(self.win,'study') and 'circuit' in self.win.study.ticked()
-        if self.model_path is None and not ticked:return {}
+        if self.model_path is None and self.refused is None and not ticked:return {}
         base=Path(config).resolve().parent;tab={}
-        try:
-            c=self.values()
-            if self.model_path is None:self.model_path=str(base/(Path(config).stem+'_circuit.json'))
-            self.write_model(self.model_path,c)
-        except (ValueError,KeyError,OSError) as e:self.status.setText(f'The model was not saved: {e}')
         rel=lambda p:os.path.relpath(os.path.abspath(p),base).replace(os.sep,'/')
-        if self.model_path:tab['model']=rel(self.model_path)
+        if self.refused is not None and self.model_path is None:    # the config's own, which would not load: as it was
+            tab['model']=rel(self.refused)
+        else:
+            try:
+                c=self.values()
+                if self.model_path is None:                         # its own file beside the config, never another's
+                    name=Path(config).stem+'_circuit';self.model_path=str(base/(name+'.json'));n=2
+                    while Path(self.model_path).exists():self.model_path=str(base/f'{name}-{n}.json');n+=1
+                self.write_model(self.model_path,c)
+            except (ValueError,KeyError,OSError) as e:self.status.setText(f'The model was not saved: {e}')
+            if self.model_path:tab['model']=rel(self.model_path)
         mine={o['key'] for o in self.panel.options}
         tab.update({k:v for k,v in config_values(self.panel,str(base)).items() if k in ('board','out') or k in mine})
         return tab
