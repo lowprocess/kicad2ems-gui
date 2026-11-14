@@ -74,8 +74,8 @@ def test_the_window_begins_on_the_start_page(tmp_path, monkeypatch):
     w.show()
     app.processEvents()
     start = w.docks['Start']
-    assert start.widget() is w.start and start in w.work.tabifiedDockWidgets(w.docks['Viewer']) and start.in_front()
-    assert len(w.start.tiles) > 5 and set(w.start.buttons) == {'Open a KiCad board…', 'Open a config…', 'Open a results folder…'}
+    assert start.widget() is w.start_page and start in w.work.tabifiedDockWidgets(w.docks['Viewer']) and start.in_front()
+    assert len(w.start_page.tiles) > 5 and set(w.start_page.buttons) == {'Open a KiCad board…', 'Open a config…', 'Open a results folder…'}
     pages = [w.docks[n] for n in ('Results', 'Report', 'Tables', 'Run')]
     assert all(d.isHidden() for d in pages)                             # the workspace is the page's: nothing to show yet
     board = os.path.join(ROOT, 'examples', 'rf_bus.kicad_pcb')
@@ -103,7 +103,7 @@ def test_the_window_begins_on_the_start_page(tmp_path, monkeypatch):
     cfg = tmp_path / 'a.toml'
     cfg.write_text(f'board = "{board}"\n')
     w.remember(str(cfg))                                                # a config opened lately: listed
-    assert 'a.toml' in w.start.recent.text() and w.start._recent == [str(cfg)]
+    assert 'a.toml' in w.start_page.recent.text() and w.start_page._recent == [str(cfg)]
     w.setup.dirty = False
     w.close()
     QSettings('kicad2ems', 'gui').clear()

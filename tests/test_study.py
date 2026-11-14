@@ -583,3 +583,30 @@ def test_still_needed_and_what_run_says(window, tmp_path):
     w.update_needed()
     assert run.text() == 'Run' and 'Tick a question' in run.toolTip()
     w.setup.dirty = False
+
+
+def test_the_window_s_own_run_starts_and_ends(window, tmp_path, monkeypatch):
+    """Preview and Run start kicad2ems's own run (MainWindow.start: a Start page called `start` once hid it), its
+    events reach the Log, and the window is idle after; a start that raises says so on its row and leaves the
+    window idle too (it stayed busy, so every later Run said "a run is going")."""
+    import sys
+    from kicad2ems import runs
+    w, app, _ = window
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    script = tmp_path / 'fake_run.py'
+    script.write_text("import json, sys\nev = sys.argv[sys.argv.index('--events') + 1]\n"
+                      "with open(ev, 'a') as f:\n"
+                      "    f.write(json.dumps(dict(kind='log', text='fake run here')) + '\\n')\n"
+                      "    f.write(json.dumps(dict(kind='done', code=0)) + '\\n')\n")
+    monkeypatch.setattr(runs.Run, 'argv', lambda self: [sys.executable, str(script), self.toml, '--events', self.events])
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.study.set_ticked(['rf'])
+    w.preview()
+    assert w.job == 'rf' and w.proc is not None
+    run_to_the_end(w, app)
+    assert not w.busy() and 'fake run here' in w.runtab.log.toPlainText()
+    monkeypatch.setattr(type(w), 'start', lambda self, preview: 1 / 0)
+    w.preview()
+    assert not w.busy() and 'ZeroDivisionError' in w.study.state('rf')
+    assert 'ZeroDivisionError' in w.runtab.log.toPlainText()        # its traceback in the log

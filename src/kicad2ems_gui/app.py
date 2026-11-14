@@ -1491,7 +1491,8 @@ class MainWindow(QMainWindow):
         self.setup, self.runtab, self.results = SetupTab(self), RunTab(self), ResultsTab(self)
         self.viewer = Viewer(self)
         from .startpage import StartPage
-        self.start = StartPage(self)                        # where a window with no board begins
+        self.start_page = StartPage(self)                   # where a window with no board begins (not `start`:
+                                                            # that is the method that starts kicad2ems's run)
         self._had_board, self._aside = None, None                   # (the pages that stepped aside for Start)
         self.filter = FilterTab(self)
         self._analyses()
@@ -1522,7 +1523,7 @@ class MainWindow(QMainWindow):
         hidden.hide()
         self.work.setCentralWidget(hidden)                          # the pages take the whole workspace
         widgets = {'Viewer': self.viewer, 'Run': self.runtab, 'Results': self.results, 'Filter': self.filter,
-                   'Report': self.results.reportview, 'Tables': self.results.tablesview, 'Start': self.start,
+                   'Report': self.results.reportview, 'Tables': self.results.tablesview, 'Start': self.start_page,
                    'Section': self.viewer.section,
                    **{BY_KEY[k].page: p for k, p in self.editors.items()}}
         self.docks = {}
@@ -1780,7 +1781,13 @@ class MainWindow(QMainWindow):
         while self.queue:
             key = self.queue.pop(0)
             self.job, self._job_t0 = key, time.monotonic()
-            why = self._start_job(key, self._queue_preview)
+            try:
+                why = self._start_job(key, self._queue_preview)
+            except Exception as e:                                  # a page's or a plugin's bug: said on the row,
+                import traceback                                    # and the queue goes on (the window must not
+                page = self.pages.get(key)                          # stay busy with nothing running)
+                (page.log if page is not None else self.runtab.log).appendPlainText(traceback.format_exc())
+                why = f"{type(e).__name__}: {e}"
             if why is None:
                 self._job_state(key, 'running')
                 self.acts['Stop'].setEnabled(True)
@@ -2351,7 +2358,7 @@ class MainWindow(QMainWindow):
         r = [path] + [p for p in self.recent() if p != path]
         self.qsettings.setValue('recent', r[:MAX_RECENT])
         self._fill_recent()
-        self.start.refresh_recent()
+        self.start_page.refresh_recent()
 
     def _fill_recent(self):
         self.recent_menu.clear()
@@ -2412,7 +2419,7 @@ class MainWindow(QMainWindow):
             self.system.stop()
             self.meters.stop()
             self.end_pick()
-            self.start.stop_pictures()
+            self.start_page.stop_pictures()
             for t in list(_READING):                                # a board still being read: let it end
                 t.wait(15000)
             self.solvers_dialog.close()
