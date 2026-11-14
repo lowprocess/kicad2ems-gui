@@ -14,7 +14,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView, QMenu
 
-from . import study as S
 from .study import RF, AUTO, StudyModel
 
 TONES = {'': None, 'gray': 'gray', 'bad': '#c62828'}
@@ -168,9 +167,6 @@ class StudyTree(QTreeWidget):
         q = self.current_question()
         if q is not None and any(e.name == key for e in self.m.engines.get(q, [])):
             self.selected.emit(q)                                   # its settings: the engines that can run now
-
-    def set_tool(self, key, text):                                 # the rows read the solvers' ticks themselves
-        self.refresh()
 
     def state(self, key):                                           # (QAbstractItemView has a state() of its own)
         """A run's state as it was set."""

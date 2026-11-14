@@ -34,7 +34,6 @@ class Analysis:
     page: str = ''          # its own page (a name of app.PANELS: the circuit's editor); '': Viewer, Run and Results
     needs: tuple = ()       # the analyses whose results it starts from
     preview: bool = False   # it has a preview (the model and meshes, no solve)
-    planned: bool = False   # no tool for it yet: listed, greyed
     note: str = ''          # the list's tooltip
 
 
@@ -88,16 +87,16 @@ def dependents(key):
 
 
 def run_order(ticked, preview=False, available=None):
-    """What a Run of the ticked analyses starts, in order: each after what it starts from; planned ones and (with
-    `available`, a set) those that cannot run here left out, with what follows them. preview: only the analyses
+    """What a Run of the ticked analyses starts, in order: each after what it starts from; those (with
+    `available`, a set) that cannot run here left out, with what follows them. preview: only the analyses
     that have one, each alone (a preview solves nothing, so nothing follows another)."""
     if preview:
-        return [a.key for a in ANALYSES if a.key in ticked and a.preview and not a.planned
+        return [a.key for a in ANALYSES if a.key in ticked and a.preview
                 and (available is None or a.key in available)]
     out = []
     for k in with_needs(ticked):
         a = BY_KEY[k]
-        if a.planned or (available is not None and k not in available) or any(n not in out for n in a.needs):
+        if (available is not None and k not in available) or any(n not in out for n in a.needs):
             continue
         out.append(k)
     return out

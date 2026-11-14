@@ -1,5 +1,8 @@
 """
 A page's tool as a child process (pcbqs's PDN, near-field and circuit tools, dfsynth): the page never imports it.
+Decided (R-F2): the Circuit page's editor imports pcbqs's circuit model, templates and netlist reader in the
+window (pure Python, no ngspice, no solver): it checks each edit as it is made, which a child process per edit
+could not; the runs are child processes as every other tool's.
 
     describe_tool(python, args, name, install)   (its --describe --json, or None; why not), asked once
     run_tool(page, argv, on_output, on_finished) page.proc: a QProcess running argv, its output merged

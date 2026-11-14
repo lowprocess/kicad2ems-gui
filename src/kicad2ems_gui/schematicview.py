@@ -167,8 +167,6 @@ class ZoomView(QGraphicsView):
             if self.transform().m11()>1.6:self.resetTransform();self.scale(1.6,1.6)   # a small circuit: not huge
 
 
-GROUPS=[('input','Input filter'),('dc','DC bus'),('bridgeA','Leg A'),('bridgeB','Leg B'),('tank','Tank'),
-        ('primary','Primary'),('receiver','Receiver'),('load','Load'),('other','Other')]   # the columns, in the power's order
 PITCH_X,PITCH_Y=200,76                                                 # a card is 124 x 40, its rail flags below
 PIN_X,PIN_Y=70,6
 INK,NET,PICK='#235e85','#5f6f7a','#d2860b'          # parts; every net, wire or flag; what the selection touches
@@ -209,10 +207,9 @@ class DeviceItem(QGraphicsObject):
 
     @staticmethod
     def natural(record):
-        """How a part stands before anyone turns it: a coil upright (its winding vertical) and the load across the
-        receiver's output, the rest along the flow."""
-        if 'stand' in record:return 90 if record['stand'] else 0    # the general model: a part to ground stands up
-        return 90 if record['kind']=='coil' or record['id']=='load' else 0
+        """How a part stands before anyone turns it: a part to ground and a winding stood up, the rest along the
+        flow."""
+        return 90 if record.get('stand') else 0
 
     @property
     def upright(self):
@@ -341,7 +338,7 @@ class DeviceItem(QGraphicsObject):
 
 
 class CircuitScene(QGraphicsScene):
-    """The parts in columns by where they sit in the power path (GROUPS), the rails as flags at their pins, the
+    """The parts in columns by where they sit in the power path (their group), the rails as flags at their pins, the
     other nets as wires from pin to pin, each with its name; selecting a part lights its nets."""
     selected=Signal(str)
     moved=Signal(dict)
@@ -359,17 +356,13 @@ class CircuitScene(QGraphicsScene):
 
     @staticmethod
     def default_positions(records):
-        """Columns in GROUPS' order (the empty ones left out), a part under another; the supply heads its column,
-        a bridge leg's high side above its low side."""
-        col=lambda r:'load' if r['id']=='load' else r['group']         # the load beside the receiver, not under it:
-        cols=[g for g,_ in GROUPS if any(col(r)==g for r in records)]   # its wires then pass no card
-        cols+=sorted({col(r) for r in records}-set(cols))
-        first={'supply':0,'secondary':0,'receiver_cap':1,'load':2}           # the coupled coil heads the receiver
-        order=lambda r:(first.get(r['id'],9),'VIN' not in r['nets'],'low-side' in r.get('details',''),_natural(r['ref']))
+        """Columns by the parts' groups (where each sits along the power's path), a part under another by its
+        reference; one stood up takes two rows."""
+        cols=sorted({r['group'] for r in records})
         out={}
         for c,g in enumerate(cols):
             row=0
-            for r in sorted((r for r in records if col(r)==g),key=order):
+            for r in sorted((r for r in records if r['group']==g),key=lambda r:_natural(r['ref'])):
                 if DeviceItem.natural(r) in (90,270):               # stood up: two rows, its lower pin just over the gap
                     out[r['id']]=(c*PITCH_X,row*PITCH_Y+TALL_DROP);row+=2
                 else:out[r['id']]=(c*PITCH_X,row*PITCH_Y);row+=1
@@ -389,12 +382,8 @@ class CircuitScene(QGraphicsScene):
             item=DeviceItem(r,self,(rotations or {}).get(r['id']));self.addItem(item);self.devices[r['id']]=item
             x,y=positions.get(r['id'],defaults[r['id']]);item.setPos(x,y)
         self.orient()
-        if not positions:                                           # the columns' names, over the arrangement
+        if not positions:
             self.legend([r['kind'] for r in records])
-            names=dict(GROUPS);font=QFont();font.setPixelSize(12);font.setBold(True)
-            for c,g in enumerate(cols):
-                if g not in names:continue                          # the general model's columns have no names
-                t=self.addSimpleText(names.get(g,g),font);t.setBrush(QColor(MUTED));t.setPos(c*PITCH_X-t.boundingRect().width()/2,-86);self.headers.append(t)
         nets={}
         for item in self.devices.values():
             for index,net in enumerate(item.record['nets']):nets.setdefault(net,[]).append((item,index))

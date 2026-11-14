@@ -14,25 +14,20 @@ def test_order_and_needs():
     assert study.dependents('pdn') == [] and study.dependents('rf') == []
     assert study.run_order(['circuit', 'mqs', 'rf']) == ['rf', 'mqs', 'circuit']
     assert study.run_order(['thermal', 'circuit']) == ['circuit', 'thermal']
-    assert not any(a.planned for a in study.ANALYSES)
     assert study.run_order(['rf', 'pdn', 'mqs'], preview=True) == ['rf', 'mqs']
     assert study.run_order(['rf', 'pdn'], available={'rf'}) == ['rf']       # pcbqs not installed
     assert study.run_order(['mqs'], preview=True, available={'rf'}) == []
 
 
-def test_a_planned_analysis_runs_once_it_has_a_tool(monkeypatch):
-    """An analysis that starts from another's results: planned, only what it needs runs; with a tool, after
-    that, and not at all when that cannot run."""
+def test_an_analysis_that_starts_from_another_runs_after_it(monkeypatch):
+    """An analysis that starts from another's results runs after that; without its own tool here (not available)
+    only what it needs runs, and not at all when that cannot run."""
     base = study.ANALYSES
-
-    def with_later(planned):
-        a = (*base, study.Analysis('later', 'Later', 'tool', needs=('pdn',), planned=planned))
-        monkeypatch.setattr(study, 'ANALYSES', a)
-        monkeypatch.setattr(study, 'BY_KEY', {x.key: x for x in a})
-    with_later(True)
-    assert study.run_order(['later']) == ['pdn'] and study.dependents('pdn') == ['later']
-    with_later(False)
-    assert study.run_order(['later']) == ['pdn', 'later']
+    a = (*base, study.Analysis('later', 'Later', 'tool', needs=('pdn',)))
+    monkeypatch.setattr(study, 'ANALYSES', a)
+    monkeypatch.setattr(study, 'BY_KEY', {x.key: x for x in a})
+    assert study.run_order(['later']) == ['pdn', 'later'] and study.dependents('pdn') == ['later']
+    assert study.run_order(['later'], available={'pdn', 'rf'}) == ['pdn']
     assert study.run_order(['later'], available={'later'}) == []
 
 

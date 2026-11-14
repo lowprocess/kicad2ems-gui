@@ -1227,16 +1227,16 @@ def test_run_notes_on_the_results_page(tmp_path, monkeypatch):
     w = MainWindow()
     r = w.results
     files = [('s', str(tmp_path / 'b_openems.s2p')), ('run', str(tmp_path / 'b_run.json'))]
-    r.show(files)
+    r.show_files(files)
     assert r.notes_btn.isVisibleTo(r) and r.notes_btn.text() == 'Notes and warnings (1 warning, 4 notes)'
     assert r.notes_btn.isChecked() and r.notes.isVisibleTo(r) and '#c62828' in r.notes.text()
     (tmp_path / 'b_run.json').write_text(json.dumps(dict(sm, warnings=[], log=[])), encoding='utf-8')
-    r.show(files)
+    r.show_files(files)
     assert r.notes_btn.text() == 'Notes and warnings (2 notes)' and not r.notes.isVisibleTo(r)
     r.notes_btn.setChecked(True)
     assert r.notes.isVisibleTo(r) and 'solid ground' in r.notes.text()
     (tmp_path / 'b_run.json').write_text(json.dumps(dict(warnings=[], model=dict(notes=[]))), encoding='utf-8')
-    r.show(files)
+    r.show_files(files)
     assert not r.notes_btn.isVisibleTo(r)
     w.setup.dirty = False
     w.close()
