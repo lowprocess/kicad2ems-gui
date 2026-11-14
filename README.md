@@ -131,19 +131,7 @@ analyses need pcbqs 0.3.0 or later (`kicad2ems[qs]`).
 | `panels.py` | a collapsible section, the Still-needed list, an image panel, a row of controls that wraps |
 | `api.py` | what other packages may use (the KiCad plugin): `PlanView`, `SectionView`, `API_VERSION` |
 
-## Tests
-
-    python -m pytest
-
-They use kicad2ems's fixtures, example boards and stand-in solvers from a kicad2ems checkout (`KICAD2EMS_SRC`,
-default `../kicad2ems`), and run the window offscreen. The analyses are stand-ins too (`tests/fake_analyses.py`:
-the same names as pcbqs's, each a few lines with a tool that writes a small result), so the window is tested as
-the host of any plugin; `tests/test_real_analyses.py` runs pcbqs's own through it when pcbqs is installed. kicad2ems's `tools/test_all.sh` runs them with the rest.
-`python tools/readme_media.py` makes kicad2ems's README and GUI-page pictures from its examples.
-
-## Licence
-
-GPL-3.0-or-later, as kicad2ems.
+## The analyses' pages
 
 The near field's preview (the toolbar's **Preview**) meshes without filling or solving; the Viewer shows its copper
 and components by layer, and its field overlays with opacity controls, in 3D too. Cyan marks simulated copper, grey
@@ -172,3 +160,17 @@ applying changes. The original sheets can be viewed read-only with Qt SVG
 support. DNP markers, hierarchy, fields and pin/net information remain visible;
 unknown IC behavior is not automatically modeled. All edits affect the saved
 simulation JSON, not the KiCad source file.
+
+## Tests
+
+    python -m pytest
+
+They use kicad2ems's fixtures, example boards and stand-in solvers from a kicad2ems checkout (`KICAD2EMS_SRC`,
+default `../kicad2ems`), and run the window offscreen. The analyses are stand-ins too (`tests/fake_analyses.py`:
+the same names as pcbqs's, each a few lines with a tool that writes a small result), so the window is tested as
+the host of any plugin; `tests/test_real_analyses.py` runs pcbqs's own through it when pcbqs is installed. kicad2ems's `tools/test_all.sh` runs them with the rest.
+`python tools/readme_media.py` makes kicad2ems's README and GUI-page pictures from its examples.
+
+## Licence
+
+GPL-3.0-or-later, as kicad2ems.
