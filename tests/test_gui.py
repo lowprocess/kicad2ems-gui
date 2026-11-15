@@ -673,7 +673,7 @@ def test_parts_in_the_viewer(wilkinson_preview):
 
 def test_run_folders(tmp_path):
     """Each GUI run in a folder of its own (<board>_<date>_<time>), a preview in <board>_preview; a board's runs
-    are only its own, the newest first, and only those that wrote a summary."""
+    are only its own, the newest first; one that wrote no summary is listed by how it ended (R-E24)."""
     import datetime
     from kicad2ems_gui.runfolders import run_dir, preview_dir, runs, board_name
     base = str(tmp_path)
@@ -688,10 +688,13 @@ def test_run_folders(tmp_path):
         os.makedirs(d)
         name = os.path.basename(d).rsplit('_', 2)[0]
         json.dump(dict(solvers=solvers), open(os.path.join(d, f"{name}_run.json"), 'w', encoding='utf-8'))
-    os.makedirs(run_dir(base, 'x/rf_coupler.kicad_pcb', t + datetime.timedelta(hours=1)))   # stopped: no summary
+    d3 = run_dir(base, 'x/rf_coupler.kicad_pcb', t + datetime.timedelta(hours=1))    # stopped: no summary
+    os.makedirs(d3)
     rs = runs(base, 'x/rf_coupler.kicad_pcb')
-    assert [d for d, _ in rs] == [d2, d1]
-    assert rs[0][1] == '2026-10-13 14:20:02 (mom25d, qucs)'
+    assert [d for d, _ in rs] == [d3, d2, d1]
+    assert rs[1][1] == '2026-10-13 14:20:02 (mom25d, qucs)' and rs[0][1] == '2026-10-13 15:15:02 (no result)'
+    json.dump(dict(code=0, stopped=True), open(os.path.join(d3, 'run_exit.json'), 'w', encoding='utf-8'))
+    assert runs(base, 'x/rf_coupler.kicad_pcb')[0][1].endswith('(stopped)')
 
 
 def test_solver_sections(tmp_path):

@@ -32,9 +32,10 @@ def runs(base, board):
         if not m or not os.path.isdir(d):
             continue
         summary = os.path.join(d, f"{name}_run.json")
-        if not os.path.exists(summary):                             # stopped before it wrote anything
-            continue
         when = datetime.datetime.strptime(m.group(1), STAMP)
+        if not os.path.exists(summary):                             # stopped or failed before it wrote one: kept,
+            out.append((d, f"{when:%Y-%m-%d %H:%M:%S} ({ending(d)})"))  # with its log (R-E24: these had vanished)
+            continue
         try:
             from kicad2ems.api.frontend import read_summary
             solvers = read_summary(summary).get('solvers') or []
@@ -42,6 +43,44 @@ def runs(base, board):
             solvers = []
         out.append((d, f"{when:%Y-%m-%d %H:%M:%S}" + (f" ({', '.join(solvers)})" if solvers else '')))
     return sorted(out, key=lambda r: os.path.basename(r[0]), reverse=True)
+
+
+EXIT = 'run_exit.json'          # how the window's run of it ended: {code, crashed, stopped, ended}
+
+
+def ending(folder):
+    """A run folder with no results: how it ended, as the list says it ('stopped', 'failed, code 1', 'crashed',
+    'no result': the window did not see its end)."""
+    try:
+        import json
+        e = json.load(open(os.path.join(folder, EXIT), encoding='utf-8'))
+    except (OSError, ValueError):
+        return 'no result'
+    if e.get('crashed'):
+        return 'crashed'
+    if e.get('stopped'):
+        return 'stopped'
+    return f"failed, code {e.get('code')}" if e.get('code') else 'no result'
+
+
+def run_log(folder):
+    """A run's log as text: the events' log lines, else its process's whole output (stdout.log); '' if neither."""
+    import json
+    lines = []
+    for f in sorted(glob.glob(os.path.join(glob.escape(folder), '*events*.jsonl'))):
+        try:
+            for raw in open(f, encoding='utf-8', errors='replace'):
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if ev.get('kind') == 'log':
+                    lines.append(ev.get('text', ''))
+        except OSError:
+            pass
+    if not lines and os.path.isfile(os.path.join(folder, 'stdout.log')):
+        return open(os.path.join(folder, 'stdout.log'), encoding='utf-8', errors='replace').read()
+    return '\n'.join(lines)
 
 
 def tool_titles():

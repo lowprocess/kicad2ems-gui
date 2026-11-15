@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
         self._picking, self.drawn = None, None                      # a setting picked on the board (start_pick)
         self._layout_stamp, self._layout_bad = None, False
         self.setWindowTitle('kicad2ems')
+        self.setAcceptDrops(True)                                   # a board, a config or a results folder dropped
         self.qsettings = QSettings('kicad2ems', 'gui')
         self.proc, self.tail, self.files, self.current, self.ticks = None, None, [], None, 0
         self._traceback = self._stopping = False
@@ -845,6 +846,11 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addWidget(QLabel(' Results of '))
         tb.addWidget(self.runs_box)
+        delete = QAction('Delete run…', self)
+        delete.setToolTip("delete the run shown in Results of, its folder and everything in it (asked first)")
+        delete.triggered.connect(lambda: self.delete_run())
+        tb.addAction(delete)
+        self.acts['Delete run'] = delete
         self.est_btn = EstimateButton()                             # beside Run / Stop: what a run would take
         self.est_btn.clicked.connect(self.show_solvers)
         acts = tb.actions()
@@ -1555,9 +1561,66 @@ class MainWindow(QMainWindow):
     def _pick_run(self, folder):
         """Results of: a run of kicad2ems's own brings its page forward, as it did; another analysis's results
         go into the pages as they stand (the one in front is usually the one being compared)."""
-        from .runfolders import tool_kind
+        from .runfolders import tool_kind, ending, run_log
         if folder and os.path.isdir(folder):
+            if tool_kind(folder) is None and not find_results(folder) and not os.path.isdir(os.path.join(folder, 'preview')) \
+                    and not any(f.endswith('_run.json') for f in os.listdir(folder)):   # stopped, failed: its log
+                self.runtab.log.setPlainText(run_log(folder) or '(no log)')
+                self.runtab.stage.setText(f"this run: {ending(folder)}")
+                self.show_panel('Run')
+                return
             self.open_results(folder, quiet=True, front=tool_kind(folder) is None)
+
+    def delete_run(self, folder=None):
+        """The run in Results of, its folder deleted once asked (R-E24: run folders hold hundreds of MB, and none could
+        be deleted here); not the one running, nor anything but a run folder of this board."""
+        import shutil
+        folder = folder or self.runs_box.currentData()
+        if not folder or not os.path.isdir(folder):
+            return False
+        if self.current is not None and self.proc is not None and os.path.abspath(folder) == os.path.abspath(self.current.out):
+            QMessageBox.information(self, 'Delete run', 'That run is going: stop it first')
+            return False
+        listed = [self.runs_box.itemData(i) for i in range(self.runs_box.count())]
+        if folder not in listed:
+            return False
+        size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(folder) for f in fs)
+        ask = QMessageBox.question(self, 'Delete run', f"Delete {os.path.basename(folder)} ({size / 1e6:.0f} MB) "
+                                   f"and everything in it?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ask != QMessageBox.Yes:
+            return False
+        shutil.rmtree(folder, ignore_errors=True)
+        if getattr(self.viewer, 'out', None) == folder:
+            self.viewer.out = None
+        self.refresh_runs()
+        self.statusBar().showMessage(f"deleted {folder}", 6000)
+        return True
+
+    # ---- a file or folder dropped on the window (R-E25) ----------------------------------------------------------
+    DROPPED = ('.kicad_pcb', '.toml', '_board.json', '.gbrjob')
+
+    def _dropped(self, e):
+        urls = [u.toLocalFile() for u in e.mimeData().urls()] if e.mimeData().hasUrls() else []
+        return [p for p in urls if p and (os.path.isdir(p) or p.lower().endswith(self.DROPPED))]
+
+    def dragEnterEvent(self, e):
+        if self._dropped(e):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        """A config opens; a board (.kicad_pcb, a run's board.json, a Gerber job) becomes the board; a folder's
+        results open."""
+        paths = self._dropped(e)
+        if not paths:
+            return
+        p = paths[0]
+        e.acceptProposedAction()
+        if os.path.isdir(p):
+            self.open_results(p)
+        elif p.lower().endswith('.toml'):
+            self._open(p)
+        else:
+            self.setup.edits['board'][0].setText(p)
 
     def out_dir(self, vals=None):
         """The output folder: the form's, else 'out' next to the board (where a run writes), else in the working
@@ -1604,6 +1667,11 @@ class MainWindow(QMainWindow):
         self.proc.setWorkingDirectory(self.current.out)
         self.proc.readyReadStandardOutput.connect(self._stdout)
         self.proc.finished.connect(self._finished)
+        self.proc.errorOccurred.connect(self._proc_error)          # (one that cannot start ends with no finished)
+        try:                                                        # its whole output, in its folder (the Log has
+            self._stdout_fh = open(os.path.join(self.current.out, 'stdout.log'), 'a', encoding='utf-8')   # its events)
+        except OSError:
+            self._stdout_fh = None
         argv = self.current.argv()
         self.proc.start(argv[0], argv[1:])
         self.meters.set_run(self.proc.processId() or None)
@@ -1652,6 +1720,9 @@ class MainWindow(QMainWindow):
     def _stdout(self):
         """The process's own output: the log already comes as events, so only errors - a traceback whole."""
         data = bytes(self.proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        if getattr(self, '_stdout_fh', None) is not None:
+            self._stdout_fh.write(data)
+            self._stdout_fh.flush()
         for line in data.splitlines():
             self._traceback = self._traceback or line.startswith('Traceback')
             if self._traceback or 'error' in line.lower():
@@ -1679,11 +1750,35 @@ class MainWindow(QMainWindow):
             except Exception as e:                                   # never stop following the run over a frame
                 self.runtab.log.appendPlainText(f"field view: {e}")
 
-    def _finished(self, code, _status):
+    def _proc_error(self, err):
+        """The run's process could not start (no Python there, a missing file): said, and the window idle again
+        (FailedToStart ends with no finished signal). A crash is finished's to say."""
+        if err != QProcess.FailedToStart or self.proc is None:
+            return
+        self.runtab.log.appendPlainText(f"the run could not start: {self.proc.errorString()}")
+        self._finished(-1, QProcess.CrashExit, started=False)
+
+    def _finished(self, code, status=None, started=True):
         """The run is over: its results into the pages. A run: Results in front (S-parameters, antenna); a preview:
-        the Viewer (the board, its meshes, the line model), and the estimates on the solver tick boxes."""
+        the Viewer (the board, its meshes, the line model), and the estimates on the solver tick boxes. Its folder
+        keeps how it ended (runfolders.EXIT), so a run with no results stays listed, with its log."""
         self.poll()
         self.timer.stop()
+        crashed = started and status == QProcess.CrashExit and not self._stopping
+        fh, self._stdout_fh = getattr(self, '_stdout_fh', None), None
+        if fh is not None:
+            fh.close()
+        try:
+            import time as _time
+            from .runfolders import EXIT
+            with open(os.path.join(self.current.out, EXIT), 'w', encoding='utf-8') as f:
+                json.dump(dict(code=code, crashed=bool(crashed), stopped=bool(self._stopping), started=started,
+                               ended=_time.strftime('%Y-%m-%d %H:%M:%S')), f)
+        except OSError:
+            pass
+        if crashed:
+            self.runtab.log.appendPlainText("the run's process ended abnormally (crashed): its whole output is in "
+                                            f"{os.path.join(self.current.out, 'stdout.log')}")
         self.proc = None
         self.meters.set_run(None)
         self.runtab.stop_btn.setEnabled(False)
@@ -1700,8 +1795,8 @@ class MainWindow(QMainWindow):
             self.new_estimates(self.system.est)
             self.statusBar().showMessage("preview done: estimates beside the solvers in the S-parameters row's menu "
                                          "(? under Solvers for details)", 8000)
-        if code:
-            self.runtab.stage.setText(f"ended with code {code} - see the log")
+        if code or crashed:
+            self.runtab.stage.setText('crashed - see the log' if crashed else f"ended with code {code} - see the log")
             self.show_panel('Run')
         elif self.current.preview:
             self.show_panel('Viewer' if seen else 'Run')
@@ -1713,10 +1808,33 @@ class MainWindow(QMainWindow):
         self._job_done('rf', code)                                  # in a study run: the next analysis
 
 
+def install_excepthook():
+    """An exception a slot raises: its traceback on stderr, as before, and in a dialog that does not wait (R-E25: A1
+    had shown nothing in the window)."""
+    import traceback
+    shown = []
+
+    def hook(etype, value, tb):
+        text = ''.join(traceback.format_exception(etype, value, tb))
+        sys.__stderr__.write(text)
+        try:
+            box = QMessageBox(QMessageBox.Critical, 'kicad2ems: an error', f"{etype.__name__}: {value}")
+            box.setDetailedText(text)
+            box.setModal(False)
+            box.show()
+            shown.append(box)                                       # (kept: a dialog not referenced is collected)
+            del shown[:-5]
+        except Exception:                                           # noqa: BLE001  (never an error of its own)
+            pass
+    sys.excepthook = hook
+    return hook
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     from . import application
     app = application(sys.argv[:1])
+    install_excepthook()
     w = MainWindow(argv[0] if argv else None)
     w.show()
     return app.exec()

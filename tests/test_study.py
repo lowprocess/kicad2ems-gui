@@ -689,3 +689,102 @@ def test_another_board_lists_its_own_runs(window, tmp_path):
     w.setup.set_values(dict(board=str(b), out=str(tmp_path / 'out')))
     w.want_layout()
     assert run not in [w.runs_box.itemData(i) for i in range(w.runs_box.count())] and w.viewer.out is None
+
+
+def test_a_failed_run_stays_listed_with_its_log_and_can_be_deleted(window, tmp_path, monkeypatch):
+    """R-E24: a run that ends with an error and no results stays in Results of ("failed, code 1"), its whole output in
+    its folder (stdout.log) and its log shown when it is picked; Delete run removes its folder once asked."""
+    import sys
+    from kicad2ems import runs
+    from PySide6.QtWidgets import QMessageBox
+    w, app, _ = window
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    script = tmp_path / 'bad_run.py'
+    script.write_text("import json, sys\nev = sys.argv[sys.argv.index('--events') + 1]\n"
+                      "open(ev, 'a').write(json.dumps(dict(kind='log', text='it went wrong here')) + '\\n')\n"
+                      "print('a line of its own output')\nsys.exit(1)\n")
+    monkeypatch.setattr(runs.Run, 'argv', lambda self: [sys.executable, str(script), self.toml, '--events', self.events])
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.study.set_ticked(['rf'])
+    w.run()
+    folder = w.current.out
+    run_to_the_end(w, app)
+    assert 'a line of its own output' in (tmp_path / 'out' / os.path.basename(folder) / 'stdout.log').read_text()
+    labels = [w.runs_box.itemText(i) for i in range(w.runs_box.count())]
+    assert any('(failed, code 1)' in t for t in labels)
+    w.runtab.log.clear()
+    w._pick_run(folder)
+    assert 'it went wrong here' in w.runtab.log.toPlainText() and 'failed, code 1' in w.runtab.stage.text()
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.No)
+    assert not w.delete_run(folder) and os.path.isdir(folder)        # asked, and told no
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.Yes)
+    assert w.delete_run(folder) and not os.path.exists(folder)
+    assert folder not in [w.runs_box.itemData(i) for i in range(w.runs_box.count())]
+
+
+def test_a_run_that_cannot_start_is_said_and_leaves_the_window_idle(window, tmp_path, monkeypatch):
+    """R-E25: no process (a program that is not there): the Log says why and the window is idle (FailedToStart has no
+    finished signal: it had stayed busy)."""
+    from kicad2ems import runs
+    w, app, _ = window
+    board = tmp_path / 'b.kicad_pcb'
+    board.write_text('')
+    monkeypatch.setattr(runs.Run, 'argv', lambda self: [str(tmp_path / 'no-such-program'), self.toml])
+    w.setup.set_values(dict(board=str(board), out=str(tmp_path / 'out')))
+    w.study.set_ticked(['rf'])
+    w.run()
+    assert wait_until(lambda: not w.busy(), 20) and 'could not start' in w.runtab.log.toPlainText()
+
+
+def test_a_dropped_board_or_config_is_taken(window, tmp_path, monkeypatch):
+    """R-E25: a .kicad_pcb dropped on the window becomes the board, a .toml opens, anything else is refused."""
+    from PySide6.QtCore import QUrl, QMimeData
+    w, app, _ = window
+    board = tmp_path / 'x.kicad_pcb'
+    board.write_text('')
+
+    class Drop:
+        def __init__(self, path):
+            self.m = QMimeData()
+            self.m.setUrls([QUrl.fromLocalFile(str(path))])
+            self.taken = False
+
+        def mimeData(self):
+            return self.m
+
+        def acceptProposedAction(self):
+            self.taken = True
+    d = Drop(board)
+    w.dragEnterEvent(d)
+    assert d.taken
+    w.dropEvent(Drop(board))
+    assert w.setup.values()['board'] == str(board)
+    opened = []
+    monkeypatch.setattr(type(w), '_open', lambda self, p: opened.append(p))
+    w.dropEvent(Drop(tmp_path / 'c.toml'))
+    assert opened == [str(tmp_path / 'c.toml')]
+    other = Drop(tmp_path / 'notes.txt')
+    w.dragEnterEvent(other)
+    assert not other.taken
+
+
+def test_an_exception_in_a_slot_is_shown_not_only_printed(window, capsys):
+    """R-E25: sys.excepthook shows the traceback in a dialog that does not wait, and still on stderr."""
+    import sys
+    from kicad2ems_gui.app import install_excepthook
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    w, app, _ = window
+    before = sys.excepthook
+    try:
+        hook = install_excepthook()
+        try:
+            raise ValueError('a slot went wrong')
+        except ValueError:
+            hook(*sys.exc_info())
+        boxes = [b for b in QApplication.topLevelWidgets() if isinstance(b, QMessageBox) and b.isVisible()]
+        assert any('a slot went wrong' in b.text() for b in boxes)
+        for b in boxes:
+            b.close()
+    finally:
+        sys.excepthook = before
