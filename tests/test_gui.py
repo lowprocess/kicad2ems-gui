@@ -105,7 +105,7 @@ def test_solver_boxes_estimates_and_availability():
     assert w.setup.solver_boxes['mom25d'].text() == 'mom25d (MoM)'
     w.setup.set_availability(dict(solvers=[dict(name='openems', ok=False, what='no CSXCAD'),
                                            dict(name='mom25d', ok=True, what='0.6')]))
-    assert 'no CSXCAD' in w.setup.solver_boxes['openems'].toolTip() and w.setup.solver_boxes['mom25d'].toolTip() == ''
+    assert 'no CSXCAD' in w.setup.solver_boxes['openems'].toolTip() and 'not available' not in w.setup.solver_boxes['mom25d'].toolTip()   # (its description)
     w.setup.dirty = False
     w.close()
     app.processEvents()
