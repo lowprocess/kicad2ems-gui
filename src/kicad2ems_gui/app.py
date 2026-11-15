@@ -27,7 +27,7 @@ window's size, its docks and splitters, and the Results plots are remembered bet
 import json, os, sys
 import numpy as np
 from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings, Signal, QThread
-from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
+from PySide6.QtGui import QDesktopServices, QAction, QActionGroup, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
                                QMessageBox, QDockWidget, QToolBar, QStyle, QDialog, QTabWidget)
 import pyqtgraph as pg
@@ -41,6 +41,7 @@ from .study import StudyList, ANALYSES, BY_KEY, RF, dependents
 from .setuptab import SetupTab, editor_page          # (the window's parts, in modules of their own: R-F2)
 from .runtab import RunTab, run_notes                    # noqa: F401  (run_notes: as before, app.run_notes)
 from .resultstab import ResultsTab
+from . import theme
 
 pg.setConfigOptions(antialias=True, background='w', foreground='k')
 DOCS = 'https://github.com/lowprocess/kicad2ems/blob/main/docs/index.md'
@@ -191,6 +192,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('kicad2ems')
         self.setAcceptDrops(True)                                   # a board, a config or a results folder dropped
         self.qsettings = QSettings('kicad2ems', 'gui')
+        theme.set_choice(str(self.qsettings.value('view/plots', 'system')))   # before the plots are made (R-E25)
         self.proc, self.tail, self.files, self.current, self.ticks = None, None, [], None, 0
         self._traceback = self._stopping = False
         self.setup, self.runtab, self.results = SetupTab(self), RunTab(self), ResultsTab(self)
@@ -941,6 +943,18 @@ class MainWindow(QMainWindow):
         a.setShortcut(QKeySequence.Quit)
         a.triggered.connect(self.close)
         fm.addAction(a)
+        em = self.menuBar().addMenu('&Edit')                     # the settings' changes (R-E25); a field being
+        self.undo_act = QAction('&Undo', self)                      # typed in keeps its own Ctrl+Z
+        self.undo_act.setShortcut(QKeySequence.Undo)
+        self.undo_act.triggered.connect(self.setup.undo)
+        self.redo_act = QAction('&Redo', self)
+        self.redo_act.setShortcut(QKeySequence.Redo)
+        self.redo_act.triggered.connect(self.setup.redo)
+        em.addAction(self.undo_act)
+        em.addAction(self.redo_act)
+        em.aboutToShow.connect(self._edit_menu)
+        self.setup.undo_changed.connect(self._edit_menu)
+        self._edit_menu()
         vm = self.menuBar().addMenu('&View')
         self.fold_acts = {}                                         # the study's two docks, by key
         for name, key, d in (('Questions', 'Ctrl+1', self.study_dock), ('Settings', 'Ctrl+2', self.settings_dock)):
@@ -970,6 +984,17 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.second_viewer)
         vm.addAction(a)
         vm.addSeparator()
+        self.plots_menu = vm.addMenu('&Plot colours')               # (kept: PySide frees a submenu it is not held)
+        self.plot_acts = QActionGroup(self)
+        self.plot_acts.setExclusive(True)
+        for key, text in (('system', 'As the &desktop'), ('light', '&Light'), ('dark', '&Dark')):
+            a = QAction(text, self)
+            a.setCheckable(True)
+            a.setChecked(theme.choice() == key)
+            a.setData(key)
+            a.triggered.connect(lambda _=False, k=key: self.set_plot_colours(k))
+            self.plot_acts.addAction(a)
+            self.plots_menu.addAction(a)
         a = QAction('&Reset layout', self)
         a.triggered.connect(self.reset_layout)
         vm.addAction(a)
@@ -996,6 +1021,20 @@ class MainWindow(QMainWindow):
         hm.addAction(a)
         self._fill_recent()
         self._fill_examples()
+
+    def _edit_menu(self):
+        """Undo / Redo enabled and named for what they would change ('Undo fmax')."""
+        for act, can, redo in ((self.undo_act, self.setup.can_undo(), False),
+                               (self.redo_act, self.setup.can_redo(), True)):
+            act.setEnabled(can)
+            act.setText(self.setup.undo_text(redo) if can else ('&Redo' if redo else '&Undo'))
+
+    def set_plot_colours(self, key):
+        """The plots light, dark or as the desktop (theme.py), remembered."""
+        theme.set_choice(key)
+        self.qsettings.setValue('view/plots', theme.choice())
+        for a in self.plot_acts.actions():
+            a.setChecked(a.data() == theme.choice())
 
     def show_impedance(self):
         """Tools > Impedance calculator: one window, kept; the open board's layers offered as its stack."""

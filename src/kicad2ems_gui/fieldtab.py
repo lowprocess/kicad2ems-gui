@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QPushButton, QLabel, QCheckBox,
                                QSlider, QSpinBox, QFileDialog, QMessageBox, QProgressDialog, QApplication)
 import pyqtgraph as pg
+from . import theme
 from .panels import FlowLayout
 from kicad2ems.api.frontend import frames as F
 
@@ -92,7 +93,7 @@ class FieldsTab(QWidget):
         lay.addLayout(row)
 
         self.view = pg.PlotWidget()
-        self.view.setBackground('w')
+        self.view.setBackground(theme.colors()['bg'])
         self.img = pg.ImageItem()
         self.view.addItem(self.img)
         self.lines = pg.PlotDataItem([], [], pen=pg.mkPen('#7fd1ff', width=1), connect='finite')

@@ -53,7 +53,7 @@ def test_the_steps_say_where_the_study_stands(window, tmp_path):
     assert bar.shown and bar.steps['setup'].text.text() == s['setup']['text'] and '✓' in bar.steps['board'].head.text()
     assert w.toolBarArea(bar) == Qt.TopToolBarArea and bar.isMovable() and not bar.isFloatable()
     assert bar.geometry().top() >= w.findChild(type(bar).__mro__[1], 'Main toolbar').geometry().bottom() - 1
-    assert bar.toggleViewAction().text() == 'Steps' and bar.toggleViewAction() in w.menuBar().actions()[1].menu().actions()
+    assert bar.toggleViewAction().text() == 'Steps' and bar.toggleViewAction() in next(a.menu() for a in w.menuBar().actions() if a.text() == '&View').actions()
     w.addToolBar(Qt.BottomToolBarArea, bar)                             # along the bottom: kept with the layout
     app.processEvents()
     assert w.toolBarArea(bar) == Qt.BottomToolBarArea

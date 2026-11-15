@@ -11,6 +11,7 @@ from PySide6.QtGui import QPainterPath, QPen, QBrush, QColor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QCheckBox, QLabel, QPushButton,
                                QGraphicsPathItem, QToolTip, QSizePolicy)
 import pyqtgraph as pg
+from . import theme
 from kicad2ems.api.frontend import overlay as ov
 from .panels import FlowLayout
 from . import meshpick as mp
@@ -102,7 +103,7 @@ class PlanView(QWidget):
         bar.addWidget(fit)
         lay.addLayout(bar)
         self.plot = pg.PlotWidget()
-        self.plot.setBackground('w')
+        self.plot.setBackground(theme.colors()['bg'])
         self.plot.setAspectLocked(True)
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.setLabel('bottom', 'x (mm)')

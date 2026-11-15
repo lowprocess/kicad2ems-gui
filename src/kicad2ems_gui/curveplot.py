@@ -7,6 +7,7 @@ table, CSV and image export. The S-parameter plots are splot.SPlot; this is the 
 """
 import numpy as np
 import pyqtgraph as pg
+from . import theme
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSplitter, QTreeWidget,
@@ -127,6 +128,15 @@ class CurvePlot(QWidget):
         return out
 
     # ---- drawing ----
+    def restyle(self):
+        """The theme's colours (theme.apply): the markers, then the curves drawn again."""
+        col = theme.colors()['marker']
+        for ln in self.markers:
+            ln.setPen(pg.mkPen(col, width=1))
+            if getattr(ln, 'label', None) is not None:
+                ln.label.setColor(col)
+        self.redraw()
+
     def redraw(self):
         for it in self.items:
             self.plot.removeItem(it)
@@ -199,8 +209,8 @@ class CurvePlot(QWidget):
         if self.main is None or not np.isfinite(x) or (self.main.logx and x <= 0):
             return None
         line = pg.InfiniteLine(pos=np.log10(x) if self.main.logx else x, angle=90, movable=True,
-                               pen=pg.mkPen('#444444', width=1), label=str(len(self.markers) + 1),
-                               labelOpts=dict(position=0.95, color='#444444'))
+                               pen=pg.mkPen(theme.colors()['marker'], width=1), label=str(len(self.markers) + 1),
+                               labelOpts=dict(position=0.95, color=theme.colors()['marker']))
         line.sigPositionChanged.connect(self._update_table)
         self.plot.addItem(line)
         self.markers.append(line)

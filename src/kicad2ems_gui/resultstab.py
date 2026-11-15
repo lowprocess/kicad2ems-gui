@@ -1,6 +1,7 @@
 """The Plots page: S-parameters and antenna results as Cartesian, Smith and polar plots you add and remove, and
 an analysis's curves (ResultsTab). Moved out of app.py (R-F2)."""
 import os
+import re
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QPushButton, QLabel, QFileDialog, QMessageBox,
@@ -13,6 +14,8 @@ from .reportview import ReportView
 from .panels import FlowLayout
 
 from .runtab import run_notes
+
+TOUCHSTONE = re.compile(r'\.s\d+p$', re.I)
 
 class ResultsTab(QWidget):
     """The Results page: the S-parameters of every solver and, for an antenna, its gain, efficiency and pattern
@@ -61,6 +64,15 @@ class ResultsTab(QWidget):
         self.cmp_menu.aboutToShow.connect(self._fill_compare)
         self.cmp_btn.setMenu(self.cmp_menu)
         top.addWidget(self.cmp_btn)
+        self.export_btn = QToolButton()                             # a solver's S-parameters, out as Touchstone
+        self.export_btn.setText('Export Touchstone')
+        self.export_btn.setToolTip("Save one of this run's S-parameter files (each solver's, the de-embedded and "
+                                   "part-port ones) as a Touchstone file where you choose")
+        self.export_btn.setPopupMode(QToolButton.InstantPopup)
+        self.export_menu = QMenu(self.export_btn)
+        self.export_menu.aboutToShow.connect(self._fill_export)
+        self.export_btn.setMenu(self.export_menu)
+        top.addWidget(self.export_btn)
         self.folder_btn = QPushButton('Open folder')
         self.folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(
             self.out if self.analysis and self.out else self.win.out_dir())))
@@ -108,6 +120,39 @@ class ResultsTab(QWidget):
     def _save_layout(self):
         if hasattr(self.win, 'qsettings') and self._mode:
             self.win.qsettings.setValue(self._key(self._mode), self.splot.layout_spec())
+
+    # ---- Touchstone export ----
+    def touchstones(self):
+        """[(label, path)] of the shown run's Touchstone files, as the run lists them."""
+        return [(l, p) for l, p in self._files if TOUCHSTONE.search(p) and os.path.exists(p)]
+
+    def _fill_export(self):
+        self.export_menu.clear()
+        files = self.touchstones()
+        if not files:
+            a = self.export_menu.addAction('no S-parameter files in this run')
+            a.setEnabled(False)
+            return
+        for label, path in files:
+            a = self.export_menu.addAction(f"{label}: {os.path.basename(path)}")
+            a.triggered.connect(lambda _=False, p=path: self.export_touchstone(p))
+
+    def export_touchstone(self, src, dst=None):
+        """A copy of the Touchstone file src at dst (asked for without one; its extension kept: .s2p ...). Returns
+        the path written, or None."""
+        import shutil
+        ext = TOUCHSTONE.search(src).group(0)
+        if not dst:
+            start = os.path.join(os.path.expanduser('~'), os.path.basename(src))
+            dst, _ = QFileDialog.getSaveFileName(self, 'Export the S-parameters', start,
+                                                 f"Touchstone (*{ext});;All files (*)")
+            if not dst:
+                return None
+        if not TOUCHSTONE.search(dst):
+            dst += ext
+        if os.path.abspath(dst) != os.path.abspath(src):
+            shutil.copyfile(src, dst)
+        return dst
 
     # ---- data ----
     def open_report(self):
@@ -219,6 +264,7 @@ class ResultsTab(QWidget):
         self.set_box.setCurrentIndex(max(self.set_box.findText(keep), 0) if self.curve_sets else -1)
         self.set_box.blockSignals(False)
         self._show_analysis()
+        self.export_btn.setVisible(self.analysis is None)           # (an analysis's tables export as CSV)
         return self.analysis is not None
 
     load_curves = load_analysis                                     # its name before reports

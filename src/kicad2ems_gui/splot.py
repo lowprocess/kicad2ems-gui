@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, Q
                                QSizePolicy)
 import pyqtgraph as pg
 from .panels import FlowLayout
+from . import theme
 from .traces import (KINDS, SMITH, DIFF_KINDS, transform, difference, counterpart, value_at, fmt_value, nearest,
                      smith_grid, polar_grid, pattern_xy, export_csv, default_visible)
 
@@ -100,7 +101,8 @@ class Subplot(QFrame):
             self.pw.hideAxis('left')
             self.pw.hideAxis('bottom')
         self.cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen('#888', width=1, style=Qt.DotLine))
-        self.dot = pg.ScatterPlotItem(size=9, pen=pg.mkPen('k'), brush=pg.mkBrush(255, 255, 255, 180))
+        c = theme.colors()
+        self.dot = pg.ScatterPlotItem(size=9, pen=pg.mkPen(c['fg']), brush=pg.mkBrush(*c['fill'][:3], 180))
         self.fill_options()
         self.option.currentIndexChanged.connect(self._option_changed)
         self.freq.currentIndexChanged.connect(lambda *_: host.redraw())
@@ -517,6 +519,14 @@ class SPlot(QWidget):
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     # ---- drawing ----
+    def restyle(self):
+        """The theme's colours (theme.apply): the cursors' dots, then everything drawn again (grids, markers)."""
+        c = theme.colors()
+        for sp in self.subplots:
+            sp.dot.setPen(pg.mkPen(c['fg']))
+            sp.dot.setBrush(pg.mkBrush(*c['fill'][:3], 180))
+        self.redraw()
+
     def redraw(self):
         for sp in self.subplots:
             self._draw(sp)
@@ -565,7 +575,7 @@ class SPlot(QWidget):
         elif sp.complex_plane:
             grid = smith_grid() if sp.kind == SMITH_PLOT else polar_grid()
             for x, y in grid:
-                pw.plot(x, y, pen=pg.mkPen('#cccccc', width=1))
+                pw.plot(x, y, pen=pg.mkPen(theme.colors()['grid'], width=1))
             if sp.kind == SMITH_PLOT:
                 for r in (0.2, 0.5, 1, 2, 5):                        # resistance labels on the real axis
                     lab = pg.TextItem(f"{r:g}", color='#999999', anchor=(1.1, 0))
@@ -602,7 +612,7 @@ class SPlot(QWidget):
         lo = top - RANGE_DB
         rings = [k / 6 for k in range(1, 7)]
         for x, y in polar_grid(rings):
-            pw.plot(x, y, pen=pg.mkPen('#cccccc', width=1))
+            pw.plot(x, y, pen=pg.mkPen(theme.colors()['grid'], width=1))
         for k, rr in enumerate(rings):
             if k % 2 == 1:
                 lab = pg.TextItem(f"{lo + rr * RANGE_DB:.0f}", color='#999999', anchor=(0.5, 1))
@@ -691,17 +701,18 @@ class SPlot(QWidget):
     def _place_marker(self, m):
         """The marker on every plot: a movable line over frequency, points on the complex-plane plots."""
         m['items'] = {}
+        c = theme.colors()
         for sp in self.subplots:
             if sp.on_frequency:
                 line = pg.InfiniteLine(pos=m['f'] / 1e9, angle=90, movable=True,
-                                       pen=pg.mkPen('#444', width=1, style=Qt.DashLine), label=m['name'],
-                                       labelOpts=dict(position=0.95, color='k', fill=(255, 255, 255, 200)))
+                                       pen=pg.mkPen(c['marker'], width=1, style=Qt.DashLine), label=m['name'],
+                                       labelOpts=dict(position=0.95, color=c['fg'], fill=c['fill']))
                 line.sigPositionChanged.connect(lambda ln, m=m: self._marker_moved(m, ln))
                 sp.pw.addItem(line, ignoreBounds=True)
                 m['items'][id(sp)] = (line,)
             elif sp.complex_plane:
-                sc = pg.ScatterPlotItem(size=10, symbol='d', pen=pg.mkPen('k'), brush=pg.mkBrush('#ffd700'))
-                txt = pg.TextItem(m['name'], color='k', anchor=(-0.2, 1))
+                sc = pg.ScatterPlotItem(size=10, symbol='d', pen=pg.mkPen(c['fg']), brush=pg.mkBrush('#ffd700'))
+                txt = pg.TextItem(m['name'], color=c['fg'], anchor=(-0.2, 1))
                 sp.pw.addItem(sc)
                 sp.pw.addItem(txt)
                 m['items'][id(sp)] = (sc, txt)

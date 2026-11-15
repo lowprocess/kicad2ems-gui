@@ -5,9 +5,13 @@ pictures): as a page to read, or as its tables to sort, copy and export. The hel
     to_html(report)                 the page
     tables(report)                  [(title, table)]: the sections that hold one
     cell(value, format)             a cell as it is shown; to_csv(table) a table as CSV text
+    standalone(report)              the page as a file of its own (pictures inside it)
     view = ReportView(); view.set_report(report); view.set_mode('Tables')
+    view.save('r.html' | 'r.pdf'); view.print_()
 """
+import base64
 import html
+import os
 
 MODES = ('Report', 'Tables')
 
@@ -87,6 +91,27 @@ def to_html(report, width=820):
     return '\n'.join(h)
 
 
+def standalone(report):
+    """The page as a file of its own: its pictures inside it (data URIs), so it opens anywhere, sent or moved."""
+    def inline(m):
+        path = m.group(1)
+        try:
+            with open(path, 'rb') as fh:
+                data = base64.b64encode(fh.read()).decode('ascii')
+        except OSError:
+            return m.group(0)
+        ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
+        mime = 'image/svg+xml' if ext == 'svg' else f"image/{'jpeg' if ext == 'jpg' else ext}"
+        return f"<img src='data:{mime};base64,{data}'"
+    import re
+    body = re.sub(r"<img src='([^']+)'", lambda m: inline(m) if not m.group(1).startswith('data:') else m.group(0),
+                  to_html(report))
+    title = html.escape((report or {}).get('title') or 'Report')
+    return (f"<!doctype html>\n<html><head><meta charset='utf-8'><title>{title}</title>"
+            "<style>body{font-family:sans-serif;max-width:900px;margin:2em auto;padding:0 1em} "
+            "img{max-width:100%;height:auto} th{text-align:left}</style></head><body>\n" + body + "\n</body></html>\n")
+
+
 try:                                                    # the view itself (Qt); the helpers above need none
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QTextBrowser, QTableWidget,
@@ -123,9 +148,26 @@ class ReportView(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.stack = QStackedWidget()
+        pw = QWidget()                                              # the page, with Save and Print over it
+        pl = QVBoxLayout(pw)
+        pl.setContentsMargins(0, 0, 0, 0)
+        prow = QHBoxLayout()
+        self.page_buttons = []
+        for text, tip, slot in (('Save…', 'the report as a file: HTML (its pictures inside it) or PDF', self.save),
+                                ('Print…', 'the report on a printer (or to a PDF through the print dialog)',
+                                 self.print_)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, f=slot: f())
+            b.setEnabled(False)
+            prow.addWidget(b)
+            self.page_buttons.append(b)
+        prow.addStretch(1)
+        pl.addLayout(prow)
         self.page = QTextBrowser()
         self.page.setOpenExternalLinks(True)
-        self.stack.addWidget(self.page)
+        pl.addWidget(self.page, 1)
+        self.stack.addWidget(pw)
         tw = QWidget()
         tl = QVBoxLayout(tw)
         tl.setContentsMargins(0, 0, 0, 0)
@@ -165,6 +207,8 @@ class ReportView(QWidget):
                               "report opens from the toolbar (Report).</p>")
         else:
             self.page.setHtml(to_html(report, width=max(400, self.page.viewport().width() - 40)))
+        for b in self.page_buttons:
+            b.setEnabled(report is not None)
         keep = self.which.currentText()
         self.which.blockSignals(True)
         self.which.clear()
@@ -173,6 +217,44 @@ class ReportView(QWidget):
         self.which.setCurrentIndex(max(i, 0) if self._tables else -1)
         self.which.blockSignals(False)
         self._show_table()
+
+    def save(self, path=None):
+        """The report as a file: .html (standalone: its pictures inside it) or .pdf (as the page shows it). Asks
+        where without a path; returns the path written, or None."""
+        if self.report is None:
+            return None
+        if not path:
+            name = ''.join(c if c.isalnum() or c in ' -_' else '_' for c in (self.report.get('title') or 'report'))
+            path, _ = QFileDialog.getSaveFileName(self, 'Save the report', name.strip()[:60] + '.html',
+                                                  'HTML (*.html);;PDF (*.pdf)')
+            if not path:
+                return None
+        if path.lower().endswith('.pdf'):
+            from PySide6.QtPrintSupport import QPrinter
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(path)
+            self.page.document().print_(printer)
+        else:
+            if not path.lower().endswith(('.html', '.htm')):
+                path += '.html'
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(standalone(self.report))
+        return path
+
+    def print_(self, printer=None):
+        """The report on a printer: the print dialog without one (its own Print to PDF too). True when printed."""
+        if self.report is None:
+            return False
+        from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+        if printer is None:
+            printer = QPrinter(QPrinter.HighResolution)
+            dlg = QPrintDialog(printer, self)
+            dlg.setWindowTitle('Print the report')
+            if dlg.exec() != QPrintDialog.Accepted:
+                return False
+        self.page.document().print_(printer)
+        return True
 
     def has_tables(self):
         return bool(self._tables)

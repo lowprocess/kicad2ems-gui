@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QPen, QBrush
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QCheckBox, QLabel, QPushButton
 import pyqtgraph as pg
+from . import theme
 from kicad2ems.api.frontend import overlay as ov, sections
 from .panels import FlowLayout
 
@@ -73,7 +74,7 @@ class SectionView(QWidget):
         bar.addWidget(fit)
         lay.addLayout(bar)
         self.plot = pg.PlotWidget()
-        self.plot.setBackground('w')
+        self.plot.setBackground(theme.colors()['bg'])
         self.plot.setAspectLocked(True)
         self.plot.setLabel('bottom', 'across the trace (mm)')
         self.plot.setLabel('left', 'height (mm)')

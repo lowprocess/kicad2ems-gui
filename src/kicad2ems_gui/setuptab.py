@@ -3,7 +3,7 @@ made of it, and each one's settings as a form (SetupTab); editor_page, an analys
 schematic). Moved out of app.py (R-F2)."""
 import json
 import os
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLineEdit, QCheckBox,
                                QComboBox, QPushButton, QLabel, QFileDialog, QScrollArea, QMessageBox, QToolButton)
 from .runner import (FIELDS, SEMICOLON_LISTS, SECTION_SOLVERS, SECTION_TITLES, TICK, settings_values, extra_values,
@@ -40,12 +40,21 @@ class SetupTab(QWidget):
     """The study's settings, in a scroll area: the board (one for every analysis), the analyses (study.StudyList,
     once the window gave its pages: set_study) and the settings of the analysis selected there. Each group is a
     collapsible section (collapsed when the window opens; the header counts the settings set). Open / Save /
-    Preview / Run are the window's toolbar."""
+    Preview / Run are the window's toolbar. Edit > Undo / Redo step back and forth through the changes to its
+    fields and ticks (undo, redo: a field's typing is one step, once it rests for UNDO_REST ms)."""
+    undo_changed = Signal()                                         # what undo / redo can do now changed
+    UNDO_REST = 700
+
     def __init__(self, win):
         super().__init__()
         from kicad2ems.api.frontend import Settings
         self.win, self.edits, self.extra = win, {}, {}
         self.path, self.dirty, self._loading, self.est = None, False, False, None
+        self._undo, self._redo, self._base, self._restoring, self._typed = [], [], None, False, None
+        self._rest = QTimer(self)                                   # a field's typing: one step when it rests
+        self._rest.setSingleShot(True)
+        self._rest.setInterval(self.UNDO_REST)
+        self._rest.timeout.connect(self._commit)
         self.defaults = Settings()
         defaults = self.defaults
         outer = QVBoxLayout(self)
@@ -591,7 +600,7 @@ class SetupTab(QWidget):
         return out
 
     def set_values(self, vals):
-        """Fill the form (a loaded config): not an edit, so the settings stay unchanged."""
+        """Fill the form (a loaded config): not an edit, so the settings stay unchanged, and undo starts here."""
         loading, self._loading = self._loading, True
         try:
             self._set_values(vals)
@@ -599,6 +608,9 @@ class SetupTab(QWidget):
             self._loading = loading
         self._count()
         self._update_sections()
+        self._rest.stop()
+        self._undo, self._redo, self._base = [], [], self._state()
+        self.undo_changed.emit()
 
     def _set_values(self, vals):
         if not any(k.startswith(TICK) for k in vals):              # settings rather than the form's own values
@@ -625,6 +637,14 @@ class SetupTab(QWidget):
             self.win.update_title()
 
     def _changed(self, *_):
+        if not self._loading and not self._restoring:              # a step for undo: a tick or a choice at once,
+            if isinstance(self.sender(), QLineEdit):                # typing when it rests (and before a tick)
+                self._typed = self._state()
+                self._rest.start()
+            else:
+                if self._rest.isActive():
+                    self._commit(self._typed)
+                self._commit()
         self._count()
         self._update_sections()
         self.touch()
@@ -632,6 +652,87 @@ class SetupTab(QWidget):
             self.win.needs_soon()
         if hasattr(self.win, 'update_estimate'):                    # the toolbar's: the solvers ticked now
             self.win.update_estimate()
+
+    # ---- undo (R-E25) ----
+    def _state(self):
+        """The form as it stands: each field's text, tick or choice, as typed (what undo puts back)."""
+        out = {}
+        for key, (w, kind) in self.edits.items():
+            out[key] = w.isChecked() if kind == 'bool' else w.currentText() if isinstance(kind, tuple) else w.text()
+        return out
+
+    def _commit(self, st=None):
+        """The form's changes since the last step (or up to the state st), as a step (none: nothing)."""
+        self._rest.stop()
+        st = self._state() if st is None else st
+        if self._base is None:
+            self._base = st
+        elif st != self._base:
+            self._undo.append(self._base)
+            self._redo.clear()
+            self._base = st
+            self.undo_changed.emit()
+
+    def _put(self, st):
+        """Put a state back into the form: an edit (unsaved), not a step of its own."""
+        restoring, self._restoring = self._restoring, True
+        try:
+            for key, v in st.items():
+                if key not in self.edits:
+                    continue
+                w, kind = self.edits[key]
+                if kind == 'bool':
+                    w.setChecked(bool(v))
+                elif isinstance(kind, tuple):
+                    w.setCurrentIndex(max(w.findText(v), 0))
+                elif w.text() != v:
+                    w.setText(v)
+        finally:
+            self._restoring = restoring
+        self._changed()
+        self.undo_changed.emit()
+
+    def _differs(self, a, b):
+        """The fields that differ between two states (for the menu's text)."""
+        return [k for k in self.edits if a.get(k) != b.get(k)]
+
+    def can_undo(self):
+        return bool(self._undo) or (self._rest.isActive() and self._state() != self._base)
+
+    def can_redo(self):
+        return bool(self._redo) and not (self._rest.isActive() and self._state() != self._base)
+
+    def undo_text(self, redo=False):
+        """'Undo fmax', 'Redo 3 settings', or plain 'Undo' / 'Redo': what the step would change."""
+        now, typing = self._state(), self._rest.isActive()
+        if redo:
+            keys = self._differs(self._redo[-1], now) if self._redo else []
+        elif typing and now != self._base:
+            keys = self._differs(now, self._base)
+        else:
+            keys = self._differs(self._base, self._undo[-1]) if self._undo else []
+        what = keys[0] if len(keys) == 1 else f"{len(keys)} settings" if keys else ''
+        return ('Redo' if redo else 'Undo') + (f" {what}" if what else '')
+
+    def undo(self):
+        """Back one step: the form as it was before the last change. False when there is none."""
+        self._commit()
+        if not self._undo:
+            return False
+        self._redo.append(self._base)
+        self._base = self._undo.pop()
+        self._put(self._base)
+        return True
+
+    def redo(self):
+        """Forward one step again, after an undo. False when there is none."""
+        self._commit()
+        if not self._redo:
+            return False
+        self._undo.append(self._base)
+        self._base = self._redo.pop()
+        self._put(self._base)
+        return True
 
     def _start_dir(self):
         if self.path:
