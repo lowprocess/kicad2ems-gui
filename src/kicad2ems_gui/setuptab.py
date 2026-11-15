@@ -14,6 +14,22 @@ from .meters import duration
 from .study import BY_KEY
 
 
+def _helps():
+    """{field key: its tooltip}: each option's help (its {default} filled in), wrapped; a solver's tick box its
+    solver's description."""
+    import textwrap
+    from kicad2ems.api.frontend import all_options, registry
+    out = {}
+    for _, o in all_options():
+        if o.gui and o.help:
+            text = o.help.replace('{default}', str(o.default)) if '{default}' in o.help else o.help
+            out[o.key] = '\n'.join(textwrap.wrap(text, 80))
+    for n, sv in registry().items():
+        about = getattr(sv, 'description', None) or getattr(sv, '__doc__', None) or sv.label
+        out[TICK + n] = '\n'.join(textwrap.wrap(' '.join(str(about).split()), 80))
+    return out
+
+
 def editor_page(key, win):
     """The page of an analysis this window has an editor for: the circuit's schematic and model."""
     from .powercircuittab import PowerCircuitTab
@@ -63,6 +79,7 @@ class SetupTab(QWidget):
         groups, self.sections, self.group_of, self.solver_boxes, self.solver_labels = {}, {}, {}, {}, {}
         self.parents = {}                                           # 'openEMS': (its section, the layout of its subs)
         self.field_labels = {}                                      # key: its label (greyed with the field)
+        self.helps = _helps()                                       # each field's tooltip: its option's help (R-E23)
         for key, label, kind, group in FIELDS:
             if '/' in group and group.split('/')[0] not in self.parents:     # a solver's section of sub-sections
                 top = group.split('/')[0]
@@ -129,6 +146,10 @@ class SetupTab(QWidget):
                 into.addRow(label, w)
                 self.rows[key], self.row_text[key] = (into, w), label
             self.field_labels[key] = None if key.startswith(TICK) else into.labelForField(w)
+            if self.helps.get(key):
+                w.setToolTip(self.helps[key])
+                if self.field_labels[key] is not None:
+                    self.field_labels[key].setToolTip(self.helps[key])
             self.edits[key] = (w, kind)
             if key == 'mode':                                       # the list's Antenna row says it
                 into.setRowVisible(w, False)
@@ -354,7 +375,8 @@ class SetupTab(QWidget):
         for s in info.get('solvers', []):
             w = self.solver_boxes.get(s['name'])
             if w is not None:
-                w.setToolTip('' if s['ok'] else f"not available here: {s['what']} (? for the Solvers window)")
+                w.setToolTip(self.helps.get(TICK + s['name'], '') if s['ok'] else
+                             f"not available here: {s['what']} (? for the Solvers window)")
                 w.setStyleSheet('' if s['ok'] else 'QCheckBox { color: gray; }')
 
     def set_estimates(self, est):
