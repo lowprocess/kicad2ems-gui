@@ -16,6 +16,32 @@ from . import volume3d as v3
 from . import meshpick as mp
 
 N_PHASE = 24
+FRAME_BYTES = 512e6     # the coloured frames kept as the animation plays; past it a frame is coloured as it is shown
+LEVEL_SAMPLES = 4e6     # the voxels (over every phase) the colour range is taken from on a large volume (R-D21)
+
+
+class _Frames:
+    """The animation's coloured frames, each coloured when it is first shown and kept while FRAME_BYTES allows
+    (R-D21: every control step had coloured all 24 phases at once on the GUI thread, 3.2 s and 1.4 GB at 256
+    voxels)."""
+
+    def __init__(self, make, n, budget=FRAME_BYTES):
+        self.make, self.n, self.kept, self.budget = make, int(n), {}, budget
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, k):
+        k = int(k) % self.n
+        rgba = self.kept.get(k)
+        if rgba is None:
+            rgba = self.make(k)
+            if (len(self.kept) + 1) * rgba.nbytes <= self.budget:
+                self.kept[k] = rgba
+        return rgba
+
+    def __iter__(self):
+        return (self[k] for k in range(self.n))
 
 
 def gl_module():
@@ -430,8 +456,9 @@ class VolumeTab(QWidget):
         self.far.currentIndexChanged.connect(lambda *_: (self._board(), self.reset_camera()))
         self.far_size.valueChanged.connect(lambda *_: self._board())
         self.far_up.valueChanged.connect(lambda *_: (self._board(), self.reset_camera()))
-        for w in (self.decades, self.zscale, self.clip):
+        for w in (self.decades, self.clip):
             w.valueChanged.connect(self._recolour)
+        self.zscale.valueChanged.connect(self._rescale)
         for w in (self.opacity, self.gamma):
             w.valueChanged.connect(self._recolour)
 
@@ -570,23 +597,42 @@ class VolumeTab(QWidget):
                 QApplication.restoreOverrideCursor()
         return self._ranges[key]
 
+    def _level_values(self, comp, phases):
+        """The values the colour range is taken from: every phase's, on a large volume from a regular subsample of
+        its voxels (about LEVEL_SAMPLES over the phases: a percentile of them is the whole's to a few parts in a
+        thousand)."""
+        vol = self.vol
+        n = int(np.prod(vol.data.shape[:3]))
+        step = int(np.ceil((n * len(phases) / LEVEL_SAMPLES) ** (1 / 3))) if n * len(phases) > 2 * LEVEL_SAMPLES else 1
+        if step == 1:
+            return [vol.scalar(comp, p) for p in phases]
+        return [v3.scalar_of(vol.data[::step, ::step, ::step], vol.complex, comp, p) for p in phases]
+
+    def _rescale(self, *_):
+        """The height scale changed: the frames placed again, not coloured again."""
+        if self.vol is not None and self._frames:
+            self._show(self.k)
+            self._board()
+
     def _recolour(self, *_):
-        """The voxels of every animation frame at the current settings (one colour range for all)."""
+        """The animation's frames at the current settings (one colour range for all), each coloured when shown."""
         if self.vol is None:
             return
         comp, phases = self._component(), self._phases()
-        vals = [self.vol.scalar(comp, p) for p in phases]
+        vals = self._level_values(comp, phases)
         signed = self.vol.signed(comp, phases[0])
         log = self.log.isChecked() and not signed
         span = bool(getattr(self.src, 'spans', False)) and comp == 'mag' and not signed     # a temperature: its own
         lo, hi = v3.levels(vals, signed, log, self.decades.value(), self.clip.value(), span=span)   # values' range
+        del vals
         whole = self.whole.isChecked() and len(self.src) > 1
         if whole:                                                   # the top over every frame of the dump
             top = self._whole_top(comp, phases)
             lo, hi = (-top, top) if signed else ((top * 10 ** -self.decades.value(), top) if log else (0.0, top))
         cmap = self.cmap.currentText() if not signed else None          # a signed component: blue - white - red
-        self._frames = [v3.colour(v, lo, hi, log, signed, self.opacity.value() / 100, self.gamma.value() / 10, cmap,
-                                  floor=0.55 if span else 0.0) for v in vals]
+        vol, paint = self.vol, dict(lo=lo, hi=hi, log=log, signed=signed, opacity=self.opacity.value() / 100,
+                                    gamma=self.gamma.value() / 10, cmap=cmap, floor=0.55 if span else 0.0)
+        self._frames = _Frames(lambda k: v3.colour(vol.scalar(comp, phases[k]), **paint), len(phases))
         self.k %= len(self._frames)
         self._show(self.k)
         what = (self.src.field if span else f"|{self.src.field}|") if comp == 'mag' else f"{self.src.field}{comp}"

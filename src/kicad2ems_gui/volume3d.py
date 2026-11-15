@@ -57,16 +57,20 @@ class Volume:
     def scalar(self, component='mag', phase=None):
         """The view's values: |F| (frequency domain without a phase: the envelope), |Re(F e^jphi)| with a phase,
         or one component (signed: Re(F_k e^jphi))."""
-        d = self.data
-        if self.complex and phase is None:                            # the envelope over a period
-            return np.sqrt((np.abs(d) ** 2).sum(-1)) if component == 'mag' else np.abs(d[..., 'xyz'.index(component)])
-        if self.complex:
-            d = np.real(d * np.exp(1j * phase))
-        return np.sqrt((d ** 2).sum(-1)) if component == 'mag' else d[..., 'xyz'.index(component)]
+        return scalar_of(self.data, self.complex, component, phase)
 
     def signed(self, component, phase=None):
         """Does scalar() give signed values (a component at an instant)?"""
         return component != 'mag' and (not self.complex or phase is not None)
+
+
+def scalar_of(d, complex_, component='mag', phase=None):
+    """Volume.scalar of field values d (..., 3): also of a part of a volume's (its subsample)."""
+    if complex_ and phase is None:                                    # the envelope over a period
+        return np.sqrt((np.abs(d) ** 2).sum(-1)) if component == 'mag' else np.abs(d[..., 'xyz'.index(component)])
+    if complex_:
+        d = np.real(d * np.exp(1j * phase))
+    return np.sqrt((d ** 2).sum(-1)) if component == 'mag' else d[..., 'xyz'.index(component)]
 
 
 # ---- colour ---------------------------------------------------------------------------------------
@@ -95,7 +99,8 @@ def colour(v, lo, hi, log=True, signed=False, opacity=0.6, gamma=1.5, cmap=None,
             t = np.clip((v - lo) / max(hi - lo, 1e-30), 0, 1)
         a = t
         cm = _cmap(cmap or 'inferno')
-    rgba = (cm(t.ravel())[:, :4] * 255).astype(np.uint8).reshape(v.shape + (4,))
+    lut = (cm(np.arange(cm.N))[:, :4] * 255).astype(np.uint8)       # (the map's own entries: it takes floor(t N))
+    rgba = lut[np.minimum((t * cm.N).astype(np.intp), cm.N - 1)]
     rgba[..., 3] = (255 * opacity * (floor + (1 - floor) * a ** gamma)).astype(np.uint8)
     if nan.any():
         rgba[nan] = 0
