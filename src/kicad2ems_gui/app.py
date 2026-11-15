@@ -1199,6 +1199,15 @@ class MainWindow(QMainWindow):
         front: the page with something new in front."""
         from kicad2ems.api.frontend import analysis_of
         files = find_results(out_dir)
+        if not files:                                               # a --vary run's folder: its first run shown,
+            try:                                                    # the others under Compare with (R-E5)
+                from kicad2ems.vary import load
+                v = load(out_dir)
+            except Exception:                                       # noqa: BLE001  (an older kicad2ems)
+                v = None
+            first = next((r['folder'] for r in (v or {}).get('runs', []) if r.get('code') == 0), None)
+            if first:
+                out_dir, files = first, find_results(first)
         ant = self.results.load_antenna(out_dir)                    # first: it decides the page's plots
         shown = self.results.load_analysis(out_dir)                 # an analysis's result: the page is its
         if files:

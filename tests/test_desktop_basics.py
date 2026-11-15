@@ -107,3 +107,48 @@ def test_a_run_s_touchstone_exported(tmp_path):
     out = ResultsTab.export_touchstone(tab, str(src), str(tmp_path / 'mine'))   # the extension kept
     assert out.endswith('mine.s2p') and open(out).read() == src.read_text()
     assert ResultsTab.export_touchstone(tab, str(src), str(src)) == str(src)    # onto itself: left as it is
+
+
+def _s2p(path, phase):
+    import numpy as np
+    f = np.linspace(1e9, 4e9, 4)
+    with open(path, 'w') as fh:
+        fh.write('# Hz S RI R 50\n')
+        for x in f:
+            s21 = np.exp(-1j * phase * x / 1e9)
+            fh.write(f"{x:.6g} 0 0 {s21.real:.6g} {s21.imag:.6g} {s21.real:.6g} {s21.imag:.6g} 0 0\n")
+
+
+def test_a_variation_and_part_values_under_compare_with(win, app, tmp_path):
+    """R-E5: a --vary run's folder shows its first run, the others under Compare with; a run's part-value
+    combinations too; ticking one lays it over the run."""
+    import json
+    out = tmp_path / 'out'
+    runs = []
+    for i, v in enumerate(('21', '41')):
+        d = out / 'vary' / f'points={v}'
+        d.mkdir(parents=True)
+        _s2p(d / 'b_scikit.s2p', i + 1)
+        sweep = [dict(values={'C1': '1p'}, touchstone='b_scikit_C1=1p.s2p')] if i == 0 else []
+        if sweep:
+            _s2p(d / 'b_scikit_C1=1p.s2p', 3)
+        (d / 'b_run.json').write_text(json.dumps(dict(name='b', files=[['S-parameters, line model (scikit-rf)',
+                                                                         'b_scikit.s2p'], ['run summary (JSON)', 'b_run.json']],
+                                                    solved=dict(scikit=dict(touchstone='b_scikit.s2p', part_ports=dict(
+                                                        touchstone='b_scikit_ports.s3p', parts=['C1'], sweep=sweep))))))
+        runs.append(dict(values={'points': v}, folder=os.path.join('vary', f'points={v}'), code=0,
+                         solved=dict(scikit='b_scikit.s2p')))
+    (out / 'b_vary.json').write_text(json.dumps(dict(format='kicad2ems-vary', version=1, name='b', keys=['points'],
+                                                     runs=runs)))
+    win.open_results(str(out), quiet=True)
+    r = win.results
+    labels = [l for l, _, _ in r.sweeps()]
+    assert labels == ['points = 41', 'scikit: C1 = 1p']                        # (points = 21 is the one shown)
+    r._fill_compare()
+    acts = [a.text() for a in r.cmp_menu.actions()]
+    assert 'points = 41' in acts and 'scikit: C1 = 1p' in acts and 'All of them' in acts
+    _, kind, path = r.sweeps()[1]
+    assert r._add_sweep(kind, path, 'scikit: C1 = 1p') and os.path.abspath(path) in r.compared()
+    assert any(t.source.startswith('scikit: C1 = 1p') for t in r.splot.traces)
+    r.remove_folder(os.path.abspath(path))
+    assert not r.compared()

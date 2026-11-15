@@ -194,6 +194,41 @@ class ResultsTab(QWidget):
         self.show_files(self._files)
         return True
 
+    def add_file(self, path, label):
+        """One Touchstone file laid over the run shown (a part value's combination), under `label`."""
+        path = os.path.abspath(path)
+        if path in self.compared() or not os.path.exists(path):
+            return False
+        self.added.append((label, [(label, path)], path))
+        self.show_files(self._files)
+        return True
+
+    def sweeps(self):
+        """The shown run's variations to lay over it: [(label, 'folder' | 'file', path)]: each run of its --vary
+        (<name>_vary.json: a folder each) and each part value combination of its solvers (--part-value: a file)."""
+        out, here = [], getattr(self, '_run_folder', None)
+        if not here:
+            return out
+        try:
+            from kicad2ems.vary import load
+            up = os.path.dirname(os.path.dirname(here))             # one of a variation's runs: <out>/vary/<tag>
+            v = load(here) or (load(up) if os.path.basename(os.path.dirname(here)) == 'vary' else None)
+        except Exception:                                           # noqa: BLE001  (an older kicad2ems, a damaged list)
+            v = None
+        for r in (v or {}).get('runs', []):
+            if r.get('code') == 0 and os.path.isdir(r['folder']) and \
+                    os.path.abspath(r['folder']) != os.path.abspath(here):
+                out.append((', '.join(f"{k} = {x}" for k, x in r['values'].items()), 'folder', r['folder']))
+        for solver, e in ((getattr(self, '_summary', None) or {}).get('solved') or {}).items():
+            for c in (((e or {}).get('part_ports') or {}).get('sweep') or []) if isinstance(e, dict) else []:
+                p = os.path.join(here, c['touchstone'])
+                if os.path.exists(p):
+                    out.append((f"{solver}: " + ', '.join(f"{k} = {x}" for k, x in c['values'].items()), 'file', p))
+        return out
+
+    def _add_sweep(self, kind, path, label):
+        return self.add_folder(path) if kind == 'folder' else self.add_file(path, label)
+
     def remove_folder(self, d=None):
         """One compared run off the page (None: all of the kind shown)."""
         if self.analysis is not None:
@@ -231,6 +266,17 @@ class ResultsTab(QWidget):
         if not m.actions():
             a = m.addAction('no other run of this kind for this board yet')
             a.setEnabled(False)
+        sw = self.sweeps() if self.analysis is None else []
+        if sw:                                                      # this run's own variations (R-E5)
+            m.addSection('This run varied')
+            for label, kind, path in sw:
+                a = m.addAction(label)
+                a.setCheckable(True)
+                a.setChecked(os.path.abspath(path) in on)
+                a.toggled.connect(lambda tick, k=kind, p=path, l=label: (self._add_sweep(k, p, l) if tick
+                                                                         else self.remove_folder(os.path.abspath(p))))
+            a = m.addAction('All of them')
+            a.triggered.connect(lambda: [self._add_sweep(k, p, l) for l, k, p in self.sweeps()])
         m.addSeparator()
         m.addAction('Another folder…').triggered.connect(self._add)
         a = m.addAction('None')
@@ -460,10 +506,12 @@ class ResultsTab(QWidget):
         z0 = 50.0
         summary = next((p for l, p in files if p.endswith(('_run.json', '_openems.json'))), None)
         self.set_notes([], [])
+        self._summary, self._run_folder = None, os.path.dirname(summary) if summary else None
         if summary and os.path.exists(summary):
             try:
                 from kicad2ems.api.frontend import read_summary
                 sm = read_summary(summary)
+                self._summary = sm
                 self.set_notes(*run_notes(sm))
                 compare = compare or (sm.get('settings') or {}).get('compare')
                 zr = sm.get('zref')
