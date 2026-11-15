@@ -29,7 +29,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QProcess, QTimer, QUrl, QSettings, Signal, QThread
 from PySide6.QtGui import QDesktopServices, QAction, QKeySequence, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
-                               QMessageBox, QDockWidget, QToolBar, QStyle, QDialog, QTabWidget, QApplication)
+                               QMessageBox, QDockWidget, QToolBar, QStyle, QDialog, QTabWidget)
 import pyqtgraph as pg
 from .runner import Run, EventTail, stop_runs, find_results
 from .analysispanel import AnalysisPanel, config_values
@@ -77,6 +77,23 @@ class SolversDialog(QDialog):
         row.addWidget(b)
         lay.addLayout(row)
         self.resize(780, 660)
+
+
+class _Preparing(QThread):
+    """prepare_example in a thread: done(path), with .error set when it failed."""
+    done = Signal(str)
+
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self.name, self.error = name, ''
+
+    def run(self):
+        from kicad2ems.api.frontend import prepare_example
+        try:
+            path = prepare_example(self.name)
+        except Exception as e:                                      # noqa: BLE001  (said by the window)
+            path, self.error = '', f"{type(e).__name__}: {e}"
+        self.done.emit(path)
 
 
 class ViewerWindow(QWidget):
@@ -1016,16 +1033,25 @@ class MainWindow(QMainWindow):
         self.examples_menu.setEnabled(bool(entries))
 
     def open_example(self, name):
-        from kicad2ems.api.frontend import prepare_example
+        """An example: made (its board generated, its files copied) in a thread, then loaded; the window had waited
+        on the generator (R-D22)."""
         if not self.setup.maybe_save():
             return
-        self.statusBar().showMessage(f"preparing the example {name}...")
-        QApplication.processEvents()
-        try:
-            path = prepare_example(name)
-        except Exception as e:                                      # a generator that failed: say so, keep the form
-            QMessageBox.warning(self, 'Examples', f"{name}: {type(e).__name__}: {e}")
+        if getattr(self, '_preparing', None) is not None:          # one at a time
             return
+        self.statusBar().showMessage(f"preparing the example {name}...")
+        self._preparing = job = _Preparing(name, self)
+        job.done.connect(lambda path, n=name: self._example_ready(n, path))
+        job.start()
+
+    def _example_ready(self, name, path):
+        job, self._preparing = self._preparing, None
+        if job is not None:
+            job.wait()
+        if job is not None and job.error:                           # a generator that failed: say so, keep the form
+            QMessageBox.warning(self, 'Examples', f"{name}: {job.error}")
+            return
+        self.statusBar().clearMessage()
         self.setup.load(path)
 
     def recent(self):

@@ -59,6 +59,7 @@ def test_a_circuit_example_runs_to_its_temperatures(window, tmp_path):
     w.show()
     w.open_example('circuit_rc_filter')
     folder = tmp_path / 'data' / 'kicad2ems' / 'examples'
+    wait_until(lambda: w.setup.path == str(folder / 'circuit_rc_filter.toml'), 60)   # (made in a thread)
     assert w.setup.path == str(folder / 'circuit_rc_filter.toml') and not w.setup.dirty
     assert w.setup.values()['board'] == str(folder / '01_rc_filter.kicad_pcb')
     page = w.pages['circuit']

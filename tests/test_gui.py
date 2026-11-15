@@ -902,7 +902,7 @@ def test_filter_page(tmp_path):
     from kicad2ems_gui.app import MainWindow
     app = QApplication.instance() or QApplication([])
     w = MainWindow()
-    assert 'Filter' in w.places and w.filter.desc is not None
+    assert 'Filter' in w.places and wait_until(lambda: w.filter.desc is not None, 60)   # (asked in a thread)
     page = w.filter
     page.set_values(dict(type='lowpass', topology='radial', f0='2G', out=base))
     v = page.values()
@@ -1250,6 +1250,7 @@ def test_filter_page_from_the_description(monkeypatch):
                          dict(key='smooth', flag='--smooth', kind='flag', default=False, choices=None,
                               help='round the corners', group='')])
     monkeypatch.setattr(ft, 'describe', lambda python=None: desc)
+    monkeypatch.setattr(ft, '_known', lambda python=None: True)                # (else asked in a thread)
     monkeypatch.setitem(sys.modules, 'dfsynth', None)                   # importing it would fail
     application()
     page = ft.FilterTab()
@@ -1286,6 +1287,7 @@ def test_examples_menu_opens_a_prepared_example(tmp_path, monkeypatch):
     w.setup.dirty = False
     w.open_example('rf_gcpw')
     folder = tmp_path / 'kicad2ems' / 'examples'
+    wait_until(lambda: w.setup.path == str(folder / 'rf_gcpw.toml'), 60)       # (made in a thread)
     assert w.setup.path == str(folder / 'rf_gcpw.toml') and (folder / 'rf_gcpw.kicad_pcb').exists()
     w.setup.dirty = False
     w.close()

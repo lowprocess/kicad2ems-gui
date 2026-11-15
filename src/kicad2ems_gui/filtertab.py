@@ -34,6 +34,12 @@ def why_not(python=None):
     return _describe(python)[1]
 
 
+def _known(python=None):
+    """Whether dfsynth's description has been asked for already (describe() then answers at once)."""
+    from .toolprocess import _DESCRIPTIONS
+    return (python or sys.executable, '-m', 'dfsynth') in _DESCRIPTIONS
+
+
 def _describe(python=None):
     from .toolprocess import describe_tool
     return describe_tool(python, ('-m', 'dfsynth'), 'dfsynth', DFSYNTH_PIP, DESCRIBE_FORMAT,
@@ -123,7 +129,7 @@ def _db(x):
 
 
 # ------------------------------------------------------------------------------------------- the page (Qt)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPainterPath, QPen, QBrush, QColor, QFontDatabase, QTextCursor, QTextCharFormat, QIcon
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox, QCheckBox,
                                QPushButton, QPlainTextEdit, QSplitter, QTabWidget, QTableWidget,
@@ -146,6 +152,15 @@ def validation_solvers():
     return full + [f"{n},lines" for n in full]
 
 
+class _Asking(QThread):
+    """dfsynth --describe in a thread (describe() keeps its answer)."""
+    done = Signal()
+
+    def run(self):
+        _describe()
+        self.done.emit()
+
+
 class FilterTab(QWidget):
     """dfsynth's settings on the left; the layout, the responses, the dimensions and the log on the right."""
 
@@ -153,8 +168,9 @@ class FilterTab(QWidget):
         super().__init__()
         self.win, self.proc, self.base, self.result = win, None, None, None
         self.problems, self._last = {'error': 0, 'warn': 0}, None
-        self.desc = describe()
-        self.opts = options(self.desc)
+        known = _known()
+        self.desc = describe() if known else None                   # (asked in a thread when not yet: dfsynth's
+        self.opts = options(self.desc)                              # --describe had held the window's start up)
         lay = QHBoxLayout(self)
         self.split = QSplitter(Qt.Horizontal)
         lay.addWidget(self.split)
@@ -162,9 +178,32 @@ class FilterTab(QWidget):
         self.split.addWidget(self._views())
         self.split.setSizes([380, 900])
         self._type_changed()
+        if known:
+            self._described()
+        else:
+            self.split.widget(0).setEnabled(False)
+            self.say('asking dfsynth what it designs...', count=False)
+            self._asking = _Asking(self)
+            self._asking.done.connect(self._arrived)
+            self._asking.start()
+
+    def _arrived(self):
+        """dfsynth's description, asked in a thread: the form made again from it."""
+        self.desc = describe()
+        self.opts = options(self.desc)
+        old = self.split.widget(0)
+        self.split.replaceWidget(0, self._form())
+        old.deleteLater()
+        self.split.setSizes([380, 900])
+        self._type_changed()
+        self._described()
+
+    def _described(self):
         if self.desc is None:                                       # nothing to design with: say so, up front
             self.split.widget(0).setEnabled(False)
             self.say(why_not() or f"dfsynth cannot be run here: {DFSYNTH_PIP}", 'error')
+        else:
+            self.split.widget(0).setEnabled(True)
 
     # ---- the settings ----
     def _line(self, hint='', tip=''):
