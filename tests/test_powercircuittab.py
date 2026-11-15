@@ -31,7 +31,7 @@ def test_the_page_is_the_model_s_editor(tab):
 def test_a_general_model_s_parameters_and_sweep(tab):
     """A model (the page opens on pcbqs.circuit's boost converter): its tool's options, and in Model its parameters
     and its sweep, which are the model's. The full-bridge tool's model (format 1) is no longer one."""
-    assert tab.shown()==['copper','fields','set','jobs','parameters','sweep']
+    assert tab.shown()==['copper','fields','warm','thermal_args','set','jobs','parameters','sweep']
     assert not tab.panel.sections['Model'].isHidden() and 'Operating points' not in tab.panel.sections
     c=tab.values()
     assert c['format']==2
@@ -64,6 +64,10 @@ def test_a_run_is_the_plugin_s_command_on_the_model_as_edited(tab,tmp_path,monke
     tab.board.clear();c=tab.values();c.pop('board');tab.set_model(c);n=len(ran);tab.start()
     assert len(ran)==n and 'Import KiCad' in tab.status.text()      # no board to take the copper from: said, not run
     tab.fields.setChecked(False);tab.copper.setChecked(False)
+    tab.panel.w['warm'].setValue(2) if hasattr(tab.panel.w['warm'],'setValue') else tab.panel.w['warm'].setText('2')
+    tab.status.clear();tab.start()                                  # --warm: the board's thermal model, so a board too
+    assert len(ran)==n and 'Import KiCad' in tab.status.text()
+    tab.panel.w['warm'].setValue(0) if hasattr(tab.panel.w['warm'],'setValue') else tab.panel.w['warm'].setText('0')
     tab.editor.setPlainText('{ not json');n=len(ran);tab.start()
     assert len(ran)==n and tab.status.text().startswith('The model needs attention')
 

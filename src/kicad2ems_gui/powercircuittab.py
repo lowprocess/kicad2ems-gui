@@ -50,8 +50,10 @@ class _Run:
         except (ValueError,KeyError) as e:raise ValueError(f'The model needs attention: {e}') from None
         on=lambda k:values.get(k) is True or str(values.get(k)).strip().lower() in ('1','true','yes','on')
         board=page.board.text().strip() or (c.get('board') or {}).get('file','') or board
-        if (on('copper') or on('fields')) and not (board and Path(board).is_file()):
-            raise ValueError("Choose the model's board: Import KiCad… a .kicad_pcb, or name one under Files")
+        try:warm=int(str(values.get('warm') or 0).strip() or 0)
+        except ValueError:raise ValueError(f"warm: a number of runs, not {values.get('warm')!r}") from None
+        if (on('copper') or on('fields') or warm>0) and not (board and Path(board).is_file()):     # (--warm: the board's
+            raise ValueError("Choose the model's board: Import KiCad… a .kicad_pcb, or name one under Files")  # thermal model)
         return c,board
 
     def missing(self,values,board,results=None):
